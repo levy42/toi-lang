@@ -1,0 +1,17 @@
+fn assert_eq(actual, expected)
+  if actual != expected
+    error("assert_eq failed")
+
+string = import string
+
+t = { base = 2 }
+t.add = fn(self, x)
+  return self.base + x
+
+t.mul = fn(x, y)
+  return x * y
+
+assert_eq(t.add(3), 5)
+assert_eq(t.mul(2, 3), 6)
+
+assert_eq("abc".upper(), "ABC")

@@ -1,0 +1,54 @@
+template = import template
+time = import time
+global string = import string
+global table = import table
+
+fn assert_true(cond, msg = nil)
+  if not cond
+    error(msg or "assert_true failed")
+
+global name = "Ada"
+global items = {"x", "y", "z"}
+tmpl = "Hello {{ name }}! {% for item in items %}[{{ item }}]{% endfor %}"
+ctx = {}
+expected = "Hello Ada! [x][y][z]"
+
+-- Sanity check correctness first.
+out = template.render(tmpl, ctx)
+assert_true(out == expected, "template output mismatch")
+
+-- Benchmark template.compile()
+compile_iters = 200
+compile_start = time.clock()
+i = 1
+while i <= compile_iters
+  fn_obj = template.compile(tmpl)
+  assert_true(type(fn_obj) == "function", "template.compile did not return function")
+  i = i + 1
+compile_elapsed = time.clock() - compile_start
+assert_true(compile_elapsed >= 0, "compile benchmark clock went backwards")
+
+-- Benchmark compiled function render speed.
+render_fn = template.compile(tmpl)
+render_iters = 1500
+render_start = time.clock()
+i = 1
+while i <= render_iters
+  out = render_fn(ctx)
+  i = i + 1
+render_elapsed = time.clock() - render_start
+assert_true(out == expected, "compiled render output mismatch")
+assert_true(render_elapsed >= 0, "render benchmark clock went backwards")
+
+-- Benchmark convenience template.render(str, ctx) path.
+convenience_iters = 120
+conv_start = time.clock()
+i = 1
+while i <= convenience_iters
+  out = template.render(tmpl, ctx)
+  i = i + 1
+conv_elapsed = time.clock() - conv_start
+assert_true(out == expected, "convenience render output mismatch")
+assert_true(conv_elapsed >= 0, "convenience benchmark clock went backwards")
+
+print string.format("template perf: compile=%fs render=%fs render_with_compile=%fs", compile_elapsed, render_elapsed, conv_elapsed)

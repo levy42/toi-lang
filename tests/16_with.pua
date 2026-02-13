@@ -1,0 +1,33 @@
+fn assert_eq(actual, expected)
+  if actual != expected
+    error("assert_eq failed")
+
+log = ""
+fn enter(self)
+  log = log + "E"
+  return "42"
+
+fn exit(self, ex)
+  if ex != nil
+    log = log + "X"
+  else
+    log = log + "O"
+
+ctx = {__enter = enter, __exit = exit}
+
+with ctx as v
+  log = log + "B" + v
+assert_eq(log, "EB42O")
+
+log = ""
+try
+  with ctx as v
+    throw "boom"
+except e
+  assert_eq(e, "boom")
+assert_eq(log, "EX")
+
+log = ""
+with {__enter = fn(self) return "ok"} as v
+  log = log + v
+assert_eq(log, "ok")

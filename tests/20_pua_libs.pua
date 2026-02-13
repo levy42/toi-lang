@@ -1,0 +1,36 @@
+fn assert_true(cond, msg = nil)
+  if not cond
+    error("assert_true failed")
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error("assert_eq failed")
+
+-- types module
+types = import lib.types
+local ok, err = types.String.check("hi")
+assert_true(ok)
+
+-- record module
+Record = import lib.record
+Person = {name = "string", age = "number"}
+setmetatable(Person, Record)
+p = {name = "Ada", age = 36}
+setmetatable(p, Person)
+assert_eq(p.name, "Ada")
+
+-- scheduler module
+sched = import lib.scheduler
+done = 0
+sched.add(fn()
+  done = done + 1
+)
+sched.run()
+assert_eq(done, 1)
+
+-- http server module (import only)
+http_server = import lib.http_server
+assert_true(type(http_server) == "table")
+assert_true(type(http_server.new) == "function")
+
+print "pua libs ok"

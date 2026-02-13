@@ -1,0 +1,95 @@
+fn checkInt(v) 
+  return type(v) == "number" 
+int = { 
+  name = "int", 
+  check = checkInt
+}
+Number = int
+
+fn checkBool(v) 
+  return type(v) == "boolean" 
+bool = { 
+  name = "bool", 
+  check = checkBool
+}
+Boolean = bool
+
+fn checkStr(v) 
+  return type(v) == "string" 
+Str = { 
+  name = "string", 
+  check = checkStr
+}
+String = Str
+
+Record = {}
+Record.__index = Record
+
+fn validate(self)
+  print "Inside validate"
+  schema = getmetatable(self)
+  if not schema 
+    error("Instance has no schema (metatable)")
+  
+  print "Got schema"
+  -- Iterate over schema fields
+  for k, v in pairs(schema)
+    print "Loop key: " + str(k)
+    -- skip metamethods (starts with __)
+    -- skip metamethods (starts with __)
+    is_meta = false
+    if type(k) == "string"
+       if k == "__index" is_meta = true
+       if k == "__str" is_meta = true
+       if k == "__call" is_meta = true
+       if k == "__eq" is_meta = true
+       if k == "__lt" is_meta = true
+    
+    if not is_meta
+        print "Accessing " + str(k)
+        val = self[k]
+        print "Got val: " + str(val)
+        
+        print "Checking type of v"
+        if type(v) == "table"
+           print "v is table, checking v.check"
+           if v.check
+               print "v.check exists"
+               if val == nil
+                  error("Validation Error: Missing field '" + str(k) + "'")
+               
+               print "Calling check"
+               if not v.check(val)
+                  error("Validation Error: Field '" + str(k) + "' expected " + v.name + ", got " + type(val))
+        
+        elif type(v) == "string"
+           if val == nil
+              error("Validation Error: Missing field '" + str(k) + "'")
+              
+           if type(val) != v
+              error("Validation Error: Field '" + str(k) + "' expected " + v + ", got " + type(val))
+          
+  return self
+
+Record.validate = validate
+
+fn new(self)
+  print "Inside new"
+  self.validate(self)
+  print "After validate"
+  return self
+Record.new = new
+
+fn toStr(self)
+  s = "Record {"
+  first = true
+  for k, v in pairs(self)
+     if not first s = s + ", "
+     first = false
+     s = s + str(k) + "=" + str(v)
+  s = s + "}"
+  return s
+
+Record.__str = toStr
+
+return Record

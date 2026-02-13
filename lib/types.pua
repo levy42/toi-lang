@@ -1,0 +1,141 @@
+-- Type validation library
+
+Type = {}
+Type.__index = Type
+
+fn check_base(self, value)
+  return false, "Not implemented"
+Type.check = check_base
+
+-- Primitives
+-- They are singleton objects (tables) that act as types.
+-- They can inherit from Type.
+
+String = {}
+setmetatable(String, Type)
+String.__index = String
+fn check_string(self, value)
+  if type(value) == "string" return true, nil
+  return false, "Expected string, got " + type(value)
+String.check = check_string
+
+Number = {}
+setmetatable(Number, Type)
+Number.__index = Number
+fn check_number(self, value)
+  if type(value) == "number" return true, nil
+  return false, "Expected number, got " + type(value)
+Number.check = check_number
+
+Boolean = {}
+setmetatable(Boolean, Type)
+Boolean.__index = Boolean
+fn check_bool(self, value)
+  if type(value) == "boolean" return true, nil
+  return false, "Expected boolean, got " + type(value)
+Boolean.check = check_bool
+
+Integer = {}
+setmetatable(Integer, Type)
+Integer.__index = Integer
+fn check_int(self, value)
+  if type(value) != "number" return false, "Expected number (integer), got " + type(value)
+  if value % 1 != 0 return false, "Expected integer, got float"
+  return true, nil
+Integer.check = check_int
+
+-- Complex Types
+
+-- List(inner)
+List = {}
+List.__index = List
+
+fn new_list(cls, inner)
+  print "Inside new_list"
+  print "cls: " + str(cls)
+  print "inner: " + str(inner)
+  obj = { inner = inner }
+  setmetatable(obj, List)
+  return obj
+
+-- Metatable for List class to support List(...) call
+ListMeta = {}
+ListMeta.__index = Type -- Inherit from Type
+ListMeta.__call = new_list
+setmetatable(List, ListMeta)
+
+fn check_list(self, value)
+  if type(value) != "table" return false, "Expected list (table), got " + type(value)
+  
+  -- Check if it's a sequence (keys 1..N)
+  count = 0
+  for k, v in pairs(value)
+    if type(k) == "number"
+      count = count + 1
+      local ok, err = self.inner.check(self.inner, v)
+      if not ok return false, "List item " + str(k) + ": " + err
+    end
+    
+  return true, nil
+List.check = check_list
+
+-- Optional(inner)
+Optional = {}
+Optional.__index = Optional
+
+fn new_optional(cls, inner)
+  print "Inside new_optional"
+  print "cls: " + str(cls)
+  print "inner: " + str(inner)
+  obj = { inner = inner }
+  setmetatable(obj, Optional)
+  return obj
+
+OptionalMeta = {}
+OptionalMeta.__index = Type
+OptionalMeta.__call = new_optional
+setmetatable(Optional, OptionalMeta)
+
+fn check_optional(self, value)
+  if value == nil return true, nil
+  return self.inner.check(self.inner, value)
+Optional.check = check_optional
+
+-- RecordType (nested)
+RecordType = {}
+RecordType.__index = RecordType
+
+fn new_record_type(cls, schema)
+  print "Inside new_record_type"
+  print "cls: " + str(cls)
+  print "schema: " + str(schema)
+  obj = { schema = schema }
+  setmetatable(obj, RecordType)
+  return obj
+
+RecordTypeMeta = {}
+RecordTypeMeta.__index = Type
+RecordTypeMeta.__call = new_record_type
+setmetatable(RecordType, RecordTypeMeta)
+
+fn check_record_type(self, value)
+  if type(value) != "table" return false, "Expected record (table), got " + type(value)
+  
+  for k, type_def in pairs(self.schema)
+    val = value[k]
+    local ok, err = type_def.check(type_def, val)
+    if not ok return false, "Field '" + str(k) + "': " + err
+  
+  return true, nil
+RecordType.check = check_record_type
+
+-- Export
+return {
+  String = String,
+  Number = Number,
+  Boolean = Boolean,
+  Integer = Integer,
+  List = List,
+  Optional = Optional,
+  Record = RecordType
+}

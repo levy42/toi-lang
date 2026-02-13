@@ -1,0 +1,12 @@
+fn assert_eq(actual, expected)
+  if actual != expected
+    error("assert_eq failed")
+
+fn add(a: int, b: int)
+  return a + b
+
+fn mulf(a: float, b: float)
+  return a * b
+
+assert_eq(add(2, 3), 5)
+assert_eq(mulf(1.5, 2.0), 3.0)

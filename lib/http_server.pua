@@ -1,0 +1,125 @@
+-- A concurrent HTTP server framework for Pua.
+-- Uses non-blocking sockets with coroutine-based connection handlers.
+
+string = import string
+table = import table
+socket = import socket
+json = import json
+http = import http
+coroutine = import coroutine
+
+HttpServer = {}
+
+fn set_nonblocking(sock)
+  sock.settimeout(sock, 0)
+
+fn find_connection_index(connections, sock)
+  i = 1
+  while i <= #connections
+    if connections[i].sock == sock
+      return i
+    i = i + 1
+  return 0
+
+fn handle_connection(server, client)
+  local data, err = client.recv(client, 4096)
+
+  while data == nil
+    if err and (err == "timeout" or string.find(err, "timeout"))
+      client = coroutine.yield("read")
+      local d, e = client.recv(client, 4096)
+      data = d
+      err = e
+    else
+      break
+
+  if data and string.len(data) > 0
+    req = http.parse(data)
+    if req
+      res = server.handler(req)
+      res_str = res
+
+      if type(res) != "string"
+        if type(res) == "table"
+          if res.body
+            res_str = http.response(res.status or 200, res.headers, res.body)
+          else
+            headers = {["Content-Type"] = "application/json"}
+            res_str = http.response(200, headers, json.encode(res))
+        else
+          res_str = str(res)
+
+      client.send(client, res_str)
+
+  client.close(client)
+  return "done"
+
+HttpServer.new = fn(port, handler)
+  s = {}
+  s.port = port
+  s.handler = handler
+  s.socket = socket.tcp()
+
+  s.run = fn(self)
+    self.socket.bind(self.socket, "0.0.0.0", self.port)
+    self.socket.listen(self.socket, 128)
+    set_nonblocking(self.socket)
+
+    print("HTTP Server running on port " + str(self.port))
+
+    connections = {}
+
+    while true
+      read_list = {}
+      read_list[1] = self.socket
+      i = 1
+      while i <= #connections
+        if connections[i].mode == "read"
+          table.insert(read_list, connections[i].sock)
+        i = i + 1
+
+      local ready_read, ready_write = socket.select(read_list, {}, 0.1)
+
+      if ready_read
+        ri = 1
+        while ri <= #ready_read
+          sock = ready_read[ri]
+
+          if sock == self.socket
+            local client, ip = self.socket.accept(self.socket)
+            if client
+              set_nonblocking(client)
+              co = coroutine.create(handle_connection)
+              conn = {sock = client, coro = co, mode = "read"}
+              table.insert(connections, conn)
+
+              local ok, mode = coroutine.resume(co, self, client)
+              status = coroutine.status(co)
+              if status == "dead"
+                conn.mode = "dead"
+              else
+                conn.mode = mode or "read"
+          else
+            idx = find_connection_index(connections, sock)
+            if idx > 0
+              conn = connections[idx]
+              local ok, mode = coroutine.resume(conn.coro, conn.sock)
+              status = coroutine.status(conn.coro)
+              if status == "dead"
+                conn.mode = "dead"
+              else
+                conn.mode = mode or "read"
+
+          ri = ri + 1
+
+      active = {}
+      ai = 1
+      while ai <= #connections
+        if connections[ai].mode != "dead"
+          table.insert(active, connections[ai])
+        ai = ai + 1
+      connections = active
+
+  return s
+
+return HttpServer

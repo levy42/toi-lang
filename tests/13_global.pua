@@ -1,0 +1,11 @@
+fn assert_eq(actual, expected)
+  if actual != expected
+    error("assert_eq failed")
+
+global g = 1
+
+fn set_global()
+  global g = 2
+
+set_global()
+assert_eq(g, 2)

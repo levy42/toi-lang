@@ -1,0 +1,57 @@
+-- Simple HTTP server using coroutines
+-- Usage: ./pua examples/http_server.pua
+
+local string = import string
+local socket = import socket
+local json = import json
+local os = import os
+local http = import http
+
+local PORT = 8080
+
+-- Request handler
+fn handle_request(req)
+    if req.path == "/"
+        local headers = {}
+        headers["Content-Type"] = "text/html"
+        return http.response(200, headers, "<h1>Welcome to Pua!</h1><p>Try /hello?name=World</p>")
+    elif req.path == "/hello"
+        local params = http.parsequery(req.query or "")
+        local name = params.name or "Guest"
+        local headers = {}
+        headers["Content-Type"] = "text/html"
+        return http.response(200, headers, "<h1>Hello, " + name + "!</h1>")
+    elif req.path == "/json"
+        local headers = {}
+        headers["Content-Type"] = "application/json"
+        local data = {message = "Hello from Pua", timestamp = os.clock()}
+        return http.response(200, headers, json.encode(data))
+    else
+        local headers = {}
+        headers["Content-Type"] = "text/plain"
+        return http.response(404, headers, "Not Found: " + req.path)
+
+-- Connection handler
+fn handle_connection(client)
+    local data = client.recv(client, 4096)
+    if data and string.len(data) > 0
+        local req = http.parse(data)
+        if req
+            local response = handle_request(req)
+            client.send(client, response)
+    client.close(client)
+
+-- Main server
+print("Starting HTTP server on port " + str(PORT))
+
+local server = socket.tcp()
+server.bind(server, "0.0.0.0", PORT)
+server.listen(server, 128)
+
+print("Listening on http://localhost:" + str(PORT))
+
+-- Simple accept loop (blocking, single-threaded for now)
+while true
+    local client = server.accept(server)
+    if client
+        handle_connection(client)

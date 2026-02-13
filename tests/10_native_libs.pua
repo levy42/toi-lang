@@ -1,0 +1,59 @@
+time = import time
+math = import math
+string = import string
+io = import io
+os = import os
+table = import table
+
+fn assert_true(cond, msg = nil)
+  if not cond
+    error("assert_true failed")
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error("assert_eq failed")
+
+-- time
+secs = time.seconds()
+nanos = time.nanos()
+assert_true(type(secs) == "number")
+assert_true(type(nanos) == "number")
+assert_true(nanos > 1000000000)
+
+-- math
+assert_eq(math.abs(-3), 3)
+assert_eq(math.floor(1.9), 1)
+assert_eq(math.sum(1, 2, 3), 6)
+assert_eq(math.sum({1, 2, 3, 4}), 10)
+
+-- string module
+assert_eq(string.len("abc"), 3)
+assert_eq(string.upper("ab"), "AB")
+assert_eq(string.sub("hello", 2, 4), "ell")
+
+-- io userdata __index (function)
+local f, err = io.open("tests/tmp_io.txt", "w")
+assert_true(f != nil)
+f.write("line1\nline2\nXYZ")
+f.close()
+
+local r, err2 = io.open("tests/tmp_io.txt", "r")
+assert_true(r != nil)
+line = r.readline()
+assert_eq(line, "line1")
+chunk = r.read(2)
+assert_eq(chunk, "li")
+r.close()
+
+local r_all, err3 = io.open("tests/tmp_io.txt", "r")
+assert_true(r_all != nil)
+all = r_all.read()
+assert_eq(all, "line1\nline2\nXYZ")
+r_all.close()
+os.remove("tests/tmp_io.txt")
+
+-- table module
+joined = table.concat({"a", "b", "c"}, "-")
+assert_eq(joined, "a-b-c")
+
+print "native libs ok"

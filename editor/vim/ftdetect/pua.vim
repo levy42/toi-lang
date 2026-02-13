@@ -1,0 +1,1 @@
+au BufNewFile,BufRead *.pua set filetype=pua
