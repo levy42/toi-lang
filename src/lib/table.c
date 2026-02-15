@@ -5,6 +5,61 @@
 #include "../value.h"
 #include "../vm.h"
 
+static int valueEqualsForFind(Value a, Value b) {
+    if (a.type != b.type) return 0;
+    if (IS_NIL(a)) return 1;
+    if (IS_NUMBER(a)) return AS_NUMBER(a) == AS_NUMBER(b);
+    if (IS_BOOL(a)) return AS_BOOL(a) == AS_BOOL(b);
+    if (IS_OBJ(a) && IS_OBJ(b)) {
+        if (AS_OBJ(a) == AS_OBJ(b)) return 1;
+        if (IS_STRING(a) && IS_STRING(b)) {
+            ObjString* sa = AS_STRING(a);
+            ObjString* sb = AS_STRING(b);
+            return sa->length == sb->length && memcmp(sa->chars, sb->chars, sa->length) == 0;
+        }
+    }
+    return 0;
+}
+
+static int callUnaryLookup(VM* vm, Value fn, Value arg, Value* out) {
+    if (IS_CLOSURE(fn)) {
+        int savedFrameCount = vm->currentThread->frameCount;
+
+        push(vm, fn);
+        push(vm, arg);
+
+        if (!call(vm, AS_CLOSURE(fn), 1)) {
+            return 0;
+        }
+
+        InterpretResult result = vmRun(vm, savedFrameCount);
+        if (result != INTERPRET_OK) {
+            return 0;
+        }
+
+        *out = pop(vm);
+        return 1;
+    }
+
+    if (IS_NATIVE(fn)) {
+        push(vm, fn);
+        push(vm, arg);
+
+        Value* callArgs = vm->currentThread->stackTop - 1;
+        vm->currentThread->stackTop -= 2;
+
+        if (!AS_NATIVE(fn)(vm, 1, callArgs)) {
+            return 0;
+        }
+
+        *out = pop(vm);
+        return 1;
+    }
+
+    vmRuntimeError(vm, "table.find_index: lookup must be a function.");
+    return 0;
+}
+
 // table.remove(t, pos) - removes element at pos and shifts down
 static int table_remove(VM* vm, int argCount, Value* args) {
     ASSERT_ARGC_GE(1);
@@ -312,6 +367,57 @@ static int table_values(VM* vm, int argCount, Value* args) {
     return 1;
 }
 
+// table.find_index(t, value[, start][, lookup]) - find first matching array value.
+// lookup(element) can be used to compare by derived key.
+// Returns 1-based index, or 0 if not found.
+static int table_find_index(VM* vm, int argCount, Value* args) {
+    ASSERT_ARGC_GE(2);
+    ASSERT_TABLE(0);
+    if (argCount > 4) {
+        vmRuntimeError(vm, "table.find_index: expected 2 to 4 arguments.");
+        return 0;
+    }
+
+    ObjTable* table = GET_TABLE(0);
+    Value needle = args[1];
+    int start = 1;
+    Value lookup = NIL_VAL;
+
+    if (argCount >= 3) {
+        if (IS_NUMBER(args[2])) {
+            start = (int)GET_NUMBER(2);
+            if (start < 1) start = 1;
+        } else {
+            lookup = args[2];
+        }
+    }
+
+    if (argCount >= 4) {
+        ASSERT_NUMBER(2);
+        start = (int)GET_NUMBER(2);
+        if (start < 1) start = 1;
+        lookup = args[3];
+    }
+
+    for (int i = start; ; i++) {
+        Value val;
+        if (!tableGetArray(&table->table, i, &val) || IS_NIL(val)) break;
+
+        Value candidate = val;
+        if (!IS_NIL(lookup)) {
+            if (!callUnaryLookup(vm, lookup, val, &candidate)) {
+                return 0;
+            }
+        }
+
+        if (valueEqualsForFind(candidate, needle)) {
+            RETURN_NUMBER((double)i);
+        }
+    }
+
+    RETURN_NUMBER(0);
+}
+
 void registerTable(VM* vm) {
     const NativeReg tableFuncs[] = {
         {"remove", table_remove},
@@ -322,6 +428,7 @@ void registerTable(VM* vm) {
         {"insert", table_insert},
         {"keys", table_keys},
         {"values", table_values},
+        {"find_index", table_find_index},
         {NULL, NULL}
     };
     registerModule(vm, "table", tableFuncs);

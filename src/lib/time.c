@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/select.h>
 #include "libs.h"
 #include "../object.h"
 #include "../value.h"
@@ -45,6 +46,7 @@ static int time_sleep(VM* vm, int argCount, Value* args) {
         return 0;
     }
 
+#if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L
     struct timespec ts;
     ts.tv_sec = (time_t)seconds;
     ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1e9);
@@ -53,6 +55,16 @@ static int time_sleep(VM* vm, int argCount, Value* args) {
     while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {
         // retry with remaining time
     }
+#else
+    struct timeval tv;
+    tv.tv_sec = (time_t)seconds;
+    tv.tv_usec = (long)((seconds - (double)tv.tv_sec) * 1e6);
+    if (tv.tv_usec < 0) tv.tv_usec = 0;
+
+    while (select(0, NULL, NULL, NULL, &tv) == -1 && errno == EINTR) {
+        // retry with remaining time
+    }
+#endif
     RETURN_NIL;
 }
 

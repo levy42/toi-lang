@@ -1,0 +1,46 @@
+fn assert_true(cond, msg = nil)
+  if not cond
+    error("assert_true failed")
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error("assert_eq failed")
+
+fn plus_one(fn_)
+  return fn(x)
+    return fn_(x) + 1
+
+fn times(n)
+  return fn(fn_)
+    return fn(x)
+      return fn_(x) * n
+
+@plus_one
+fn base(x)
+  return x * 2
+
+assert_eq(base(5), 11)
+
+@plus_one
+@times(3)
+fn stacked(x)
+  return x + 1
+
+-- @plus_one(@times(3)(fn)) => (x + 1) * 3 + 1
+assert_eq(stacked(2), 10)
+
+local t = {
+  prefix = "hi ",
+  wrap = fn(p)
+    return fn(fn_)
+      return fn(name)
+        return p + fn_(name)
+}
+
+@t.wrap(t.prefix)
+fn greet(name)
+  return name
+
+assert_eq(greet("bob"), "hi bob")
+
+print "decorators ok"

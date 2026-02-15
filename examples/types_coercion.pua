@@ -1,0 +1,83 @@
+from lib.types import *
+
+print "== types: validate + coerce =="
+
+User = Record {
+  id = Union(Integer, String),
+  role = Literal("admin", "staff", "member"),
+  age = Constraints(Integer, {min = 18, max = 120}),
+  active = Boolean,
+  scores = List(Number),
+  nick = Optional(String)
+}
+
+raw_ok = {
+  id = "42",
+  role = "admin",
+  age = "27",
+  active = "true",
+  scores = {"1.5", "2", 3},
+  nick = 123
+}
+
+-- Strict validation (no coercion): expected to fail.
+local ok1, err1, out1 = validate(User, raw_ok)
+print "strict ok = "
+print ok1
+print "strict err = "
+print err1
+
+-- Coercing validation: expected to pass and return normalized data.
+local ok2, err2, normalized = coerce(User, raw_ok)
+print "coerce ok = "
+print ok2
+if not ok2
+  print "coerce err = "
+  print err2
+else
+  user = User {
+    id = normalized.id,
+    role = normalized.role,
+    age = normalized.age,
+    active = normalized.active,
+    scores = normalized.scores,
+    nick = normalized.nick
+  }
+  local ok_self, err_self = user.check()
+  print "instance check ok = "
+  print ok_self
+
+  print "id type:"
+  print type(user.id)
+  print "id value:"
+  print user.id
+  print "age type:"
+  print type(user.age)
+  print "age value:"
+  print user.age
+  print "active type:"
+  print type(user.active)
+  print "active value:"
+  print user.active
+  print "nick type:"
+  print type(user.nick)
+  print "nick value:"
+  print user.nick
+  print "score[1] type:"
+  print type(user.scores[1])
+  print "score[1] value:"
+  print user.scores[1]
+
+bad = {
+  id = 1,
+  role = "guest",         -- not in Literal
+  age = "16",             -- below min
+  active = "maybe",       -- not coercible to bool
+  scores = {"ok"}         -- not coercible to number
+}
+
+local ok3, err3, out3 = coerce(User, bad)
+print "bad coerce ok = "
+print ok3
+print "bad error = " -- path-aware, e.g. at $.role: ...
+print err3

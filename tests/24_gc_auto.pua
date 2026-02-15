@@ -1,0 +1,36 @@
+fn assert_true(cond, msg = nil)
+  if not cond
+    error("assert_true failed")
+
+global string = import string
+
+fn alloc_wave(count)
+  for i in 1..count
+    s = string.format("item_%d", i)
+    t = string.format("%s_tmp", s)
+    n = i + 1
+    box = {s, t, n}
+    pair = {left = box, right = {v = n}}
+    box.self = pair
+
+base = mem()
+peak = base
+
+for round in 1..80
+  alloc_wave(1200)
+  now = mem()
+  if now > peak
+    peak = now
+
+-- Keep some live objects to ensure we do not optimize away all roots.
+keep = {}
+for i in 1..2000
+  keep[i] = {v = i}
+
+after = mem()
+
+-- With automatic GC working, memory should stay bounded under heavy churn.
+assert_true(peak <= base + 67108864)
+assert_true(after <= base + 67108864)
+assert_true(keep[1].v == 1)
+assert_true(keep[2000].v == 2000)

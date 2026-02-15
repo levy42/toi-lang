@@ -89,6 +89,7 @@ static int isREPLMode = 0;  // If 1, don't pop expression results
 static int lastExprEndsWithCall = 0;
 static int lastExprWasRange = 0;
 static int inForRangeHeader = 0;
+static int inTableEntryExpression = 0;
 static uint8_t typeStack[512];
 static int typeStackTop = 0;
 
@@ -332,6 +333,24 @@ static void expression();
 static void declaration();
 static ParseRule* getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
+static void emitGetNamed(Token name);
+static void emitSetNamed(Token name);
+
+static int tokenIndent(Token token) {
+    const char* p = token.start;
+    const char* lineStart = p;
+    while (lineStart > lexer.sourceStart && lineStart[-1] != '\n') {
+        lineStart--;
+    }
+    int indent = 0;
+    while (lineStart < p) {
+        if (*lineStart == ' ') indent++;
+        else if (*lineStart == '\t') indent += 4;
+        else break;
+        lineStart++;
+    }
+    return indent;
+}
 
 static double parseNumberToken(Token token) {
     char* buf = (char*)malloc(token.length + 1);
@@ -377,7 +396,8 @@ static void string(int canAssign) {
     return;
     }
 
-    // Regular string "..." - process escape sequences
+    // Regular quoted string ("..." or '...') - process escape sequences
+    char quote = parser.previous.start[0];
     const char* src = parser.previous.start + 1;
     int rawLen = parser.previous.length - 2;
     char* buf = (char*)malloc(rawLen + 1); // max size (shrinks after escapes)
@@ -390,6 +410,7 @@ static void string(int canAssign) {
                 case 'n': buf[w++] = '\n'; break;
                 case 't': buf[w++] = '\t'; break;
                 case 'r': buf[w++] = '\r'; break;
+                case '\'': buf[w++] = '\''; break;
                 case '"': buf[w++] = '"'; break;
                 case '\\': buf[w++] = '\\'; break;
                 default: // unknown escape, keep as-is
@@ -398,6 +419,10 @@ static void string(int canAssign) {
                     break;
             }
         } else {
+            if (c == quote) {
+                // Should not occur (lexer terminates on unescaped quote), but keep safe.
+                continue;
+            }
             buf[w++] = c;
         }
     }
@@ -884,6 +909,21 @@ static void setParamType(ObjFunction* function, int index, uint8_t type) {
     }
 }
 
+static void setParamName(ObjFunction* function, int index, Token* name) {
+    if (index < 0) return;
+    if (function->paramNamesCount < function->arity) {
+        int old = function->paramNamesCount;
+        function->paramNamesCount = function->arity;
+        function->paramNames = (ObjString**)realloc(function->paramNames, sizeof(ObjString*) * function->paramNamesCount);
+        for (int i = old; i < function->paramNamesCount; i++) {
+            function->paramNames[i] = NULL;
+        }
+    }
+    if (index < function->paramNamesCount) {
+        function->paramNames[index] = copyString(name->start, name->length);
+    }
+}
+
 static uint8_t parseVariable(const char* errorMessage) {
     consume(TOKEN_IDENTIFIER, errorMessage);
     declareVariable();
@@ -948,6 +988,34 @@ static void namedVariable(Token name, int canAssign) {
             typePush(TYPEHINT_ANY);
         }
     }
+}
+
+static void emitGetNamed(Token name) {
+    int arg = resolveLocal(current, &name);
+    if (arg != -1) {
+        emitBytes(OP_GET_LOCAL, (uint8_t)arg);
+        return;
+    }
+    arg = resolveUpvalue(current, &name);
+    if (arg != -1) {
+        emitBytes(OP_GET_UPVALUE, (uint8_t)arg);
+        return;
+    }
+    emitBytes(OP_GET_GLOBAL, identifierConstant(&name));
+}
+
+static void emitSetNamed(Token name) {
+    int arg = resolveLocal(current, &name);
+    if (arg != -1) {
+        emitBytes(OP_SET_LOCAL, (uint8_t)arg);
+        return;
+    }
+    arg = resolveUpvalue(current, &name);
+    if (arg != -1) {
+        emitBytes(OP_SET_UPVALUE, (uint8_t)arg);
+        return;
+    }
+    emitBytes(OP_SET_GLOBAL, identifierConstant(&name));
 }
 
 static void variable(int canAssign) {
@@ -1049,22 +1117,59 @@ static void tableComprehension(int canAssign);
 static void compileExpressionFromString(const char* srcStart, size_t srcLen);
 static int findComprehensionFor(const char** forStart);
 static const char* findComprehensionAssign(Lexer base, const char* exprStart, const char* exprEnd);
+static int isImplicitTableSeparator(void);
+
+static int isTableEntryStart(TokenType type) {
+    switch (type) {
+        case TOKEN_LEFT_BRACKET:
+        case TOKEN_LEFT_PAREN:
+        case TOKEN_LEFT_BRACE:
+        case TOKEN_IDENTIFIER:
+        case TOKEN_STRING:
+        case TOKEN_FSTRING:
+        case TOKEN_NUMBER:
+        case TOKEN_NIL:
+        case TOKEN_TRUE:
+        case TOKEN_FALSE:
+        case TOKEN_NOT:
+        case TOKEN_MINUS:
+        case TOKEN_HASH:
+        case TOKEN_FN:
+        case TOKEN_IMPORT:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int isImplicitTableSeparator(void) {
+    if (parser.current.line <= parser.previous.line) return 0;
+    return isTableEntryStart(parser.current.type);
+}
+
+static void tableEntryExpression(void) {
+    int saved = inTableEntryExpression;
+    inTableEntryExpression = 1;
+    expression();
+    inTableEntryExpression = saved;
+}
+
 static void parseTableEntries() {
     double arrayIndex = 1.0;
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         emitByte(OP_DUP);
         if (match(TOKEN_LEFT_BRACKET)) {
-            expression();
+            tableEntryExpression();
             consume(TOKEN_RIGHT_BRACKET, "Expect ']' after key.");
             consume(TOKEN_EQUALS, "Expect '=' after key.");
-            expression();
+            tableEntryExpression();
             emitByte(OP_SET_TABLE);
             emitByte(OP_POP);
         } else if (match(TOKEN_IDENTIFIER)) {
             Token name = parser.previous;
             if (match(TOKEN_EQUALS)) {
                 emitConstant(OBJ_VAL(copyString(name.start, name.length)));
-                expression();
+                tableEntryExpression();
                 emitByte(OP_SET_TABLE);
                 emitByte(OP_POP);
             } else {
@@ -1077,11 +1182,12 @@ static void parseTableEntries() {
         } else {
             // Array item
             emitConstant(NUMBER_VAL(arrayIndex++));
-            expression();
+            tableEntryExpression();
             emitByte(OP_SET_TABLE);
             emitByte(OP_POP);
         }
-        if (!match(TOKEN_COMMA)) break;
+        if (match(TOKEN_COMMA) || isImplicitTableSeparator()) continue;
+        break;
     }
     consume(TOKEN_RIGHT_BRACE, "Expect '}' after table.");
 }
@@ -1660,6 +1766,7 @@ ParseRule rules[] = {
     [TOKEN_HASH]          = {unary,    NULL,   PREC_NONE},
     [TOKEN_QUESTION]      = {NULL,     ternary, PREC_TERNARY},
     [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_AT]            = {NULL,     NULL,   PREC_NONE},
     [TOKEN_EQUAL_EQUAL]   = {NULL,     binary, PREC_EQUALITY},
     [TOKEN_POWER]         = {NULL,     binary, PREC_FACTOR},
     [TOKEN_INT_DIV]       = {NULL,     binary, PREC_FACTOR},
@@ -1699,6 +1806,7 @@ ParseRule rules[] = {
     [TOKEN_INDENT]        = {NULL,     NULL,   PREC_NONE},
     [TOKEN_DEDENT]        = {NULL,     NULL,   PREC_NONE},
     [TOKEN_IMPORT]        = {importExpression, NULL, PREC_NONE},
+    [TOKEN_FROM]          = {NULL,     NULL,   PREC_NONE},
     [TOKEN_DEL]           = {NULL,     NULL,   PREC_NONE},
 };
 
@@ -1712,6 +1820,11 @@ static void parsePrecedence(Precedence precedence) {
     int canAssign = precedence <= PREC_ASSIGNMENT;
     prefixRule(canAssign);
     while (precedence <= getRule(parser.current.type)->precedence) {
+        if (inTableEntryExpression &&
+            parser.current.line > parser.previous.line &&
+            isTableEntryStart(parser.current.type)) {
+            break;
+        }
         advance();
         ParseFn infixRule = getRule(parser.previous.type)->infix;
         infixRule(canAssign);
@@ -1895,6 +2008,106 @@ static void statement();
 static void tryStatement();
 static void throwStatement();
 static void withStatement();
+static void fromImportStatement(void);
+static int isMultiAssignmentStatement(void);
+static void multiAssignmentStatement(void);
+
+static void assignNameFromStack(Token name, uint8_t rhsType) {
+    uint8_t setOp;
+    int arg = resolveLocal(current, &name);
+    if (arg != -1) {
+        setOp = OP_SET_LOCAL;
+        emitBytes(setOp, (uint8_t)arg);
+        updateLocalType(arg, rhsType);
+        return;
+    }
+
+    arg = resolveUpvalue(current, &name);
+    if (arg != -1) {
+        setOp = OP_SET_UPVALUE;
+        emitBytes(setOp, (uint8_t)arg);
+        return;
+    }
+
+    arg = identifierConstant(&name);
+    if (current->type == TYPE_SCRIPT) {
+        emitByte(OP_DUP);
+        emitBytes(OP_DEFINE_GLOBAL, (uint8_t)arg);
+    } else {
+        // Local-by-default, consistent with single-target assignment semantics.
+        int localIndex = current->localCount;
+        addLocal(name);
+        markInitialized();
+        emitBytes(OP_SET_LOCAL, (uint8_t)localIndex);
+        setLocalType(localIndex, rhsType);
+    }
+}
+
+static int isMultiAssignmentStatement(void) {
+    if (!check(TOKEN_IDENTIFIER)) return 0;
+
+    int startLine = parser.current.line;
+    int targetCount = 1;
+    Lexer peek = lexer;
+
+    for (;;) {
+        Token tok = scanToken(&peek);
+        if (tok.line > startLine) return 0;
+
+        if (tok.type == TOKEN_COMMA) {
+            tok = scanToken(&peek);
+            if (tok.line > startLine) return 0;
+            if (tok.type != TOKEN_IDENTIFIER) return 0;
+            targetCount++;
+            continue;
+        }
+
+        return tok.type == TOKEN_EQUALS && targetCount > 1;
+    }
+}
+
+static void multiAssignmentStatement(void) {
+    Token targets[256];
+    int targetCount = 0;
+
+    do {
+        consume(TOKEN_IDENTIFIER, "Expect variable name.");
+        targets[targetCount++] = parser.previous;
+        if (targetCount > 255) {
+            error("Too many variables in assignment.");
+            return;
+        }
+    } while (match(TOKEN_COMMA));
+
+    consume(TOKEN_EQUALS, "Expect '=' in assignment.");
+
+    // Evaluate RHS expressions into a temporary table in positional order.
+    emitByte(OP_NEW_TABLE);
+    int exprIndex = 1;
+    do {
+        emitByte(OP_DUP);
+        emitConstant(NUMBER_VAL(exprIndex++));
+        typeStackTop = 0;
+        expression();
+        emitByte(OP_SET_TABLE);
+        emitByte(OP_POP);
+    } while (match(TOKEN_COMMA));
+
+    // Assign each target from temp table index 1..N.
+    typeStackTop = 0;
+    for (int i = 0; i < targetCount; i++) {
+        emitByte(OP_DUP);
+        emitConstant(NUMBER_VAL(i + 1));
+        emitByte(OP_GET_TABLE);
+        assignNameFromStack(targets[i], TYPEHINT_ANY);
+        if (!isREPLMode) {
+            emitByte(OP_POP);
+        }
+    }
+
+    // Pop temp table.
+    emitByte(OP_POP);
+}
 
 static void ifStatement() {
     typeStackTop = 0;
@@ -2574,6 +2787,8 @@ static void statement() {
         emitByte(OP_GC);
     } else if (match(TOKEN_DEL)) {
         delStatement();
+    } else if (isMultiAssignmentStatement()) {
+        multiAssignmentStatement();
     } else {
         expressionStatement();
     }
@@ -2598,6 +2813,7 @@ static void functionBody(FunctionType type) {
 
                 // Parse the varargs parameter name
                 uint8_t constant = parseVariable("Expect parameter name after '*'.");
+                Token paramNameToken = parser.previous;
                 if (paramIndex == 0 && parser.previous.length == 4 &&
                     memcmp(parser.previous.start, "self", 4) == 0) {
                     current->function->isSelf = 1;
@@ -2609,6 +2825,7 @@ static void functionBody(FunctionType type) {
                     setLocalType(current->localCount - 1, type);
                     setParamType(current->function, current->function->arity - 1, type);
                 }
+                setParamName(current->function, current->function->arity - 1, &paramNameToken);
                 defineVariable(constant);
                 break;  // *args must be the last parameter
             }
@@ -2621,6 +2838,7 @@ static void functionBody(FunctionType type) {
                 errorAtCurrent("Can't have more than 255 parameters.");
             }
             uint8_t constant = parseVariable("Expect parameter name.");
+            Token paramNameToken = parser.previous;
             if (paramIndex == 0 && parser.previous.length == 4 &&
                 memcmp(parser.previous.start, "self", 4) == 0) {
                 current->function->isSelf = 1;
@@ -2632,6 +2850,7 @@ static void functionBody(FunctionType type) {
                 setLocalType(current->localCount - 1, type);
                 setParamType(current->function, current->function->arity - 1, type);
             }
+            setParamName(current->function, current->function->arity - 1, &paramNameToken);
             
             if (match(TOKEN_EQUALS)) {
                 if (match(TOKEN_NUMBER)) {
@@ -2679,10 +2898,25 @@ static void functionBody(FunctionType type) {
         block();
         match(TOKEN_DEDENT);
     } else {
-        if (parser.current.line > headerLine) {
+        if (parser.current.line > headerLine && !inTableEntryExpression) {
             error("Expected indented block for function body.");
         }
-        statement();
+        if (parser.current.line > headerLine && inTableEntryExpression) {
+            int headerIndent = tokenIndent(parser.previous);
+            int bodyIndent = tokenIndent(parser.current);
+            if (bodyIndent <= headerIndent) {
+                error("Expected indented block for function body.");
+            } else {
+                while (!check(TOKEN_EOF) &&
+                       !check(TOKEN_RIGHT_BRACE) &&
+                       parser.current.line > headerLine &&
+                       tokenIndent(parser.current) > headerIndent) {
+                    statement();
+                }
+            }
+        } else {
+            statement();
+        }
     }
     
     ObjFunction* function = endCompiler();
@@ -2696,13 +2930,24 @@ static void functionBody(FunctionType type) {
     }
 }
 
-static void functionDeclaration() {
+typedef struct {
+    const char* start;
+    size_t length;
+} DecoratorSpan;
+
+static Token functionDeclarationNamed(void) {
     uint8_t global = parseVariable("Expect function name.");
+    Token name = parser.previous;
     if (current->scopeDepth > 0) {
         markInitialized();
     }
     functionBody(TYPE_FUNCTION);
     defineVariable(global);
+    return name;
+}
+
+static void functionDeclaration() {
+    (void)functionDeclarationNamed();
 }
 
 static void anonymousFunction(int canAssign) {
@@ -2756,21 +3001,107 @@ static void globalDeclaration(void) {
     }
 }
 
-static void globalFunctionDeclaration(void) {
+static Token globalFunctionDeclarationNamed(void) {
     consume(TOKEN_IDENTIFIER, "Expect function name.");
+    Token name = parser.previous;
     uint8_t global = identifierConstant(&parser.previous);
     functionBody(TYPE_FUNCTION);
     emitBytes(OP_DEFINE_GLOBAL, global);
+    return name;
+}
+
+static void globalFunctionDeclaration(void) {
+    (void)globalFunctionDeclarationNamed();
+}
+
+static void applyDecorators(Token functionName, DecoratorSpan* decorators, int decoratorCount) {
+    for (int i = decoratorCount - 1; i >= 0; i--) {
+        compileExpressionFromString(decorators[i].start, decorators[i].length);
+        emitGetNamed(functionName);
+        emitBytes(OP_CALL, 1);
+        emitSetNamed(functionName);
+        emitByte(OP_POP);
+    }
+}
+
+static void decoratedFunctionDeclaration(void) {
+    DecoratorSpan decorators[64];
+    int decoratorCount = 0;
+
+    for (;;) {
+        if (parser.current.line != parser.previous.line) {
+            error("Expect decorator expression after '@'.");
+            return;
+        }
+        if (parser.current.type == TOKEN_EOF) {
+            error("Expect decorator expression after '@'.");
+            return;
+        }
+
+        const char* start = parser.current.start;
+        const char* end = start;
+        int line = parser.previous.line;
+        while (parser.current.type != TOKEN_EOF && parser.current.line == line) {
+            end = parser.current.start + parser.current.length;
+            advance();
+        }
+
+        if (decoratorCount == 64) {
+            error("Too many decorators on function.");
+            return;
+        }
+        decorators[decoratorCount].start = start;
+        decorators[decoratorCount].length = (size_t)(end - start);
+        decoratorCount++;
+
+        if (!match(TOKEN_AT)) break;
+    }
+
+    Token functionName;
+    if (match(TOKEN_FN)) {
+        functionName = functionDeclarationNamed();
+    } else if (match(TOKEN_LOCAL)) {
+        consume(TOKEN_FN, "Expect 'fn' after 'local' in decorated declaration.");
+        functionName = functionDeclarationNamed();
+    } else if (match(TOKEN_GLOBAL)) {
+        consume(TOKEN_FN, "Expect 'fn' after 'global' in decorated declaration.");
+        functionName = globalFunctionDeclarationNamed();
+    } else {
+        error("Decorators can only be applied to function declarations.");
+        return;
+    }
+
+    applyDecorators(functionName, decorators, decoratorCount);
 }
 
 static void parseCall(int canAssign) {
     (void)canAssign;
     uint8_t argCount = 0;
     int inNamedArgs = 0;
+    int hasSpreadArg = 0;
     int baseTop = typeStackTop;
     
     if (!check(TOKEN_RIGHT_PAREN)) {
         do {
+            if (match(TOKEN_STAR)) {
+                if (inNamedArgs) {
+                    error("Spread argument cannot be used with named arguments.");
+                }
+                if (hasSpreadArg) {
+                    error("Can't use more than one spread argument.");
+                }
+                if (argCount == 255) {
+                    error("Can't have more than 255 arguments.");
+                }
+                expression();
+                typePop();
+                hasSpreadArg = 1;
+                if (check(TOKEN_COMMA)) {
+                    error("Spread argument must be last.");
+                }
+                continue;
+            }
+
             // Check if current argument is named: identifier = ...
             int isNamed = 0;
             if (parser.current.type == TOKEN_IDENTIFIER) {
@@ -2782,6 +3113,9 @@ static void parseCall(int canAssign) {
             }
 
             if (isNamed) {
+                if (hasSpreadArg) {
+                    error("Named arguments cannot follow spread argument.");
+                }
                 if (!inNamedArgs) {
                     emitByte(OP_NEW_TABLE); // Start the options table
                     inNamedArgs = 1;
@@ -2803,6 +3137,9 @@ static void parseCall(int canAssign) {
                 if (inNamedArgs) {
                     error("Positional arguments cannot follow named arguments.");
                 }
+                if (hasSpreadArg) {
+                    error("Positional arguments cannot follow spread argument.");
+                }
                 expression();
                 typePop();
                 if (argCount == 255) {
@@ -2822,7 +3159,11 @@ static void parseCall(int canAssign) {
     }
 
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
-    emitBytes(OP_CALL, argCount);
+    if (hasSpreadArg) {
+        emitBytes(OP_CALL_EXPAND, argCount);
+    } else {
+        emitBytes(OP_CALL, argCount);
+    }
     lastExprEndsWithCall = 1;
     typeStackTop = baseTop;
     typePop();
@@ -2871,17 +3212,81 @@ static void importStatement() {
     // Emit the import opcode with full path
     emitBytes(OP_IMPORT, pathConstant);
 
-    // Define the variable
-    uint8_t varName = identifierConstant(&lastComponent);
-    uint8_t global = (current->scopeDepth > 0) ? 0 : varName;
-    defineVariable(global);
+    // Define the variable.
+    if (current->scopeDepth > 0) {
+        markInitialized();
+    } else {
+        uint8_t varName = identifierConstant(&lastComponent);
+        emitBytes(OP_DEFINE_GLOBAL, varName);
+    }
+}
+
+static void fromImportStatement(void) {
+    // Parse: from module_name[.submodule...] import name[, name...]
+    consume(TOKEN_IDENTIFIER, "Expect module name after 'from'.");
+
+    char modulePath[256];
+    int len = 0;
+
+    int firstLen = parser.previous.length;
+    if (firstLen >= 256) firstLen = 255;
+    memcpy(modulePath, parser.previous.start, firstLen);
+    len = firstLen;
+
+    while (match(TOKEN_DOT)) {
+        if (len < 255) modulePath[len++] = '.';
+        consume(TOKEN_IDENTIFIER, "Expect module name after '.'.");
+        int partLen = parser.previous.length;
+        if (len + partLen >= 256) partLen = 255 - len;
+        if (partLen > 0) {
+            memcpy(modulePath + len, parser.previous.start, partLen);
+            len += partLen;
+        }
+    }
+    modulePath[len] = '\0';
+
+    consume(TOKEN_IMPORT, "Expect 'import' after module path.");
+
+    // Prepare module path constant for repeated imports.
+    ObjString* pathString = copyString(modulePath, len);
+    uint8_t pathConstant = makeConstant(OBJ_VAL(pathString));
+    if (match(TOKEN_STAR)) {
+        emitBytes(OP_IMPORT, pathConstant);
+        emitByte(OP_IMPORT_STAR);
+        return;
+    }
+
+    do {
+        consume(TOKEN_IDENTIFIER, "Expect imported name.");
+        Token importedName = parser.previous;
+
+        emitBytes(OP_IMPORT, pathConstant);
+
+        // module[name]
+        emitConstant(OBJ_VAL(copyString(importedName.start, importedName.length)));
+        emitByte(OP_GET_TABLE);
+
+        // Define imported symbol in current scope.
+        parser.previous = importedName;
+        if (current->scopeDepth > 0) {
+            declareVariable();
+            markInitialized();
+        } else {
+            uint8_t varName = identifierConstant(&importedName);
+            emitBytes(OP_DEFINE_GLOBAL, varName);
+        }
+    } while (match(TOKEN_COMMA));
 }
 
 static void declaration() {
-    if (match(TOKEN_FN)) {
+    if (match(TOKEN_AT)) {
+        decoratedFunctionDeclaration();
+    } else if (match(TOKEN_FN)) {
         functionDeclaration();
     } else if (match(TOKEN_IMPORT)) {
         importStatement();
+    } else if (match(TOKEN_FROM)) {
+        fromImportStatement();
     } else if (match(TOKEN_GLOBAL)) {
         if (match(TOKEN_FN)) {
             globalFunctionDeclaration();

@@ -6,6 +6,9 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 #include "libs.h"
 #include "../object.h"
@@ -215,6 +218,45 @@ static int os_chdir(VM* vm, int argCount, Value* args) {
     }
 }
 
+// os.rss() -> resident set size in bytes (Linux), nil on unsupported platforms
+static int os_rss(VM* vm, int argCount, Value* args) {
+    (void)vm; (void)argCount; (void)args;
+#if defined(__linux__)
+    FILE* fp = fopen("/proc/self/statm", "r");
+    if (!fp) {
+        RETURN_NIL;
+    }
+
+    unsigned long total_pages = 0;
+    unsigned long rss_pages = 0;
+    if (fscanf(fp, "%lu %lu", &total_pages, &rss_pages) != 2) {
+        fclose(fp);
+        RETURN_NIL;
+    }
+    fclose(fp);
+
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) {
+        RETURN_NIL;
+    }
+
+    RETURN_NUMBER((double)rss_pages * (double)page_size);
+#else
+    RETURN_NIL;
+#endif
+}
+
+// os.trim() -> ask allocator to return free memory to OS when possible
+static int os_trim(VM* vm, int argCount, Value* args) {
+    (void)vm; (void)argCount; (void)args;
+#if defined(__GLIBC__)
+    int ok = malloc_trim(0);
+    RETURN_BOOL(ok != 0);
+#else
+    RETURN_NIL;
+#endif
+}
+
 void registerOS(VM* vm) {
     const NativeReg osFuncs[] = {
         {"exit", os_exit},
@@ -231,6 +273,8 @@ void registerOS(VM* vm) {
         {"exists", os_exists},
         {"getcwd", os_getcwd},
         {"chdir", os_chdir},
+        {"rss", os_rss},
+        {"trim", os_trim},
         {NULL, NULL}
     };
 

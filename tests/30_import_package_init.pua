@@ -1,0 +1,13 @@
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error("assert_eq failed")
+
+pkg = import tests.pkg_init_mod
+assert_eq(pkg.answer, 7)
+assert_eq(pkg.inc(4), 5)
+
+from tests.pkg_init_mod import answer, inc
+assert_eq(answer, 7)
+assert_eq(inc(9), 10)
+
+print "import package init ok"

@@ -4,6 +4,7 @@ string = import string
 io = import io
 os = import os
 table = import table
+inspect = import inspect
 
 fn assert_true(cond, msg = nil)
   if not cond
@@ -55,5 +56,34 @@ os.remove("tests/tmp_io.txt")
 -- table module
 joined = table.concat({"a", "b", "c"}, "-")
 assert_eq(joined, "a-b-c")
+assert_eq(table.find_index({"a", "b", "c"}, "b"), 2)
+assert_eq(table.find_index({"a", "b", "c"}, "x"), 0)
+assert_eq(table.find_index({"a", "b", "c", "b"}, "b", 3), 4)
+conn_like = {
+  {sock = "s1"},
+  {sock = "s2"},
+  {sock = "s3"}
+}
+assert_eq(table.find_index(conn_like, "s2", fn(c) return c.sock), 2)
+assert_eq(table.find_index(conn_like, "s3", 2, fn(c) return c.sock), 3)
+
+-- inspect module
+fn api_handler(user_id: int, q: string = "x", *rest: table)
+  return nil
+
+sig = inspect.signature(api_handler)
+assert_eq(sig.kind, "function")
+assert_eq(sig.arity, 3)
+assert_true(sig.variadic)
+assert_eq(sig.defaults_count, 1)
+assert_eq(sig.params[1].name, "user_id")
+assert_eq(sig.params[1].type, "int")
+assert_true(sig.params[1].has_default == false)
+assert_eq(sig.params[2].name, "q")
+assert_eq(sig.params[2].type, "str")
+assert_true(sig.params[2].has_default)
+assert_eq(sig.params[3].name, "rest")
+assert_eq(sig.params[3].type, "table")
+assert_true(sig.params[3].variadic)
 
 print "native libs ok"

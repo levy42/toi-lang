@@ -1,0 +1,19 @@
+fn assert_true(cond, msg = nil)
+  if not cond
+    error("assert_true failed")
+
+caught_int = false
+try
+  int("nope")
+except e
+  caught_int = true
+assert_true(caught_int)
+
+caught_float = false
+try
+  float("bad")
+except e
+  caught_float = true
+assert_true(caught_float)
+
+print "try native exceptions ok"

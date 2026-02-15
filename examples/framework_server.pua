@@ -5,7 +5,7 @@ local io = import io
 local template = import template
 
 fn read_all(path)
-  local f, err = io.open(path, "r")
+  f, err = io.open(path, "r")
   if f == nil
     error("cannot read template file: " + path)
 
@@ -82,13 +82,21 @@ fn render_home(req)
   html = tmpl_page(ctx)
   return http.response(200, {["Content-Type"] = "text/html"}, html)
 
-fn handler(req)
-  if req.path == "/"
-    return render_home(req)
-  elif req.path == "/json"
-    return {msg = "Hello JSON", time = os.clock()}
-  else
-    return http.response(404, {}, "Not Found")
+app = server(port=8081, host="0.0.0.0")
+get = app.get
 
-local s = server.new(8081, handler)
-s.run()
+@get("/")
+fn home()
+  return render_home(nil)
+
+@get("/json")
+fn api_json()
+  return {msg = "Hello JSON", time = os.clock()}
+
+@get("/users/<user_id>")
+fn user_by_id(user_id: int)
+  return {user_id = user_id, kind = "typed-path-param"}
+
+print "framework_server routing: GET /, /json, /users/<user_id:int>"
+app.run()
+

@@ -6,6 +6,7 @@
 #include "chunk.h"
 
 struct VM;
+typedef void (*UserdataFinalizer)(void*);
 
 typedef enum {
     OBJ_STRING,
@@ -87,6 +88,8 @@ typedef struct {
     int isVariadic;
     uint8_t* paramTypes;
     int paramTypesCount;
+    ObjString** paramNames;
+    int paramNamesCount;
     uint8_t isSelf;
 } ObjFunction;
 
@@ -109,6 +112,7 @@ typedef struct ObjTable ObjTable; // Forward decl
 typedef struct {
     struct Obj obj;
     void* data;
+    UserdataFinalizer finalize;
     ObjTable* metatable;
 } ObjUserdata;
 
@@ -164,6 +168,7 @@ ObjUpvalue* newUpvalue(Value* slot);
 ObjClosure* newClosure(ObjFunction* function);
 ObjThread* newThread();
 ObjUserdata* newUserdata(void* data);
+ObjUserdata* newUserdataWithFinalizer(void* data, UserdataFinalizer finalize);
 ObjBoundMethod* newBoundMethod(Value receiver, struct Obj* method);
 void printObject(Value value);
 

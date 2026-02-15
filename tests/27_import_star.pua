@@ -1,0 +1,15 @@
+fn assert_true(cond, msg = nil)
+  if not cond
+    error("assert_true failed")
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error("assert_eq failed")
+
+from tests.star_exports_mod import *
+
+assert_eq(a, 123)
+assert_eq(b(4), 5)
+assert_eq(_hidden, "nope")
+
+print "import star ok"

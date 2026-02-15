@@ -1,1 +1,169 @@
-{"scopeName":"source.pua","patterns":[{"match":"--.*$","name":"comment.line.double-dash.pua"},{"match":"\\bfor\\s+([a-zA-Z_][a-zA-Z0-9_]*)(#)","captures":{"1":{"name":"variable.other.loop.index.pua"},"2":{"name":"keyword.operator.length.pua"}}},{"begin":"\\bf\"","end":"\"","patterns":[{"begin":"\\{","end":"\\}","name":"meta.interpolation.pua","patterns":[{"include":"$self"}]},{"match":"\\\\[nrt\\\\\"']","name":"constant.character.escape.pua"}],"name":"string.quoted.double.fstring.pua"},{"begin":"\\[\\[","end":"\\]\\]","name":"string.quoted.other.multiline.pua"},{"begin":"\"","end":"\"","patterns":[{"match":"\\\\[nrt\\\\\"']","name":"constant.character.escape.pua"}],"name":"string.quoted.double.pua"},{"match":"\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(","captures":{"1":{"name":"keyword.declaration.function.pua"},"2":{"name":"entity.name.function.pua"}}},{"match":"\\b(local)\\s+(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(","captures":{"1":{"name":"keyword.declaration.pua"},"2":{"name":"keyword.declaration.function.pua"},"3":{"name":"entity.name.function.pua"}}},{"match":"\\b(fn)\\s*\\(","captures":{"1":{"name":"keyword.declaration.function.pua"}}},{"match":"\\b(if|else|elif|while|for|in|return|break|continue)\\b","name":"keyword.control.pua"},{"match":"\\b(local|fn|import)\\b","name":"keyword.declaration.pua"},{"match":"\\b(print|gc)\\b","name":"keyword.other.pua"},{"match":"\\b(and|or|not)\\b","name":"keyword.operator.logical.pua"},{"match":"\\b(true|false)\\b","name":"constant.language.boolean.pua"},{"match":"\\bnil\\b","name":"constant.language.nil.pua"},{"match":"\\b(next|inext|range|range_iter|slice|setmetatable|getmetatable|error|type|tonumber|str|string|min|max|sum)\\b","name":"support.function.builtin.pua"},{"match":"\\*[a-zA-Z_][a-zA-Z0-9_]*","name":"variable.parameter.variadic.pua"},{"match":"\\.\\.\\.","name":"variable.language.varargs.pua"},{"match":"\\b\\d(?:[\\d_]*\\d)?\\.\\d(?:[\\d_]*\\d)?\\b","name":"constant.numeric.float.pua"},{"match":"\\b\\d(?:[\\d_]*\\d)?\\b","name":"constant.numeric.integer.pua"},{"match":"==|!=|<=|>=|<|>","name":"keyword.operator.comparison.pua"},{"match":"\\*\\*|\\/\\/|[+\\-*/%]","name":"keyword.operator.arithmetic.pua"},{"match":"=","name":"keyword.operator.assignment.pua"},{"match":"#","name":"keyword.operator.length.pua"},{"match":"\\?|:","name":"keyword.operator.ternary.pua"},{"match":"\\.\\.","name":"keyword.operator.range.pua"},{"match":"\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(","captures":{"1":{"name":"entity.name.function.call.pua"}}},{"match":"\\.([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(","captures":{"1":{"name":"entity.name.function.call.pua"}}},{"match":"\\.([a-zA-Z_][a-zA-Z0-9_]*)","captures":{"1":{"name":"variable.other.property.pua"}}},{"match":"\\b[a-zA-Z_][a-zA-Z0-9_]*\\b","name":"variable.other.pua"}],"name":"Pua","fileTypes":["pua"]}
+{
+  "scopeName": "source.pua",
+  "patterns": [
+    {
+      "match": "--.*$",
+      "name": "comment.line.double-dash.pua"
+    },
+    {
+      "begin": "\\bf\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "match": "\\\\[nrt\\\\\"']",
+          "name": "constant.character.escape.pua"
+        }
+      ],
+      "name": "string.quoted.double.fstring.pua"
+    },
+    {
+      "begin": "\\[\\[",
+      "end": "\\]\\]",
+      "name": "string.quoted.other.multiline.pua"
+    },
+    {
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "match": "\\\\[nrt\\\\\"']",
+          "name": "constant.character.escape.pua"
+        }
+      ],
+      "name": "string.quoted.double.pua"
+    },
+    {
+      "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.function.pua"
+        },
+        "2": {
+          "name": "entity.name.function.pua"
+        }
+      }
+    },
+    {
+      "match": "\\b(local)\\s+(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.pua"
+        },
+        "2": {
+          "name": "keyword.declaration.function.pua"
+        },
+        "3": {
+          "name": "entity.name.function.pua"
+        }
+      }
+    },
+    {
+      "match": "\\b(fn)\\s*\\(",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.function.pua"
+        }
+      }
+    },
+    {
+      "match": "\\b(if|else|elif|while|for|in|return|break|continue)\\b",
+      "name": "keyword.control.pua"
+    },
+    {
+      "match": "\\b(local|fn|import)\\b",
+      "name": "keyword.declaration.pua"
+    },
+    {
+      "match": "\\b(print|gc)\\b",
+      "name": "keyword.other.pua"
+    },
+    {
+      "match": "\\b(and|or|not)\\b",
+      "name": "keyword.operator.logical.pua"
+    },
+    {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.pua"
+    },
+    {
+      "match": "\\bnil\\b",
+      "name": "constant.language.nil.pua"
+    },
+    {
+      "match": "\\b(next|inext|range|range_iter|slice|setmetatable|getmetatable|error|type|tonumber|str|int|bool|float|min|max|sum)\\b",
+      "name": "support.function.builtin.pua"
+    },
+    {
+      "match": "\\*[a-zA-Z_][a-zA-Z0-9_]*",
+      "name": "variable.parameter.variadic.pua"
+    },
+    {
+      "match": "\\.\\.\\.",
+      "name": "variable.language.varargs.pua"
+    },
+    {
+      "match": "\\b\\d(?:[\\d_]*\\d)?\\.\\d(?:[\\d_]*\\d)?\\b",
+      "name": "constant.numeric.float.pua"
+    },
+    {
+      "match": "\\b\\d(?:[\\d_]*\\d)?\\b",
+      "name": "constant.numeric.integer.pua"
+    },
+    {
+      "match": "==|!=|<=|>=|<|>",
+      "name": "keyword.operator.comparison.pua"
+    },
+    {
+      "match": "\\*\\*|\\/\\/|[+\\-*/%]",
+      "name": "keyword.operator.arithmetic.pua"
+    },
+    {
+      "match": "=",
+      "name": "keyword.operator.assignment.pua"
+    },
+    {
+      "match": "#",
+      "name": "keyword.operator.length.pua"
+    },
+    {
+      "match": "\\?|:",
+      "name": "keyword.operator.ternary.pua"
+    },
+    {
+      "match": "\\.\\.",
+      "name": "keyword.operator.range.pua"
+    },
+    {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.call.pua"
+        }
+      }
+    },
+    {
+      "match": "\\.([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.call.pua"
+        }
+      }
+    },
+    {
+      "match": "\\.([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "variable.other.property.pua"
+        }
+      }
+    },
+    {
+      "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+      "name": "variable.other.pua"
+    }
+  ],
+  "name": "Pua",
+  "fileTypes": [
+    "pua"
+  ]
+}

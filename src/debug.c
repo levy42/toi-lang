@@ -85,6 +85,8 @@ int disassembleInstruction(Chunk* chunk, int offset) {
             return simpleInstruction("OP_END_FINALLY", offset);
         case OP_IMPORT:
             return constantInstruction("OP_IMPORT", chunk, offset);
+        case OP_IMPORT_STAR:
+            return simpleInstruction("OP_IMPORT_STAR", offset);
         case OP_THROW:
             return simpleInstruction("OP_THROW", offset);
         case OP_FOR_PREP: {
@@ -177,6 +179,8 @@ int disassembleInstruction(Chunk* chunk, int offset) {
             return jumpInstruction("OP_LOOP", -1, chunk, offset);
         case OP_CALL:
             return byteInstruction("OP_CALL", chunk, offset);
+        case OP_CALL_EXPAND:
+            return byteInstruction("OP_CALL_EXPAND", chunk, offset);
         case OP_CLOSURE: {
             offset++;
             uint8_t constant = chunk->code[offset++];

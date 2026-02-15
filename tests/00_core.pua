@@ -9,15 +9,26 @@ fn assert_eq(actual, expected, msg = nil)
 -- literals and variables
 n = 42
 s = "hello"
+s2 = 'hello'
+s3 = 'he said "hi"'
+s4 = "it's fine"
+s5 = 'it\'s fine'
 b = true
 z = nil
 arr2 = 1, 2, 3
+a, b = 1, 2
 assert_eq(n, 42)
 assert_eq(s, "hello")
+assert_eq(s2, "hello")
+assert_eq(s3, 'he said "hi"')
+assert_eq(s4, "it's fine")
+assert_eq(s5, "it's fine")
 assert_true(b)
 assert_true(z == nil)
 assert_eq(arr2[1], 1)
 assert_eq(arr2[3], 3)
+assert_eq(a, 1)
+assert_eq(b, 2)
 assert_eq(min(3, 1, 2), 1)
 assert_eq(max(3, 1, 2), 3)
 assert_eq(sum(1, 2, 3), 6)
@@ -61,3 +72,30 @@ assert_eq(#arr, 3)
 assert_eq(arr[-1], 30)
 assert_eq(arr[-2], 20)
 assert_eq(#"abc", 3)
+assert_eq(",".join({"a", "b", "c"}), "a,b,c")
+
+-- table separators: comma and newline
+nl = {
+  a = 1
+  b = 2
+  add = fn(x, y) return x + y
+  greet = fn(name)
+    return "hi " + name
+  "z"
+  [10] = "ten"
+}
+assert_eq(nl.a, 1)
+assert_eq(nl.b, 2)
+assert_eq(nl.add(2, 3), 5)
+assert_eq(nl.greet("bob"), "hi bob")
+assert_eq(nl[1], "z")
+assert_eq(nl[10], "ten")
+
+mix = {
+  x = 1,
+  y = 2
+  z = 3,
+}
+assert_eq(mix.x, 1)
+assert_eq(mix.y, 2)
+assert_eq(mix.z, 3)

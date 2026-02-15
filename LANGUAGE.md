@@ -1,0 +1,315 @@
+# Pua Language Manifest
+
+This document describes the syntax accepted by the current compiler/runtime in `src/lexer.c` and `src/compiler.c`.
+
+## 1. Lexical Rules
+
+### 1.1 Whitespace and blocks
+
+- Blocks are indentation-based.
+- Indent can use spaces or tabs (`tab == 4 spaces` in the lexer).
+- Indentation must be consistent with prior indent levels.
+- Newlines are significant for indentation, but otherwise skipped.
+- Inside `{ ... }`, indentation tokens are not generated.
+
+### 1.2 Comments
+
+- Line comments start with `--` and continue to end of line.
+
+### 1.3 Identifiers
+
+- Identifier pattern: `[A-Za-z_][A-Za-z0-9_]*`.
+
+### 1.4 Keywords
+
+`and`, `or`, `not`, `nil`, `true`, `false`, `print`, `local`, `global`, `fn`, `return`, `if`, `elif`, `else`, `while`, `for`, `in`, `break`, `continue`, `with`, `as`, `try`, `except`, `finally`, `throw`, `has`, `import`, `gc`, `del`.
+
+### 1.5 Numbers
+
+- Decimal numbers only.
+- Supports `_` separators between digits.
+- Optional fractional part.
+
+Examples:
+
+```pua
+1
+10_000
+3.14
+1_000.25
+```
+
+### 1.6 Strings
+
+- Regular string: `"..."` with escapes.
+- Multiline/raw string: `[[ ... ]]`.
+- F-string: `f"...{expr}..."`.
+
+Regular/f-string literal-part escapes:
+
+- `\n`, `\t`, `\r`, `\"`, `\\`
+- f-strings also support `\{` and `\}` in literal text.
+
+## 2. Program and Blocks
+
+Conceptual grammar:
+
+```ebnf
+program      := declaration* EOF
+block        := INDENT declaration* DEDENT | single_statement
+single_statement := statement   ; same line after header
+```
+
+Most headers (`if`, `elif`, `else`, `while`, `for`, `fn`, `try`, `except`, `finally`, `with`) accept either:
+
+- an indented block on following lines, or
+- one single statement on the same line.
+
+## 3. Declarations and Statements
+
+### 3.1 Declarations
+
+```ebnf
+declaration := function_decl
+             | import_decl
+             | global_decl
+             | local_decl
+             | statement
+
+function_decl := "fn" IDENT function_body
+local_decl    := "local" ("fn" IDENT function_body | var_decl)
+global_decl   := "global" ("fn" IDENT function_body | global_var_decl)
+import_decl   := "import" module_path
+```
+
+### 3.2 Variable declarations
+
+```ebnf
+var_decl        := name_list ("=" expr_list)?
+global_var_decl := name_list ("=" expr_list)?
+name_list       := IDENT ("," IDENT)*
+expr_list       := expression ("," expression)*
+```
+
+Notes:
+
+- If declaration has no initializer, values default to `nil`.
+- For single-variable declarations/assignments, `a = x, y, z` is parsed as an array literal (`{x, y, z}`), not multi-assignment.
+
+### 3.3 Statements
+
+```ebnf
+statement := print_stmt
+           | if_stmt
+           | while_stmt
+           | for_stmt
+           | return_stmt
+           | break_stmt
+           | continue_stmt
+           | try_stmt
+           | with_stmt
+           | throw_stmt
+           | gc_stmt
+           | del_stmt
+           | expr_stmt
+
+print_stmt    := "print" expression
+if_stmt       := "if" expression block ("elif" expression block)* ("else" block)?
+while_stmt    := "while" expression block
+return_stmt   := "return" (expression ("," expression)*)?
+break_stmt    := "break"
+continue_stmt := "continue"
+throw_stmt    := "throw" expression
+gc_stmt       := "gc"
+expr_stmt     := expression
+```
+
+### 3.4 `for` statement
+
+Only `for ... in ...` form exists:
+
+```ebnf
+for_stmt := "for" for_vars "in" iterator_exprs block
+for_vars := IDENT ["#"] ("," IDENT)?
+iterator_exprs := expression ("," expression ("," expression)?)?
+```
+
+Accepted patterns:
+
+```pua
+for v in table_expr
+for i#, v in table_expr
+for k, v in table_expr
+for v in 1..10
+for k, v in iter, state, control
+```
+
+Notes:
+
+- `i#` must be attached directly to identifier (no whitespace before `#`).
+- `i#` is only valid with implicit table iteration (single non-call iterator expression).
+- `for v in a..b` is a numeric inclusive loop (`v = a, a+1, ..., b`).
+
+### 3.5 `try` / `with` / `del`
+
+```ebnf
+try_stmt  := "try" block (("except" IDENT? block) ("finally" block)? | "finally" block)
+with_stmt := "with" expression ("as" IDENT)? block
+
+del_stmt  := "del" del_target ("," del_target)*
+del_target := IDENT access_chain?
+            | "(" expression ")" access_chain
+access_chain := ("." IDENT | "[" expression "]")+
+```
+
+Examples:
+
+```pua
+try
+  risky()
+except e
+  print e
+finally
+  cleanup()
+
+with io.open("x.txt", "w") as f
+  f.write("ok")
+
+del x, t.a, t[k], (make()).field
+```
+
+## 4. Functions
+
+```ebnf
+function_body := "(" param_list? ")" block
+param_list    := param ("," param)*
+param         := ["*"] IDENT [":" type_name] ["=" const_default]
+type_name     := IDENT
+const_default := NUMBER | STRING | nil | true | false
+```
+
+Notes:
+
+- `*name` is variadic and must be last parameter.
+- Typed params are accepted (`a: int`, `s: string`, etc.).
+- Defaults must be literal constants only.
+- Parameter with default cannot be followed by non-default param.
+- Anonymous functions: `fn(...) ...` are expressions.
+
+## 5. Expressions
+
+### 5.1 Primary expressions
+
+```ebnf
+primary := NUMBER
+         | STRING
+         | FSTRING
+         | "nil" | "true" | "false"
+         | IDENT
+         | import_expr
+         | anonymous_fn
+         | "(" expression ")"
+         | table_literal
+```
+
+### 5.2 Table literals
+
+```ebnf
+table_literal := "{" (table_entries | table_comprehension)? "}"
+table_entries := table_entry ("," table_entry)*
+table_entry   := "[" expression "]" "=" expression
+               | IDENT "=" expression
+               | expression
+```
+
+Comprehension form:
+
+```ebnf
+table_comprehension := comp_expr "for" for_vars "in" iterator_exprs ["if" expression]
+comp_expr := expression                ; array-style
+          | expression "=" expression ; map-style key/value
+```
+
+### 5.3 Calls, indexing, member access
+
+```ebnf
+postfix := primary (call | index | member | metatable_ctor)*
+call    := "(" arg_list? ")"
+arg_list := argument ("," argument)*
+argument := expression | named_arg
+named_arg := IDENT "=" expression
+index   := "[" expression "]"
+slice   := "[" [expression] ".." [expression] [":" [expression]] "]"
+member  := "." IDENT
+metatable_ctor := table_literal  ; expr{...}
+```
+
+Notes:
+
+- In calls, positional args cannot appear after named args.
+- `expr{...}` is a special infix form that sets the metatable of the new table to `expr`.
+
+### 5.4 Operators and precedence
+
+Highest to lowest:
+
+1. Postfix: call `()`, member `.`, index/slice `[]`, metatable constructor `{...}`
+2. Unary: `not`, unary `-`, length `#`
+3. Multiplicative: `*`, `/`, `//`, `%`, `**`
+4. Additive and range: `+`, `-`, `..`
+5. Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`, `has`
+6. Logical `and`
+7. Logical `or`
+8. Ternary `?:`
+9. Assignment `=` (only on valid l-values)
+
+Notes:
+
+- `a ? b : c` is supported and right-associative.
+- `..` is both range operator and part of slice syntax.
+
+### 5.5 Assignment targets
+
+Valid assignment targets:
+
+- `name = expr`
+- `obj.field = expr`
+- `obj[index] = expr`
+
+Slice assignment is not allowed (`obj[a..b] = ...` errors).
+
+## 6. Import Syntax
+
+Two forms:
+
+1. Expression form (usable anywhere expressions are allowed):
+
+```pua
+m = import lib.types
+```
+
+2. Declaration form (binds module to last path component):
+
+```pua
+import lib.types   -- binds local/global variable: types
+```
+
+Module path grammar:
+
+```ebnf
+module_path := IDENT ("." IDENT)*
+```
+
+## 7. Runtime-Visible Syntax Semantics
+
+- Indexing is 1-based.
+- Negative numeric indices are supported for tables/strings (`-1` = last element/char).
+- Slice bounds are inclusive.
+- Omitted slice start/end default based on step direction.
+- Truthiness: `nil`, `false`, `0`, empty string, empty table are falsey; others truthy.
+
+## 8. Reserved / Tokenized But Limited
+
+- `;` is tokenized and recognized in a few parser checks, but statement sequencing is newline/indent driven.
+- `!` alone is not a unary operator; only `!=` is valid (`not` is unary logical negation).
+

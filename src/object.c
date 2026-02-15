@@ -70,6 +70,8 @@ ObjFunction* newFunction() {
     function->isVariadic = 0;
     function->paramTypes = NULL;
     function->paramTypesCount = 0;
+    function->paramNames = NULL;
+    function->paramNamesCount = 0;
     function->isSelf = 0;
     initChunk(&function->chunk);
     return function;
@@ -119,15 +121,15 @@ ObjThread* newThread() {
 }
 
 ObjUserdata* newUserdata(void* data) {
+    return newUserdataWithFinalizer(data, NULL);
+}
 
+ObjUserdata* newUserdataWithFinalizer(void* data, UserdataFinalizer finalize) {
     ObjUserdata* userdata = (ObjUserdata*)allocateObject(sizeof(ObjUserdata), OBJ_USERDATA);
-
     userdata->data = data;
-
+    userdata->finalize = finalize;
     userdata->metatable = NULL;
-
     return userdata;
-
 }
 
 
@@ -300,6 +302,9 @@ void markObject(struct Obj* object) {
         for (int i = 0; i < function->defaultsCount; i++) {
             markValue(function->defaults[i]);
         }
+        for (int i = 0; i < function->paramNamesCount; i++) {
+            markObject((struct Obj*)function->paramNames[i]);
+        }
     } else if (object->type == OBJ_NATIVE) {
         ObjNative* native = (ObjNative*)object;
         if (native->name != NULL) {
@@ -390,6 +395,9 @@ void freeObject(struct Obj* object) {
                 bytesAllocated -= sizeof(uint8_t) * function->paramTypesCount;
                 free(function->paramTypes);
             }
+            if (function->paramNames != NULL) {
+                free(function->paramNames);
+            }
             bytesAllocated -= sizeof(ObjFunction);
             free(function);
             break;
@@ -421,6 +429,11 @@ void freeObject(struct Obj* object) {
             break;
         }
         case OBJ_USERDATA: {
+            ObjUserdata* userdata = (ObjUserdata*)object;
+            if (userdata->data != NULL && userdata->finalize != NULL) {
+                userdata->finalize(userdata->data);
+                userdata->data = NULL;
+            }
             bytesAllocated -= sizeof(ObjUserdata);
             free(object);
             break;

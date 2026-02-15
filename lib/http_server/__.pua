@@ -1,0 +1,72 @@
+socket = import socket
+table = import table
+
+Route = import lib.http_server.route
+Response = import lib.http_server.response
+Transport = import lib.http_server.transport
+
+HttpServer = {}
+HttpServer.__index = HttpServer
+
+fn _new_http_server_app(cls, opts = nil)
+  if type(opts) != "table"
+    opts = {}
+
+  app = {}
+  app.routes = {}
+  app.host = opts.host or "0.0.0.0"
+  app.port = opts.port or 8080
+  app.socket = socket.tcp()
+  app.request_count = 0
+  app.gc_every_requests = opts.gc_every_requests or 1000
+  app.log_every_requests = opts.log_every_requests or 1000
+  app.trim_after_gc = opts.trim_after_gc
+  if app.trim_after_gc == nil
+    app.trim_after_gc = true
+  app.handler = opts.handler
+  app.normalize_response = opts.normalize_response or Response.normalize
+
+  setmetatable(app, cls)
+  if app.handler == nil
+    app.handler = fn(req)
+      return Route.dispatch(app, req)
+
+  return app
+
+HttpServer.__call = _new_http_server_app
+setmetatable(HttpServer, HttpServer)
+
+-- Backward-compatible constructor.
+HttpServer.new = fn(port, handler = nil)
+  return HttpServer({port = port, handler = handler})
+
+-- Backward-compatible alias.
+HttpServer.app = fn(port)
+  return HttpServer({port = port})
+
+HttpServer.route = fn(self, method, path)
+  m = method
+  p = path
+  return fn(handler)
+    table.insert(self.routes, Route.compile(m, p, handler))
+    return handler
+
+HttpServer.get = fn(self, path)
+  return self.route("GET", path)
+
+HttpServer.post = fn(self, path)
+  return self.route("POST", path)
+
+HttpServer.put = fn(self, path)
+  return self.route("PUT", path)
+
+HttpServer.patch = fn(self, path)
+  return self.route("PATCH", path)
+
+HttpServer.delete = fn(self, path)
+  return self.route("DELETE", path)
+
+HttpServer.run = fn(self)
+  return Transport.run(self)
+
+return HttpServer

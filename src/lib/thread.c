@@ -251,7 +251,7 @@ static int thread_sleep(VM* vm, int argCount, Value* args) {
     double seconds = GET_NUMBER(0);
 
     releaseGIL();
-    usleep((useconds_t)(seconds * 1000000));
+    usleep((unsigned int)(seconds * 1000000));
     acquireGIL();
 
     RETURN_NIL;

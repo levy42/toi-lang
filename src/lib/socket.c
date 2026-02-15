@@ -22,7 +22,18 @@ typedef struct {
     int timeout_ms; // -1 = blocking, 0 = non-blocking, >0 = timeout in ms
 } SocketData;
 
+static void socket_userdata_finalizer(void* ptr) {
+    SocketData* sock = (SocketData*)ptr;
+    if (sock == NULL) return;
+    if (sock->fd >= 0) {
+        close(sock->fd);
+        sock->fd = -1;
+    }
+    free(sock);
+}
+
 static SocketData* getSocketData(ObjUserdata* udata) {
+    if (udata == NULL) return NULL;
     return (SocketData*)udata->data;
 }
 
@@ -51,10 +62,16 @@ static int socket_tcp(VM* vm, int argCount, Value* args) {
     }
 
     SocketData* data = (SocketData*)malloc(sizeof(SocketData));
+    if (data == NULL) {
+        close(fd);
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copyString("out of memory", 13)));
+        return 2;
+    }
     data->fd = fd;
     data->timeout_ms = -1; // blocking by default
 
-    ObjUserdata* udata = newUserdata(data);
+    ObjUserdata* udata = newUserdataWithFinalizer(data, socket_userdata_finalizer);
     setSocketMetatable(vm, udata);
     RETURN_OBJ(udata);
 }
@@ -71,10 +88,16 @@ static int socket_udp(VM* vm, int argCount, Value* args) {
     }
 
     SocketData* data = (SocketData*)malloc(sizeof(SocketData));
+    if (data == NULL) {
+        close(fd);
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copyString("out of memory", 13)));
+        return 2;
+    }
     data->fd = fd;
     data->timeout_ms = -1;
 
-    ObjUserdata* udata = newUserdata(data);
+    ObjUserdata* udata = newUserdataWithFinalizer(data, socket_userdata_finalizer);
     setSocketMetatable(vm, udata);
     RETURN_OBJ(udata);
 }
@@ -87,7 +110,7 @@ static int sock_connect(VM* vm, int argCount, Value* args) {
     ASSERT_NUMBER(2);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         push(vm, NIL_VAL);
         push(vm, OBJ_VAL(copyString("socket closed", 13)));
         return 2;
@@ -130,7 +153,7 @@ static int sock_bind(VM* vm, int argCount, Value* args) {
     ASSERT_NUMBER(2);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         push(vm, NIL_VAL);
         push(vm, OBJ_VAL(copyString("socket closed", 13)));
         return 2;
@@ -173,7 +196,7 @@ static int sock_listen(VM* vm, int argCount, Value* args) {
     ASSERT_USERDATA(0);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         push(vm, NIL_VAL);
         push(vm, OBJ_VAL(copyString("socket closed", 13)));
         return 2;
@@ -199,7 +222,7 @@ static int sock_accept(VM* vm, int argCount, Value* args) {
     ASSERT_USERDATA(0);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         push(vm, NIL_VAL);
         push(vm, OBJ_VAL(copyString("socket closed", 13)));
         return 2;
@@ -221,10 +244,16 @@ static int sock_accept(VM* vm, int argCount, Value* args) {
     }
 
     SocketData* clientData = (SocketData*)malloc(sizeof(SocketData));
+    if (clientData == NULL) {
+        close(client_fd);
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copyString("out of memory", 13)));
+        return 2;
+    }
     clientData->fd = client_fd;
     clientData->timeout_ms = -1;
 
-    ObjUserdata* udata = newUserdata(clientData);
+    ObjUserdata* udata = newUserdataWithFinalizer(clientData, socket_userdata_finalizer);
     setSocketMetatable(vm, udata);
 
     // Return socket and client IP
@@ -242,7 +271,7 @@ static int sock_send(VM* vm, int argCount, Value* args) {
     ASSERT_STRING(1);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         push(vm, NIL_VAL);
         push(vm, OBJ_VAL(copyString("socket closed", 13)));
         return 2;
@@ -266,7 +295,7 @@ static int sock_recv(VM* vm, int argCount, Value* args) {
     ASSERT_USERDATA(0);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         push(vm, NIL_VAL);
         push(vm, OBJ_VAL(copyString("socket closed", 13)));
         return 2;
@@ -312,7 +341,7 @@ static int sock_settimeout(VM* vm, int argCount, Value* args) {
     ASSERT_USERDATA(0);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         RETURN_NIL;
     }
 
@@ -357,10 +386,15 @@ static int sock_close(VM* vm, int argCount, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_USERDATA(0);
 
-    SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd >= 0) {
+    ObjUserdata* udata = GET_USERDATA(0);
+    SocketData* sock = getSocketData(udata);
+    if (sock != NULL && sock->fd >= 0) {
         close(sock->fd);
         sock->fd = -1;
+    }
+    if (sock != NULL) {
+        free(sock);
+        udata->data = NULL;
     }
 
     RETURN_TRUE;
@@ -372,7 +406,7 @@ static int sock_getpeername(VM* vm, int argCount, Value* args) {
     ASSERT_USERDATA(0);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         RETURN_NIL;
     }
 
@@ -398,7 +432,7 @@ static int sock_getsockname(VM* vm, int argCount, Value* args) {
     ASSERT_USERDATA(0);
 
     SocketData* sock = getSocketData(GET_USERDATA(0));
-    if (sock->fd < 0) {
+    if (sock == NULL || sock->fd < 0) {
         RETURN_NIL;
     }
 
@@ -426,6 +460,7 @@ static int add_sockets_from_table(ObjTable* table, fd_set* fds, int* max_fd,
         if (IS_USERDATA(val)) {
             ObjUserdata* udata = AS_USERDATA(val);
             SocketData* sock = (SocketData*)udata->data;
+            if (sock == NULL) continue;
             if (sock->fd >= 0 && *count < FD_SETSIZE) {
                 FD_SET(sock->fd, fds);
                 socket_array[(*count)++] = udata;
@@ -440,6 +475,7 @@ static int add_sockets_from_table(ObjTable* table, fd_set* fds, int* max_fd,
         if (entry->key != NULL && IS_USERDATA(entry->value)) {
             ObjUserdata* udata = AS_USERDATA(entry->value);
             SocketData* sock = (SocketData*)udata->data;
+            if (sock == NULL) continue;
             if (sock->fd >= 0 && *count < FD_SETSIZE) {
                 FD_SET(sock->fd, fds);
                 socket_array[(*count)++] = udata;
@@ -503,6 +539,7 @@ static int socket_select(VM* vm, int argCount, Value* args) {
     int readyReadCount = 0;
     for (int i = 0; i < read_count; i++) {
         SocketData* sock = (SocketData*)read_sockets[i]->data;
+        if (sock == NULL) continue;
         if (FD_ISSET(sock->fd, &read_fds)) {
             readyReadCount++;
             tableSetArray(&readyRead->table, readyReadCount, OBJ_VAL(read_sockets[i]));
@@ -515,6 +552,7 @@ static int socket_select(VM* vm, int argCount, Value* args) {
     int readyWriteCount = 0;
     for (int i = 0; i < write_count; i++) {
         SocketData* sock = (SocketData*)write_sockets[i]->data;
+        if (sock == NULL) continue;
         if (FD_ISSET(sock->fd, &write_fds)) {
             readyWriteCount++;
             tableSetArray(&readyWrite->table, readyWriteCount, OBJ_VAL(write_sockets[i]));

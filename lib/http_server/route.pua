@@ -1,0 +1,124 @@
+string = import string
+table = import table
+inspect = import inspect
+http = import http
+
+Route = {}
+
+fn split_path_segments(path)
+  if path == nil or path == ""
+    return {}
+
+  parts = string.split(path, "/")
+  out = {}
+  i = 1
+  while i <= #parts
+    seg = parts[i]
+    if seg != nil and seg != ""
+      table.insert(out, seg)
+    i = i + 1
+  return out
+
+fn parse_param_segment(seg)
+  if seg == nil
+    return nil
+  n = string.len(seg)
+  if n >= 3 and string.sub(seg, 1, 1) == "<" and string.sub(seg, n, n) == ">"
+    name = string.sub(seg, 2, -2)
+    if name != ""
+      return name
+  return nil
+
+fn coerce_param(raw, type_name)
+  if {"any", "str", "string", nil} has type_name
+    return raw
+
+  if type_name == "int"
+    return int(raw)
+
+  if type_name == "float"
+    return float(raw)
+
+  if type_name == "bool"
+    s = string.lower(str(raw))
+    if s == "true" or s == "1"
+      return true
+    if s == "false" or s == "0"
+      return false
+    error("expected bool, got '" + str(raw) + "'")
+
+  return raw
+
+fn build_handler_args(route, path_params)
+  sig = route.signature
+  args = {}
+  i = 1
+  while i <= sig.arity
+    p = sig.params[i]
+    val = path_params[p.name]
+    if val != nil
+      table.insert(args, coerce_param(val, p.type))
+    elif not p.has_default
+      error("missing route parameter '" + p.name + "'")
+    i = i + 1
+  return args
+
+Route.compile = fn(method, path, handler)
+  sig = inspect.signature(handler)
+  return {
+    method = string.upper(method),
+    path = path,
+    segments = split_path_segments(path),
+    signature = sig,
+    handler = handler
+  }
+
+Route.match = fn(route, req_path)
+  req_segments = split_path_segments(req_path)
+  if #route.segments != #req_segments
+    return false, nil
+
+  params = {}
+  i = 1
+  while i <= #route.segments
+    rseg = route.segments[i]
+    pseg = req_segments[i]
+    pname = parse_param_segment(rseg)
+    if pname
+      params[pname] = pseg
+    elif rseg != pseg
+      return false, nil
+    i = i + 1
+
+  return true, params
+
+Route.dispatch = fn(app, req)
+  method = string.upper(req.method or "GET")
+  path = req.path or "/"
+
+  saw_path = false
+  i = 1
+  while i <= #app.routes
+    route = app.routes[i]
+    local ok, params = Route.match(route, path)
+    if ok
+      saw_path = true
+      if route.method == method
+        args = nil
+        try
+          args = build_handler_args(route, params)
+        except e
+          return http.response(400, nil, "Bad Request: " + str(e))
+
+        try
+          res = route.handler(*args)
+          return app.normalize_response(res)
+        except e
+          return http.response(500, nil, "Internal Server Error")
+    i = i + 1
+
+  if saw_path
+    return http.response(405, nil, "Method Not Allowed")
+  return http.response(404, nil, "Not Found")
+
+return Route

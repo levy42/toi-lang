@@ -1,0 +1,119 @@
+string = import string
+table = import table
+socket = import socket
+http = import http
+coroutine = import coroutine
+os = import os
+
+Transport = {}
+
+fn set_nonblocking(sock)
+  sock.settimeout(sock, 0)
+
+fn find_connection_index(connections, sock)
+  return table.find_index(connections, sock, fn(c) return c.sock)
+
+fn handle_connection(server, client)
+  local data, err = client.recv(client, 4096)
+
+  while data == nil
+    if err and (err == "timeout" or string.find(err, "timeout"))
+      client = coroutine.yield("read")
+      local d, e = client.recv(client, 4096)
+      data = d
+      err = e
+    else
+      break
+
+  try
+    if data and string.len(data) > 0
+      req = http.parse(data)
+      if req
+        res = server.handler(req)
+        client.send(client, server.normalize_response(res))
+      else
+        client.send(client, http.response(400, nil, "Bad Request"))
+  except e
+    client.send(client, http.response(500, nil, "Internal Server Error"))
+  finally
+    client.close(client)
+  return "done"
+
+Transport.run = fn(self)
+  self.socket.bind(self.socket, self.host, self.port)
+  self.socket.listen(self.socket, 128)
+  set_nonblocking(self.socket)
+
+  print("HTTP Server running on " + self.host + ":" + str(self.port))
+
+  connections = {}
+  last_gc_req = 0
+  last_log_req = 0
+
+  while true
+    read_list = {}
+    read_list[1] = self.socket
+    for conn in connections
+      if conn.mode == "read"
+        table.insert(read_list, conn.sock)
+
+    local ready_read, ready_write = socket.select(read_list, {}, 0.1)
+
+    if ready_read
+      for sock in ready_read
+        if sock == self.socket
+          local client, ip = self.socket.accept(self.socket)
+          if client
+            set_nonblocking(client)
+            co = coroutine.create(handle_connection)
+            conn = {sock = client, coro = co, mode = "read"}
+            table.insert(connections, conn)
+
+            local ok, mode = coroutine.resume(co, self, client)
+            status = coroutine.status(co)
+            if status == "dead"
+              conn.mode = "dead"
+              self.request_count = self.request_count + 1
+            else
+              conn.mode = mode or "read"
+        else
+          idx = find_connection_index(connections, sock)
+          if idx > 0
+            conn = connections[idx]
+            local ok, mode = coroutine.resume(conn.coro, conn.sock)
+            status = coroutine.status(conn.coro)
+            if status == "dead"
+              conn.mode = "dead"
+              self.request_count = self.request_count + 1
+            else
+              conn.mode = mode or "read"
+
+    active = {}
+    for conn in connections
+      if conn.mode != "dead"
+        table.insert(active, conn)
+      else
+        if conn.sock
+          conn.sock.close(conn.sock)
+        conn.sock = nil
+        conn.coro = nil
+    connections = active
+
+    if self.gc_every_requests and self.gc_every_requests > 0
+      if self.request_count > 0 and self.request_count % self.gc_every_requests == 0 and self.request_count != last_gc_req
+        gc
+        last_gc_req = self.request_count
+        if self.trim_after_gc and os.trim
+          os.trim()
+
+    if self.log_every_requests and self.log_every_requests > 0
+      if self.request_count > 0 and self.request_count % self.log_every_requests == 0 and self.request_count != last_log_req
+        rss = -1
+        if os.rss
+          r = os.rss()
+          if r != nil
+            rss = int(r)
+        print string.format("http_server stats: req=%d conn=%d mem=%d rss=%d", self.request_count, #connections, int(mem()), rss)
+        last_log_req = self.request_count
+
+return Transport

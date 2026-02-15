@@ -330,6 +330,27 @@ static int parseTemplate(Parser* p) {
     return 1;
 }
 
+static ObjTable* get_template_cache(VM* vm) {
+    ObjString* moduleName = copyString("template", 8);
+    Value moduleVal = NIL_VAL;
+    if (!tableGet(&vm->globals, moduleName, &moduleVal) || !IS_TABLE(moduleVal)) {
+        return NULL;
+    }
+
+    ObjTable* module = AS_TABLE(moduleVal);
+    ObjString* cacheKey = copyString("_cache", 6);
+    Value cacheVal = NIL_VAL;
+    if (tableGet(&module->table, cacheKey, &cacheVal) && IS_TABLE(cacheVal)) {
+        return AS_TABLE(cacheVal);
+    }
+
+    ObjTable* cache = newTable();
+    push(vm, OBJ_VAL(cache));
+    tableSet(&module->table, cacheKey, OBJ_VAL(cache));
+    pop(vm);
+    return cache;
+}
+
 // template.compile(str) -> function
 static int template_compile(VM* vm, int argCount, Value* args) {
     ASSERT_ARGC_EQ(1);
@@ -388,57 +409,70 @@ static int template_render(VM* vm, int argCount, Value* args) {
     ASSERT_TABLE(1);
 
     ObjString* tmplStr = GET_STRING(0);
+    Value tmplFn = NIL_VAL;
+    ObjTable* cache = get_template_cache(vm);
 
-    Parser parser;
-    parserInit(&parser, tmplStr->chars);
+    if (cache != NULL && tableGet(&cache->table, tmplStr, &tmplFn) && IS_CLOSURE(tmplFn)) {
+        // Cache hit: skip parse/compile.
+    } else {
+        Parser parser;
+        parserInit(&parser, tmplStr->chars);
 
-    if (!parseTemplate(&parser)) {
-        char errMsg[256];
-        snprintf(errMsg, sizeof(errMsg), "Template error: %s", parser.error ? parser.error : "unknown");
+        if (!parseTemplate(&parser)) {
+            char errMsg[256];
+            snprintf(errMsg, sizeof(errMsg), "Template error: %s", parser.error ? parser.error : "unknown");
+            parserFree(&parser);
+            vmRuntimeError(vm, errMsg);
+            return 0;
+        }
+
+        // Compile generated code (script that defines and returns __tmpl function)
+        ObjFunction* scriptFn = compile(parser.code.data);
         parserFree(&parser);
-        vmRuntimeError(vm, errMsg);
-        return 0;
-    }
 
-    // Compile generated code (script that defines and returns __tmpl function)
-    ObjFunction* scriptFn = compile(parser.code.data);
-    parserFree(&parser);
+        if (scriptFn == NULL) {
+            vmRuntimeError(vm, "Failed to compile template");
+            return 0;
+        }
 
-    if (scriptFn == NULL) {
-        vmRuntimeError(vm, "Failed to compile template");
-        return 0;
-    }
+        // Step 1: Run the script to get the template function
+        ObjClosure* scriptClosure = newClosure(scriptFn);
+        push(vm, OBJ_VAL(scriptClosure));
 
-    // Step 1: Run the script to get the template function
-    ObjClosure* scriptClosure = newClosure(scriptFn);
-    push(vm, OBJ_VAL(scriptClosure));
+        int frameCount = vm->currentThread->frameCount;
+        if (!call(vm, scriptClosure, 0)) {
+            return 0;
+        }
 
-    int frameCount = vm->currentThread->frameCount;
-    if (!call(vm, scriptClosure, 0)) {
-        return 0;
-    }
+        InterpretResult result = vmRun(vm, frameCount);
+        if (result != INTERPRET_OK) {
+            return 0;
+        }
 
-    InterpretResult result = vmRun(vm, frameCount);
-    if (result != INTERPRET_OK) {
-        return 0;
-    }
+        // Now the template function (closure) is on the stack
+        tmplFn = peek(vm, 0);
+        if (!IS_CLOSURE(tmplFn)) {
+            vmRuntimeError(vm, "Template compilation did not return a function");
+            return 0;
+        }
 
-    // Now the template function (closure) is on the stack
-    Value tmplFn = peek(vm, 0);
-    if (!IS_CLOSURE(tmplFn)) {
-        vmRuntimeError(vm, "Template compilation did not return a function");
-        return 0;
+        // Optional cache write for future renders.
+        if (cache != NULL) {
+            tableSet(&cache->table, tmplStr, tmplFn);
+        }
+        pop(vm); // Pop cached template function from compilation step.
     }
 
     // Step 2: Call the template function with the context
+    push(vm, tmplFn);   // callee
     push(vm, args[1]); // Push context table
 
-    frameCount = vm->currentThread->frameCount;
+    int frameCount = vm->currentThread->frameCount;
     if (!call(vm, AS_CLOSURE(tmplFn), 1)) {
         return 0;
     }
 
-    result = vmRun(vm, frameCount);
+    InterpretResult result = vmRun(vm, frameCount);
     if (result != INTERPRET_OK) {
         return 0;
     }

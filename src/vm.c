@@ -248,6 +248,7 @@ Value pop(VM* vm) {
 
 static void concatenate(VM* vm);
 static int isFalsey(Value v);
+static Value getMetamethodCached(VM* vm, Value val, ObjString* name);
 
 static int callValue(VM* vm, Value callee, int argCount, CallFrame** frame, uint8_t** ip) {
     if (IS_NATIVE(callee)) {
@@ -279,6 +280,65 @@ static int callValue(VM* vm, Value callee, int argCount, CallFrame** frame, uint
     }
 
     return 0;
+}
+
+static int invokeCallWithArgCount(VM* vm, int argCount, CallFrame** frame, uint8_t** ip) {
+    Value callee = peek(vm, argCount);
+    if (IS_BOUND_METHOD(callee)) {
+        ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
+        Value methodVal = OBJ_VAL(bound->method);
+
+        // Stack: [callee, arg1, ..., argN]
+        // We want: [method, receiver, arg1, ..., argN]
+        for (int i = 0; i < argCount; i++) {
+            vm->currentThread->stackTop[0 - i] = vm->currentThread->stackTop[-1 - i];
+        }
+        vm->currentThread->stackTop[-argCount] = bound->receiver;
+        vm->currentThread->stackTop[-argCount - 1] = methodVal;
+        vm->currentThread->stackTop++;
+        argCount++;
+        callee = methodVal;
+    }
+
+    if (IS_NATIVE(callee) || IS_CLOSURE(callee)) {
+        if (!callValue(vm, callee, argCount, frame, ip)) {
+            return 0;
+        }
+        return 1;
+    }
+
+    if (IS_TABLE(callee)) {
+        // __call metamethod: __call(table, ...)
+        Value mm = getMetamethodCached(vm, callee, vm->mm_call);
+        if (IS_CLOSURE(mm) || IS_NATIVE(mm)) {
+            // Stack: [callee, arg1, ..., argN]
+            // We want: [mm, callee, arg1, ..., argN]
+            for (int i = 0; i < argCount; i++) {
+                vm->currentThread->stackTop[0 - i] = vm->currentThread->stackTop[-1 - i];
+            }
+
+            vm->currentThread->stackTop[-argCount] = callee;      // Insert table as first arg
+            vm->currentThread->stackTop[-argCount - 1] = mm;      // Replace callee slot with callable
+            vm->currentThread->stackTop++;                        // Increase stack size
+
+            argCount++;
+            if (!callValue(vm, mm, argCount, frame, ip)) {
+                return 0;
+            }
+            return 1;
+        }
+    }
+
+    vmRuntimeError(vm, "Can only call functions.");
+    return 0;
+}
+
+static void discardHandlersForFrameReturn(ObjThread* thread) {
+    int currentFrameCount = thread->frameCount;
+    while (thread->handlerCount > 0 &&
+           thread->handlers[thread->handlerCount - 1].frameCount >= currentFrameCount) {
+        thread->handlerCount--;
+    }
 }
 
 // Returns 1 if handled, 0 if no metamethod, -1 on runtime error.
@@ -1225,7 +1285,12 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
                         Value stringModule = NIL_VAL;
                         ObjString* stringName = copyString("string", 6);
                         push(vm, OBJ_VAL(stringName)); // Root string name
-                        if (tableGet(&vm->globals, stringName, &stringModule) && IS_TABLE(stringModule)) {
+                        if ((!tableGet(&vm->globals, stringName, &stringModule) || !IS_TABLE(stringModule)) &&
+                            loadNativeModule(vm, "string")) {
+                            stringModule = peek(vm, 0);
+                            pop(vm); // loaded module
+                        }
+                        if (IS_TABLE(stringModule)) {
                             if (tableGet(&AS_TABLE(stringModule)->table, AS_STRING(key), &result)) {
                                 result = maybeBindSelf(table, result);
                             } else {
@@ -1457,53 +1522,43 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
             }
             case OP_CALL: {
                 int argCount = READ_BYTE();
-                Value callee = peek(vm, argCount);
-                if (IS_BOUND_METHOD(callee)) {
-                    ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
-                    Value methodVal = OBJ_VAL(bound->method);
-
-                    // Stack: [callee, arg1, ..., argN]
-                    // We want: [method, receiver, arg1, ..., argN]
-                    for (int i = 0; i < argCount; i++) {
-                        vm->currentThread->stackTop[0 - i] = vm->currentThread->stackTop[-1 - i];
-                    }
-                    vm->currentThread->stackTop[-argCount] = bound->receiver;
-                    vm->currentThread->stackTop[-argCount - 1] = methodVal;
-                    vm->currentThread->stackTop++;
-                    argCount++;
-                    callee = methodVal;
+                if (!invokeCallWithArgCount(vm, argCount, &frame, &ip)) {
+                    goto runtime_error;
+                }
+                break;
+            }
+            case OP_CALL_EXPAND: {
+                int fixedArgCount = READ_BYTE();
+                Value spread = peek(vm, 0);
+                if (!IS_TABLE(spread)) {
+                    vmRuntimeError(vm, "Spread argument must be a table.");
+                    goto runtime_error;
                 }
 
-                if (IS_NATIVE(callee) || IS_CLOSURE(callee)) {
-                    if (!callValue(vm, callee, argCount, &frame, &ip)) {
-                        goto runtime_error;
+                ObjTable* spreadTable = AS_TABLE(spread);
+                int spreadCount = 0;
+                for (int i = 1; ; i++) {
+                    Value val = NIL_VAL;
+                    if (!tableGetArray(&spreadTable->table, i, &val) || IS_NIL(val)) {
+                        break;
                     }
-                } else if (IS_TABLE(callee)) {
-                    // __call metamethod: __call(table, ...)
-                    Value mm = getMetamethodCached(vm, callee, vm->mm_call);
-                    if (IS_CLOSURE(mm) || IS_NATIVE(mm)) {
-                        // Stack: [callee, arg1, ..., argN]
-                        // We want: [mm, callee, arg1, ..., argN]
-                        for (int i = 0; i < argCount; i++) {
-                            vm->currentThread->stackTop[0 - i] = vm->currentThread->stackTop[-1 - i];
-                        }
-
-                        vm->currentThread->stackTop[-argCount] = callee;      // Insert table as first arg
-                        vm->currentThread->stackTop[-argCount - 1] = mm;      // Replace callee slot with callable
-                        vm->currentThread->stackTop++;                        // Increase stack size
-
-                        argCount++;
-                        if (!callValue(vm, mm, argCount, &frame, &ip)) {
-                            goto runtime_error;
-                        }
-                    } else {
-                        vmRuntimeError(vm, "Can only call functions.");
+                    spreadCount++;
+                    if (fixedArgCount + spreadCount > 255) {
+                        vmRuntimeError(vm, "Can't have more than 255 arguments.");
                         goto runtime_error;
                     }
                 }
-                else {
-                     vmRuntimeError(vm, "Can only call functions.");
-                     goto runtime_error;
+
+                pop(vm); // Remove spread table
+                for (int i = 1; i <= spreadCount; i++) {
+                    Value val = NIL_VAL;
+                    tableGetArray(&spreadTable->table, i, &val);
+                    push(vm, val);
+                }
+
+                int argCount = fixedArgCount + spreadCount;
+                if (!invokeCallWithArgCount(vm, argCount, &frame, &ip)) {
+                    goto runtime_error;
                 }
                 break;
             }
@@ -1697,6 +1752,7 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
             case OP_RETURN: {
                 Value result = pop(vm);
                 closeUpvalues(vm, frame->slots);
+                discardHandlersForFrameReturn(vm->currentThread);
                 vm->currentThread->frameCount--;
 
                 // Restore stack and push result
@@ -1742,6 +1798,7 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
                 uint8_t count = READ_BYTE();
                 Value* results = vm->currentThread->stackTop - count;
                 closeUpvalues(vm, frame->slots);
+                discardHandlersForFrameReturn(vm->currentThread);
                 vm->currentThread->frameCount--;
 
                 // Copy results to where the function was called (frame->slots)
@@ -2377,28 +2434,41 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
                }
 
                // Convert dots to slashes for directory paths
-               // e.g., "my_module.sub_module" -> "my_module/sub_module.lua"
-               char filename[256];
-                int j = 0;
-                for (int i = 0; i < moduleName->length && j < 250; i++) {
-                    if (moduleName->chars[i] == '.') {
-                        filename[j++] = '/';
-                    }
-                    else {
-                        filename[j++] = moduleName->chars[i];
-                    }
-                }
-                filename[j] = '\0';
+               // e.g., "my_module.sub_module" -> "my_module/sub_module"
+               char modulePath[256];
+               int j = 0;
+               for (int i = 0; i < moduleName->length && j < 250; i++) {
+                   if (moduleName->chars[i] == '.') {
+                       modulePath[j++] = '/';
+                   } else {
+                       modulePath[j++] = moduleName->chars[i];
+                   }
+               }
+               modulePath[j] = '\0';
 
-                // Append .pua extension
-                snprintf(filename + j, sizeof(filename) - j, ".pua");
+               // Try script module file and package init variants:
+               //   import record      -> record.pua, record/__.pua, lib/record.pua, lib/record/__.pua
+               //   import foo.bar     -> foo/bar.pua, foo/bar/__.pua, lib/foo/bar.pua, lib/foo/bar/__.pua
+               char filename[512];
+               FILE* file = NULL;
+               const char* candidates[4] = {
+                   "%s.pua",
+                   "%s/__.pua",
+                   "lib/%s.pua",
+                   "lib/%s/__.pua"
+               };
 
-                // Read the file
-                FILE* file = fopen(filename, "rb");
-                if (file == NULL) {
-                    printf("Could not open module '%s' (tried '%s').\n", moduleName->chars, filename);
+               for (int ci = 0; ci < 4 && file == NULL; ci++) {
+                   snprintf(filename, sizeof(filename), candidates[ci], modulePath);
+                   file = fopen(filename, "rb");
+               }
+
+               if (file == NULL) {
+                    printf("Could not open module '%s' (tried '%s.pua', '%s/__.pua', "
+                           "'lib/%s.pua', and 'lib/%s/__.pua').\n",
+                           moduleName->chars, modulePath, modulePath, modulePath, modulePath);
                     goto runtime_error;
-                }
+               }
 
                 fseek(file, 0L, SEEK_END);
                 size_t fileSize = ftell(file);
@@ -2439,6 +2509,23 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
                 frame = &vm->currentThread->frames[vm->currentThread->frameCount - 1];
                 ip = frame->ip;
 
+                break;
+            }
+            case OP_IMPORT_STAR: {
+                Value module = pop(vm);
+                if (!IS_TABLE(module)) {
+                    vmRuntimeError(vm, "from ... import * expects module table export.");
+                    goto runtime_error;
+                }
+
+                ObjTable* t = AS_TABLE(module);
+                for (int i = 0; i < t->table.capacity; i++) {
+                    Entry* entry = &t->table.entries[i];
+                    if (entry->key != NULL && !IS_NIL(entry->value)) {
+                        tableSet(&vm->globals, entry->key, entry->value);
+                    }
+                }
+                maybeCollectGarbage(vm);
                 break;
             }
         }

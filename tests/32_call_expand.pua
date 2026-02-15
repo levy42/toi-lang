@@ -1,0 +1,31 @@
+fn assert_true(cond, msg = nil)
+  if not cond
+    error("assert_true failed")
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error("assert_eq failed")
+
+fn add3(a, b, c)
+  return a + b + c
+
+vals = {1, 2, 3}
+assert_eq(add3(*vals), 6)
+assert_eq(add3(10, *{20, 30}), 60)
+
+t = {
+  base = 5,
+  add = fn(self, a, b)
+    return self.base + a + b
+}
+assert_eq(t.add(*{1, 2}), 8)
+
+caught = false
+try
+  add3(*123)
+except e
+  caught = true
+  assert_true(e has "Spread argument must be a table")
+assert_true(caught)
+
+print "call expand ok"

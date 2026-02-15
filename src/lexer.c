@@ -85,6 +85,7 @@ static Keyword keywords[] = {
     {"has",      3, TOKEN_HAS},
     {"global",   6, TOKEN_GLOBAL},
     {"import",   6, TOKEN_IMPORT},
+    {"from",     4, TOKEN_FROM},
     {"del",      3, TOKEN_DEL},
     {"true",     4, TOKEN_TRUE},
     {NULL,       0, TOKEN_EOF} // Sentinel
@@ -143,8 +144,8 @@ static Token number(Lexer* lexer) {
     return makeToken(lexer, TOKEN_NUMBER);
 }
 
-static Token string(Lexer* lexer) {
-    while (peek(lexer) != '"' && !isAtEnd(lexer)) {
+static Token string(Lexer* lexer, char quote) {
+    while (peek(lexer) != quote && !isAtEnd(lexer)) {
         if (peek(lexer) == '\n') lexer->line++;
         if (peek(lexer) == '\\' && peekNext(lexer) != '\0') {
             advance(lexer); // Skip the backslash
@@ -269,10 +270,10 @@ Token scanToken(Lexer* lexer) {
     }
 
     char c = advance(lexer);
-    // Check for f-string: f"..."
-    if (c == 'f' && peek(lexer) == '"') {
-        advance(lexer); // consume the opening "
-        while (peek(lexer) != '"' && !isAtEnd(lexer)) {
+    // Check for f-string: f"..." or f'...'
+    if (c == 'f' && (peek(lexer) == '"' || peek(lexer) == '\'')) {
+        char quote = advance(lexer); // consume opening quote
+        while (peek(lexer) != quote && !isAtEnd(lexer)) {
             if (peek(lexer) == '\n') lexer->line++;
             if (peek(lexer) == '\\' && peekNext(lexer) != '\0') {
                 advance(lexer); // skip backslash
@@ -280,7 +281,7 @@ Token scanToken(Lexer* lexer) {
             advance(lexer);
         }
         if (isAtEnd(lexer)) return errorToken(lexer, "Unterminated f-string.");
-        advance(lexer); // consume closing "
+        advance(lexer); // consume closing quote
         return makeToken(lexer, TOKEN_FSTRING);
     }
     if (isalpha(c) || c == '_') return identifier(lexer);
@@ -319,6 +320,7 @@ Token scanToken(Lexer* lexer) {
         case '#': return makeToken(lexer, TOKEN_HASH);
         case '?': return makeToken(lexer, TOKEN_QUESTION);
         case ':': return makeToken(lexer, TOKEN_COLON);
+        case '@': return makeToken(lexer, TOKEN_AT);
         case '=':
             if (peek(lexer) == '=') { advance(lexer); return makeToken(lexer, TOKEN_EQUAL_EQUAL); }
             return makeToken(lexer, TOKEN_EQUALS);
@@ -331,7 +333,8 @@ Token scanToken(Lexer* lexer) {
         case '>':
             if (peek(lexer) == '=') { advance(lexer); return makeToken(lexer, TOKEN_GREATER_EQUAL); }
             return makeToken(lexer, TOKEN_GREATER);
-        case '"': return string(lexer);
+        case '"': return string(lexer, '"');
+        case '\'': return string(lexer, '\'');
     }
 
     static char buffer[100];

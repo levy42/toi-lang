@@ -1,82 +1,179 @@
 -- Type validation library
 
+string_mod = import string
+
 Type = {}
 Type.__index = Type
 
-fn check_base(self, value)
-  return false, "Not implemented"
+fn at_path(path, msg)
+  if path == nil path = "$"
+  return "at " + path + ": " + msg
+
+fn child_path(path, key)
+  if path == nil path = "$"
+  if type(key) == "string"
+    return path + "." + key
+  return path + "[" + str(key) + "]"
+
+fn wants_coerce(opts)
+  return type(opts) == "table" and opts.coerce == true
+
+fn parse_bool(value)
+  if type(value) == "boolean" return true, value
+  if type(value) == "number"
+    if value == 1 return true, true
+    if value == 0 return true, false
+    return false, nil
+  if type(value) == "string"
+    s = string_mod.lower(value)
+    if s == "true" or s == "1" or s == "yes" return true, true
+    if s == "false" or s == "0" or s == "no" return true, false
+  return false, nil
+
+fn parse_number(value)
+  if type(value) == "number" return true, value
+  if type(value) != "string" return false, nil
+
+  if #value == 0 return false, nil
+
+  i = 1
+  if value[1] == "-" or value[1] == "+"
+    i = 2
+    if i > #value return false, nil
+
+  saw_digit = false
+  saw_dot = false
+
+  while i <= #value
+    c = value[i]
+    if c >= "0" and c <= "9"
+      saw_digit = true
+    elif c == "."
+      if saw_dot return false, nil
+      saw_dot = true
+    else
+      return false, nil
+    i = i + 1
+
+  if not saw_digit return false, nil
+  return true, float(value)
+
+fn check_base(self, value, path = nil, opts = nil)
+  return false, at_path(path, "Not implemented"), nil
 Type.check = check_base
 
+fn run_check(type_def, value, path = nil, opts = nil)
+  if path == nil path = "$"
+  if type(type_def) != "table"
+    return false, at_path(path, "Invalid type definition: expected table, got " + type(type_def)), nil
+
+  checker = type_def.check
+  if checker == nil
+    return false, at_path(path, "Invalid type definition: missing check()"), nil
+
+  local ok, err, coerced = checker(value, path, opts)
+  if ok return true, nil, coerced
+  if err == nil return false, at_path(path, "Validation failed"), nil
+  return false, err, nil
+
 -- Primitives
--- They are singleton objects (tables) that act as types.
--- They can inherit from Type.
 
 String = {}
 setmetatable(String, Type)
 String.__index = String
-fn check_string(self, value)
-  if type(value) == "string" return true, nil
-  return false, "Expected string, got " + type(value)
+fn check_string(self, value, path = nil, opts = nil)
+  if type(value) == "string" return true, nil, value
+  if wants_coerce(opts)
+    if type(value) == "number" or type(value) == "boolean"
+      return true, nil, str(value)
+  return false, at_path(path, "Expected string, got " + type(value)), nil
 String.check = check_string
 
 Number = {}
 setmetatable(Number, Type)
 Number.__index = Number
-fn check_number(self, value)
-  if type(value) == "number" return true, nil
-  return false, "Expected number, got " + type(value)
+fn check_number(self, value, path = nil, opts = nil)
+  if type(value) == "number" return true, nil, value
+  if wants_coerce(opts) and type(value) == "string"
+    local okn, n = parse_number(value)
+    if okn return true, nil, n
+  return false, at_path(path, "Expected number, got " + type(value)), nil
 Number.check = check_number
 
 Boolean = {}
 setmetatable(Boolean, Type)
 Boolean.__index = Boolean
-fn check_bool(self, value)
-  if type(value) == "boolean" return true, nil
-  return false, "Expected boolean, got " + type(value)
+fn check_bool(self, value, path = nil, opts = nil)
+  if type(value) == "boolean" return true, nil, value
+  if wants_coerce(opts)
+    local okb, b = parse_bool(value)
+    if okb return true, nil, b
+  return false, at_path(path, "Expected boolean, got " + type(value)), nil
 Boolean.check = check_bool
 
 Integer = {}
 setmetatable(Integer, Type)
 Integer.__index = Integer
-fn check_int(self, value)
-  if type(value) != "number" return false, "Expected number (integer), got " + type(value)
-  if value % 1 != 0 return false, "Expected integer, got float"
-  return true, nil
-Integer.check = check_int
+fn check_int(self, value, path = nil, opts = nil)
+  n = value
+  if type(n) != "number"
+    if wants_coerce(opts) and type(value) == "string"
+      local okn, nn = parse_number(value)
+      if okn
+        n = nn
+      else
+        n = nil
+    else
+      return false, at_path(path, "Expected number (integer), got " + type(value)), nil
 
--- Complex Types
+  if n == nil or n % 1 != 0
+    return false, at_path(path, "Expected integer, got float"), nil
+  return true, nil, n
+Integer.check = check_int
 
 -- List(inner)
 List = {}
 List.__index = List
 
 fn new_list(cls, inner)
-  print "Inside new_list"
-  print "cls: " + str(cls)
-  print "inner: " + str(inner)
   obj = { inner = inner }
   setmetatable(obj, List)
   return obj
 
--- Metatable for List class to support List(...) call
 ListMeta = {}
-ListMeta.__index = Type -- Inherit from Type
+ListMeta.__index = Type
 ListMeta.__call = new_list
 setmetatable(List, ListMeta)
 
-fn check_list(self, value)
-  if type(value) != "table" return false, "Expected list (table), got " + type(value)
-  
-  -- Check if it's a sequence (keys 1..N)
+fn check_list(self, value, path = nil, opts = nil)
+  if type(value) != "table"
+    return false, at_path(path, "Expected list (table), got " + type(value)), nil
+
   count = 0
-  for k, v in pairs(value)
-    if type(k) == "number"
-      count = count + 1
-      local ok, err = self.inner.check(self.inner, v)
-      if not ok return false, "List item " + str(k) + ": " + err
-    end
-    
-  return true, nil
+  max_index = 0
+  out = {}
+  k = nil
+  while true
+    local k1, v = next(value, k)
+    if k1 == nil break
+    k = k1
+
+    if type(k) != "number"
+      return false, at_path(path, "Expected list index key (number), got " + type(k)), nil
+    if k % 1 != 0 or k < 1
+      return false, at_path(path, "Expected positive integer list index"), nil
+
+    count = count + 1
+    if k > max_index max_index = k
+
+    local ok, err, cv = run_check(self.inner, v, child_path(path, k), opts)
+    if not ok return false, err, nil
+    out[k] = cv
+
+  if count != max_index
+    return false, at_path(path, "Expected contiguous list indices (1..N)"), nil
+
+  return true, nil, out
 List.check = check_list
 
 -- Optional(inner)
@@ -84,9 +181,6 @@ Optional = {}
 Optional.__index = Optional
 
 fn new_optional(cls, inner)
-  print "Inside new_optional"
-  print "cls: " + str(cls)
-  print "inner: " + str(inner)
   obj = { inner = inner }
   setmetatable(obj, Optional)
   return obj
@@ -96,20 +190,174 @@ OptionalMeta.__index = Type
 OptionalMeta.__call = new_optional
 setmetatable(Optional, OptionalMeta)
 
-fn check_optional(self, value)
-  if value == nil return true, nil
-  return self.inner.check(self.inner, value)
+fn check_optional(self, value, path = nil, opts = nil)
+  if value == nil return true, nil, nil
+  return run_check(self.inner, value, path, opts)
 Optional.check = check_optional
+
+-- Literal(v1, v2, ...)
+LiteralType = {}
+LiteralType.__index = LiteralType
+
+fn new_literal_type(cls, *values)
+  obj = { values = values }
+  setmetatable(obj, LiteralType)
+  return obj
+
+LiteralMeta = {}
+LiteralMeta.__index = Type
+LiteralMeta.__call = new_literal_type
+setmetatable(LiteralType, LiteralMeta)
+
+fn check_literal_type(self, value, path = nil, opts = nil)
+  if self.values == nil or #self.values == 0
+    return false, at_path(path, "Literal requires at least one allowed value"), nil
+
+  i = 1
+  while i <= #self.values
+    lit = self.values[i]
+    if value == lit return true, nil, lit
+
+    if wants_coerce(opts)
+      if type(lit) == "number" and type(value) == "string"
+        local okn, n = parse_number(value)
+        if okn and n == lit return true, nil, lit
+      if type(lit) == "boolean"
+        local okb, b = parse_bool(value)
+        if okb and b == lit return true, nil, lit
+      if type(lit) == "string" and (type(value) == "number" or type(value) == "boolean")
+        if str(value) == lit return true, nil, lit
+    i = i + 1
+
+  return false, at_path(path, "Expected one of literal values"), nil
+LiteralType.check = check_literal_type
+
+-- Union(t1, t2, ...)
+UnionType = {}
+UnionType.__index = UnionType
+
+fn new_union_type(cls, *types)
+  obj = { types = types }
+  setmetatable(obj, UnionType)
+  return obj
+
+UnionMeta = {}
+UnionMeta.__index = Type
+UnionMeta.__call = new_union_type
+setmetatable(UnionType, UnionMeta)
+
+fn check_union_type(self, value, path = nil, opts = nil)
+  if self.types == nil or #self.types == 0
+    return false, at_path(path, "Union requires at least one member type"), nil
+
+  i = 1
+  last_err = nil
+  while i <= #self.types
+    local ok, err, cv = run_check(self.types[i], value, path, opts)
+    if ok return true, nil, cv
+    last_err = err
+    i = i + 1
+
+  if last_err == nil
+    return false, at_path(path, "Value does not match any union member"), nil
+  return false, last_err, nil
+UnionType.check = check_union_type
+
+-- Constraints(inner, opts)
+ConstraintsType = {}
+ConstraintsType.__index = ConstraintsType
+
+fn new_constraints_type(cls, inner, opts = nil)
+  obj = {
+    inner = inner,
+    opts = opts
+  }
+  if type(obj.opts) != "table"
+    obj.opts = {}
+  setmetatable(obj, ConstraintsType)
+  return obj
+
+ConstraintsMeta = {}
+ConstraintsMeta.__index = Type
+ConstraintsMeta.__call = new_constraints_type
+setmetatable(ConstraintsType, ConstraintsMeta)
+
+fn check_constraints_type(self, value, path = nil, opts = nil)
+  local ok, err, v = run_check(self.inner, value, path, opts)
+  if not ok return false, err, nil
+
+  c = self.opts
+
+  if c.min != nil
+    if type(v) != "number"
+      return false, at_path(path, "Constraint min requires number value"), nil
+    if v < c.min
+      return false, at_path(path, "Expected >= " + str(c.min)), nil
+
+  if c.max != nil
+    if type(v) != "number"
+      return false, at_path(path, "Constraint max requires number value"), nil
+    if v > c.max
+      return false, at_path(path, "Expected <= " + str(c.max)), nil
+
+  if c.min_len != nil
+    vtype = type(v)
+    if vtype != "string" and vtype != "table"
+      return false, at_path(path, "Constraint min_len requires string or table value"), nil
+    if #v < c.min_len
+      return false, at_path(path, "Expected length >= " + str(c.min_len)), nil
+
+  if c.max_len != nil
+    vtype = type(v)
+    if vtype != "string" and vtype != "table"
+      return false, at_path(path, "Constraint max_len requires string or table value"), nil
+    if #v > c.max_len
+      return false, at_path(path, "Expected length <= " + str(c.max_len)), nil
+
+  if c.pattern != nil
+    if type(v) != "string"
+      return false, at_path(path, "Constraint pattern requires string value"), nil
+    local start_i, end_i = string_mod.find(v, c.pattern)
+    if start_i == nil
+      return false, at_path(path, "String does not match pattern"), nil
+
+  if c.custom != nil
+    if type(c.custom) != "function"
+      return false, at_path(path, "Constraint custom must be a function"), nil
+    local cok, cerr = c.custom(v)
+    if not cok
+      if cerr == nil
+        return false, at_path(path, "Custom constraint failed"), nil
+      return false, at_path(path, cerr), nil
+
+  return true, nil, v
+ConstraintsType.check = check_constraints_type
 
 -- RecordType (nested)
 RecordType = {}
 RecordType.__index = RecordType
 
-fn new_record_type(cls, schema)
-  print "Inside new_record_type"
-  print "cls: " + str(cls)
-  print "schema: " + str(schema)
-  obj = { schema = schema }
+fn copy_table(src)
+  out = {}
+  k = nil
+  while true
+    local k1, v = next(src, k)
+    if k1 == nil break
+    k = k1
+    out[k] = v
+  return out
+
+fn configure_record_model(model, schema, opts = nil)
+  model.schema = schema
+  model.allow_extra = true
+  if type(opts) == "table" and opts.allow_extra != nil
+    model.allow_extra = opts.allow_extra
+  model.__index = RecordType
+  return model
+
+fn new_record_type(cls, schema, opts = nil)
+  obj = {}
+  configure_record_model(obj, schema, opts)
   setmetatable(obj, RecordType)
   return obj
 
@@ -118,16 +366,78 @@ RecordTypeMeta.__index = Type
 RecordTypeMeta.__call = new_record_type
 setmetatable(RecordType, RecordTypeMeta)
 
-fn check_record_type(self, value)
-  if type(value) != "table" return false, "Expected record (table), got " + type(value)
-  
-  for k, type_def in pairs(self.schema)
-    val = value[k]
-    local ok, err = type_def.check(type_def, val)
-    if not ok return false, "Field '" + str(k) + "': " + err
-  
-  return true, nil
+fn record_new(self, obj)
+  -- Model declaration sugar:
+  --   User = Record {name = String}
+  if self == RecordType
+    schema = copy_table(obj)
+    configure_record_model(obj, schema, nil)
+    obj.__new = record_new
+    return obj
+
+  -- Instance declaration sugar:
+  --   u = User {name = "Max"}
+  obj.__model = self
+  return obj
+
+RecordType.__new = record_new
+
+fn check_record_type(self, value = nil, path = nil, opts = nil)
+  model = self
+  target = value
+
+  -- Instance method call style:
+  --   some_user.check()
+  if target == nil and type(self.__model) == "table"
+    model = self.__model
+    target = self
+
+  if type(model.schema) != "table"
+    return false, at_path(path, "Invalid record schema: expected table, got " + type(model.schema)), nil
+  if type(target) != "table"
+    return false, at_path(path, "Expected record (table), got " + type(target)), nil
+
+  out = {}
+
+  k = nil
+  while true
+    local k1, type_def = next(model.schema, k)
+    if k1 == nil break
+    k = k1
+
+    val = target[k]
+    local ok, err, cv = run_check(type_def, val, child_path(path, k), opts)
+    if not ok return false, err, nil
+    out[k] = cv
+
+  if model.allow_extra == false
+    k = nil
+    while true
+      local k1, v = next(target, k)
+      if k1 == nil break
+      k = k1
+      if model.schema[k] == nil
+        return false, at_path(child_path(path, k), "Unknown field"), nil
+  else
+    k = nil
+    while true
+      local k1, v = next(target, k)
+      if k1 == nil break
+      k = k1
+      if out[k] == nil and model.schema[k] == nil
+        out[k] = v
+
+  return true, nil, out
 RecordType.check = check_record_type
+RecordType.__new = record_new
+
+fn validate(type_def, value, opts = nil)
+  local ok, err, out = run_check(type_def, value, "$", opts)
+  return ok, err, out
+
+fn coerce(type_def, value)
+  local ok, err, out = run_check(type_def, value, "$", {coerce = true})
+  return ok, err, out
 
 -- Export
 return {
@@ -137,5 +447,10 @@ return {
   Integer = Integer,
   List = List,
   Optional = Optional,
-  Record = RecordType
+  Literal = LiteralType,
+  Union = UnionType,
+  Constraints = ConstraintsType,
+  Record = RecordType,
+  validate = validate,
+  coerce = coerce
 }

@@ -1,0 +1,23 @@
+string = import string
+json = import json
+http = import http
+
+Response = {}
+
+Response.normalize = fn(res)
+  if type(res) == "string"
+    if string.sub(res, 1, 5) == "HTTP/"
+      return res
+    return http.response(200, {["Content-Type"] = "text/plain"}, res)
+
+  if type(res) == "table"
+    if res.status or res.headers or res.body
+      return http.response(res.status or 200, res.headers, res.body or "")
+    return http.response(200, {["Content-Type"] = "application/json"}, json.encode(res))
+
+  if type(res) == "number" or type(res) == "boolean" or res == nil
+    return http.response(200, {["Content-Type"] = "application/json"}, json.encode(res))
+
+  return http.response(500, nil, "Invalid handler response type")
+
+return Response

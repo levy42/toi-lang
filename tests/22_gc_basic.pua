@@ -1,0 +1,35 @@
+fn assert_true(cond, msg = nil)
+  if not cond
+    error("assert_true failed")
+
+fn churn(count)
+  for i in 1..count
+    a = i + 1
+    b = i + 2
+    t = {i, a, b}
+    t.self = t
+    u = {a = t, b = {v = i}}
+
+base = mem()
+churn(20000)
+gc
+after_churn = mem()
+
+-- Allow some headroom for globals and allocator bookkeeping.
+assert_true(after_churn <= base + 262144)
+
+keepers = {}
+for i in 1..6000
+  nxt = i + 1
+  keepers[i] = {v = i, next = {nxt}}
+
+gc
+with_live = mem()
+assert_true(with_live > after_churn)
+assert_true(keepers[1].v == 1)
+assert_true(keepers[6000].v == 6000)
+
+keepers = nil
+gc
+after_drop = mem()
+assert_true(after_drop < with_live)
