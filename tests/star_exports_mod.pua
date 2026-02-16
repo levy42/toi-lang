@@ -1,0 +1,9 @@
+local a = 123
+local b = fn(x) return x + 1
+local _hidden = "nope"
+
+return {
+  a = a,
+  b = b,
+  _hidden = _hidden
+}

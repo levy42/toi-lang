@@ -37,12 +37,14 @@ static char* readFile(const char* path) {
     return buffer;
 }
 
-static int runFile(const char* path) {
+static int runFile(const char* path, int scriptArgc, char* scriptArgv[]) {
     char* source = readFile(path);
     // printf("Source:\n%s\n---\n", source);
     
     VM vm;
     initVM(&vm);
+    vm.cliArgc = scriptArgc;
+    vm.cliArgv = scriptArgv;
     
     ObjFunction* function = compile(source);
     if (function == NULL) {
@@ -75,10 +77,10 @@ static int runFile(const char* path) {
 int main(int argc, char* argv[]) {
     if (argc == 1) {
         startREPL();
-    } else if (argc == 2) {
-        return runFile(argv[1]);
+    } else if (argc >= 2) {
+        return runFile(argv[1], argc - 2, argv + 2);
     } else {
-        fprintf(stderr, "Usage: mylua [path]\n");
+        fprintf(stderr, "Usage: pua [path [args...]]\n");
         exit(64);
     }
 

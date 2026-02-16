@@ -279,5 +279,18 @@ void registerOS(VM* vm) {
     };
 
     registerModule(vm, "os", osFuncs);
+    // registerModule leaves module table on stack.
+    ObjTable* osModule = AS_TABLE(peek(vm, 0));
+
+    ObjString* argvKey = copyString("argv", 4);
+    ObjString* argcKey = copyString("argc", 4);
+    ObjTable* argv = newTable();
+    for (int i = 0; i < vm->cliArgc; i++) {
+        const char* s = vm->cliArgv[i];
+        ObjString* arg = copyString(s, (int)strlen(s));
+        tableSetArray(&argv->table, i + 1, OBJ_VAL(arg));
+    }
+    tableSet(&osModule->table, argvKey, OBJ_VAL(argv));
+    tableSet(&osModule->table, argcKey, NUMBER_VAL((double)vm->cliArgc));
     pop(vm); // Pop os module
 }

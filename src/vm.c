@@ -584,8 +584,10 @@ void initVM(VM* vm) {
    vm->mm_call = NULL;
    vm->mm_new = NULL;
 
-   initTable(&vm->globals);
-   initTable(&vm->modules);
+    initTable(&vm->globals);
+    initTable(&vm->modules);
+    vm->cliArgc = 0;
+    vm->cliArgv = NULL;
    vm->currentThread->openUpvalues = NULL;
 
     vm->mm_index = copyString("__index", 7);
@@ -1564,7 +1566,7 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
             }
             case OP_ITER_PREP: {
                 Value val = peek(vm, 0);
-                if (IS_TABLE(val)) {
+                if (IS_TABLE(val) || IS_STRING(val)) {
                     Value nextFn = NIL_VAL;
                     ObjString* name = copyString("next", 4);
                     if (!tableGet(&vm->globals, name, &nextFn)) {

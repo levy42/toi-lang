@@ -22,7 +22,7 @@ This document describes the syntax accepted by the current compiler/runtime in `
 
 ### 1.4 Keywords
 
-`and`, `or`, `not`, `nil`, `true`, `false`, `print`, `local`, `global`, `fn`, `return`, `if`, `elif`, `else`, `while`, `for`, `in`, `break`, `continue`, `with`, `as`, `try`, `except`, `finally`, `throw`, `has`, `import`, `gc`, `del`.
+`and`, `or`, `not`, `nil`, `true`, `false`, `print`, `local`, `global`, `fn`, `return`, `if`, `elif`, `else`, `while`, `for`, `in`, `break`, `continue`, `with`, `as`, `try`, `except`, `finally`, `throw`, `has`, `import`, `from`, `gc`, `del`.
 
 ### 1.5 Numbers
 
@@ -41,9 +41,9 @@ Examples:
 
 ### 1.6 Strings
 
-- Regular string: `"..."` with escapes.
+- Regular string: `"..."` or `'...'` with escapes.
 - Multiline/raw string: `[[ ... ]]`.
-- F-string: `f"...{expr}..."`.
+- F-string: `f"...{expr}..."` and `f'...{expr}...'`.
 
 Regular/f-string literal-part escapes:
 
@@ -71,15 +71,22 @@ Most headers (`if`, `elif`, `else`, `while`, `for`, `fn`, `try`, `except`, `fina
 
 ```ebnf
 declaration := function_decl
+             | decorated_function_decl
              | import_decl
+             | from_import_decl
              | global_decl
              | local_decl
              | statement
 
 function_decl := "fn" IDENT function_body
+decorated_function_decl := decorator+ ("fn" IDENT function_body
+                                      | "local" "fn" IDENT function_body
+                                      | "global" "fn" IDENT function_body)
+decorator := "@" expression_on_same_line
 local_decl    := "local" ("fn" IDENT function_body | var_decl)
 global_decl   := "global" ("fn" IDENT function_body | global_var_decl)
 import_decl   := "import" module_path
+from_import_decl := "from" module_path "import" ("*" | IDENT ("," IDENT)*)
 ```
 
 ### 3.2 Variable declarations
@@ -162,6 +169,32 @@ del_target := IDENT access_chain?
 access_chain := ("." IDENT | "[" expression "]")+
 ```
 
+`try` forms supported:
+
+```pua
+try
+  risky()
+except
+  handle_any()
+
+try
+  risky()
+except e
+  print e
+
+try
+  risky()
+finally
+  cleanup()
+
+try
+  risky()
+except e
+  print e
+finally
+  cleanup()
+```
+
 Examples:
 
 ```pua
@@ -216,7 +249,7 @@ primary := NUMBER
 
 ```ebnf
 table_literal := "{" (table_entries | table_comprehension)? "}"
-table_entries := table_entry ("," table_entry)*
+table_entries := table_entry (("," | implicit_newline_sep) table_entry)*
 table_entry   := "[" expression "]" "=" expression
                | IDENT "=" expression
                | expression
@@ -247,6 +280,8 @@ metatable_ctor := table_literal  ; expr{...}
 Notes:
 
 - In calls, positional args cannot appear after named args.
+- Calls support one spread argument: `fn(a, *args_table)`.
+- Spread argument must be last and cannot be combined with named args.
 - `expr{...}` is a special infix form that sets the metatable of the new table to `expr`.
 
 ### 5.4 Operators and precedence
@@ -294,22 +329,55 @@ m = import lib.types
 import lib.types   -- binds local/global variable: types
 ```
 
+3. From-import form:
+
+```pua
+from lib.types import String, Integer
+from tests.star_exports_mod import *
+```
+
 Module path grammar:
 
 ```ebnf
 module_path := IDENT ("." IDENT)*
 ```
 
+Module resolution order for `import a.b`:
+
+1. native module `a.b`
+2. `a/b.pua`
+3. `a/b/__.pua`
+4. `lib/a/b.pua`
+5. `lib/a/b/__.pua`
+
 ## 7. Runtime-Visible Syntax Semantics
 
 - Indexing is 1-based.
+- Variables are local-by-default in normal script compilation.
 - Negative numeric indices are supported for tables/strings (`-1` = last element/char).
 - Slice bounds are inclusive.
 - Omitted slice start/end default based on step direction.
 - Truthiness: `nil`, `false`, `0`, empty string, empty table are falsey; others truthy.
 
+Decorator lowering semantics:
+
+- Decorators apply to function declarations only.
+- Multiple decorators apply bottom-to-top:
+
+```pua
+@a
+@b
+fn f() ...
+```
+
+is equivalent to:
+
+```pua
+fn f() ...
+f = a(b(f))
+```
+
 ## 8. Reserved / Tokenized But Limited
 
 - `;` is tokenized and recognized in a few parser checks, but statement sequencing is newline/indent driven.
 - `!` alone is not a unary operator; only `!=` is valid (`not` is unary logical negation).
-

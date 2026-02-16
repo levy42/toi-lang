@@ -1,0 +1,19 @@
+fn assert_eq(actual, expected)
+  if actual != expected
+    error("assert_eq failed")
+
+s = "blabla"
+out = ""
+for c in s
+  out = out + c
+assert_eq(out, "blabla")
+
+idx_sum = 0
+out2 = ""
+for i, c in "abc"
+  idx_sum = idx_sum + i
+  out2 = out2 + c
+assert_eq(idx_sum, 6)
+assert_eq(out2, "abc")
+
+print "string iter ok"

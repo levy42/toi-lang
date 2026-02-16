@@ -1,0 +1,28 @@
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error("assert_eq failed")
+
+sum = 0
+for v in {1, 2, 3}
+  local doubled = v * 2
+  sum = sum + doubled
+assert_eq(sum, 12)
+
+fn match_route(route, req_segments)
+  if #route.segments != #req_segments
+    return false, nil
+  for i, rseg in route.segments
+    pseg = req_segments[i]
+    if rseg != pseg
+      return false, nil
+  return true, {}
+
+fn dispatch(routes)
+  for route in routes
+    local ok, params = match_route(route, {'users', '42'})
+    if ok
+      return 'ok'
+  return 'no'
+
+assert_eq(dispatch({{segments = {'users', '42'}}}), 'ok')
+print 'for loop locals ok'

@@ -9,6 +9,8 @@ typedef struct VM {
    ObjThread* currentThread;
    Table globals;
    Table modules;  // Cache of loaded native modules
+   int cliArgc;
+   char** cliArgv;
    int disableGC;
     int isREPL;
     int pendingSetLocalCount;

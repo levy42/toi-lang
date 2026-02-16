@@ -1,0 +1,18 @@
+import cli
+
+app = cli.App(name = "todo")
+
+@app.command
+fn add(title)
+  print "adding: " + title
+
+@app.command
+fn done(id: int)
+  print "done #" + str(id)
+
+@app.command
+fn greet(name, times: int = 1)
+  for i in 1..times
+    print "hello " + name
+
+app.run()

@@ -6,98 +6,114 @@ fn assert_eq(actual, expected, msg = nil)
   if actual != expected
     error("assert_eq failed")
 
+fn expect_error(fn_)
+  msg = nil
+  try
+    fn_()
+  except e
+    msg = e
+  if msg == nil
+    error("expect_error failed")
+  return msg
+
 -- types module
 types = import lib.types
 from lib.types import String, Integer
-local ok1, err1 = types.String.check("hi")
-assert_true(ok1)
-local ok1b, err1b = String.check("hi")
-assert_true(ok1b)
-local ok1c, err1c = Integer.check(42)
-assert_true(ok1c)
+assert_eq(types.String.check("hi"), "hi")
+assert_eq(String.check("hi"), "hi")
+assert_eq(Integer.check(42), 42)
 
 User = types.Record {
   name = types.String,
   age = types.Integer
 }
 u = User {name = "Max", age = 21}
-local ok_user_inst, err_user_inst = u.check()
-assert_true(ok_user_inst)
+validated_u = u.check()
+assert_eq(validated_u.name, "Max")
+assert_eq(validated_u.age, 21)
 
 bad_u = User {name = 10, age = "x"}
-local ok_bad_u, err_bad_u = bad_u.check()
-assert_true(not ok_bad_u)
+err_bad_u = expect_error(fn()
+  bad_u.check()
+)
 assert_true(err_bad_u has "$.name" or err_bad_u has "$.age")
 
 str_list = types.List(types.String)
-local ok2, err2 = str_list.check({"a", "b", "c"})
-assert_true(ok2)
-local ok3, err3 = str_list.check({"a", 2})
-assert_true(not ok3)
+assert_eq(str_list.check({"a", "b", "c"})[2], "b")
+err3 = expect_error(fn()
+  str_list.check({"a", 2})
+)
+assert_true(err3 has "$")
 
-local ok4, err4 = str_list.check({[1] = "a", [3] = "c"})
-assert_true(not ok4)
-local ok5, err5 = str_list.check({[1] = "a", x = "b"})
-assert_true(not ok5)
+err4 = expect_error(fn()
+  str_list.check({[1] = "a", [3] = "c"})
+)
+assert_true(err4 has "$")
+err5 = expect_error(fn()
+  str_list.check({[1] = "a", x = "b"})
+)
+assert_true(err5 has "$")
 
 opt_num = types.Optional(types.Number)
-local ok6, err6 = opt_num.check(nil)
-assert_true(ok6)
-local ok7, err7 = opt_num.check(1.5)
-assert_true(ok7)
-local ok8, err8 = opt_num.check("1")
-assert_true(not ok8)
+assert_true(opt_num.check(nil) == nil)
+assert_eq(opt_num.check(1.5), 1.5)
+err8 = expect_error(fn()
+  opt_num.check("1")
+)
+assert_true(err8 has "$")
 
 person_t = types.Record({
   name = types.String,
   age = types.Integer
 })
-local ok9, err9 = person_t.check({name = "Ada", age = 36})
-assert_true(ok9)
-local ok10, err10 = person_t.check({name = "Ada"})
-assert_true(not ok10)
+assert_eq(person_t.check({name = "Ada", age = 36}).age, 36)
+err10 = expect_error(fn()
+  person_t.check({name = "Ada"})
+)
+assert_true(err10 has "$")
 
 strict_person_t = types.Record({name = types.String}, {allow_extra = false})
-local ok11, err11 = strict_person_t.check({name = "Ada", extra = 1})
-assert_true(not ok11)
+err11 = expect_error(fn()
+  strict_person_t.check({name = "Ada", extra = 1})
+)
+assert_true(err11 has "$.extra")
 
-local ok12, err12 = types.validate(types.Integer, 10)
-assert_true(ok12)
-local ok13, err13 = types.validate(types.Integer, 10.5)
-assert_true(not ok13)
+assert_eq(types.validate(types.Integer, 10), 10)
+err13 = expect_error(fn()
+  types.validate(types.Integer, 10.5)
+)
 assert_true(err13 has "$")
 
 -- Literal
 role_t = types.Literal("admin", "staff")
-local ok14, err14 = role_t.check("admin")
-assert_true(ok14)
-local ok15, err15 = role_t.check("guest")
-assert_true(not ok15)
+assert_eq(role_t.check("admin"), "admin")
+err15 = expect_error(fn()
+  role_t.check("guest")
+)
 assert_true(err15 has "$")
 
 -- Union
 id_t = types.Union(types.String, types.Integer)
-local ok16, err16 = id_t.check("u-1")
-assert_true(ok16)
-local ok17, err17 = id_t.check(123)
-assert_true(ok17)
-local ok18, err18 = id_t.check(false)
-assert_true(not ok18)
+assert_eq(id_t.check("u-1"), "u-1")
+assert_eq(id_t.check(123), 123)
+err18 = expect_error(fn()
+  id_t.check(false)
+)
 assert_true(err18 has "$")
 
 -- Constraints
 adult_t = types.Constraints(types.Integer, {min = 18, max = 120})
-local ok19, err19 = adult_t.check(30)
-assert_true(ok19)
-local ok20, err20 = adult_t.check(15)
-assert_true(not ok20)
+assert_eq(adult_t.check(30), 30)
+err20 = expect_error(fn()
+  adult_t.check(15)
+)
 assert_true(err20 has "$")
 
 name_t = types.Constraints(types.String, {min_len = 2, max_len = 10, pattern = "a"})
-local ok21, err21 = name_t.check("adam")
-assert_true(ok21)
-local ok22, err22 = name_t.check("x")
-assert_true(not ok22)
+assert_eq(name_t.check("adam"), "adam")
+err22 = expect_error(fn()
+  name_t.check("x")
+)
 assert_true(err22 has "$")
 
 -- Path-aware nested errors
@@ -108,29 +124,30 @@ profile_t = types.Record({
   })
 })
 
-local ok23, err23 = profile_t.check({user = {name = 42, age = 20}})
-assert_true(not ok23)
+err23 = expect_error(fn()
+  profile_t.check({user = {name = 42, age = 20}})
+)
 assert_true(err23 has "$.user.name")
 
-local ok24, err24 = profile_t.check({user = {name = "Ada", age = 15}})
-assert_true(not ok24)
+err24 = expect_error(fn()
+  profile_t.check({user = {name = "Ada", age = 15}})
+)
 assert_true(err24 has "$.user.age")
 
 -- coercion
-local ok25, err25, v25 = types.coerce(types.Integer, "42")
-assert_true(ok25)
+v25 = types.coerce(types.Integer, "42")
 assert_eq(v25, 42)
 
-local ok26, err26 = types.validate(types.Integer, "42")
-assert_true(not ok26)
+err26 = expect_error(fn()
+  types.validate(types.Integer, "42")
+)
+assert_true(err26 has "$")
 
-local ok27, err27, v27 = types.coerce(types.Boolean, "true")
-assert_true(ok27)
+v27 = types.coerce(types.Boolean, "true")
 assert_true(v27 == true)
 
 coerce_t = types.Record({age = types.Integer, scores = types.List(types.Number), active = types.Boolean})
-local ok28, err28, v28 = types.coerce(coerce_t, {age = "21", scores = {"1.5", "2"}, active = "1"})
-assert_true(ok28)
+v28 = types.coerce(coerce_t, {age = "21", scores = {"1.5", "2"}, active = "1"})
 assert_eq(v28.age, 21)
 assert_eq(v28.scores[1], 1.5)
 assert_eq(v28.scores[2], 2)

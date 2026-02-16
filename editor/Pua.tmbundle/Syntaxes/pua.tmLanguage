@@ -201,12 +201,12 @@
         </dict>
 
         <!-- Logical operators -->
-        <dict>
-            <key>match</key>
-            <string>\b(and|or|not)\b</string>
-            <key>name</key>
-            <string>keyword.operator.logical.pua</string>
-        </dict>
+<!--        <dict>-->
+<!--            <key>match</key>-->
+<!--            <string>\b(and|or|not)\b</string>-->
+<!--            <key>name</key>-->
+<!--            <string>keyword.operator.logical.pua</string>-->
+<!--        </dict>-->
 
         <!-- Boolean constants -->
         <dict>
@@ -229,24 +229,24 @@
             <key>match</key>
             <string>\b(next|inext|range|range_iter|slice|setmetatable|getmetatable|error|type|int|float|bool|str|min|max|sum|self)\b</string>
             <key>name</key>
-            <string>support.function.builtin.pua</string>
+            <string>support.function.builtin</string>
         </dict>
 
         <!-- Variadic parameter *args -->
-        <dict>
-            <key>match</key>
-            <string>\*[a-zA-Z_][a-zA-Z0-9_]*</string>
-            <key>name</key>
-            <string>variable.parameter.variadic.pua</string>
-        </dict>
+<!--        <dict>-->
+<!--            <key>match</key>-->
+<!--            <string>\*[a-zA-Z_][a-zA-Z0-9_]*</string>-->
+<!--            <key>name</key>-->
+<!--            <string>variable.parameter.variadic.pua</string>-->
+<!--        </dict>-->
 
         <!-- Variadic ... -->
-        <dict>
-            <key>match</key>
-            <string>\.\.\.</string>
-            <key>name</key>
-            <string>variable.language.varargs.pua</string>
-        </dict>
+<!--        <dict>-->
+<!--            <key>match</key>-->
+<!--            <string>\.\.\.</string>-->
+<!--            <key>name</key>-->
+<!--            <string>variable.language.varargs.pua</string>-->
+<!--        </dict>-->
 
         <!-- Floating point numbers -->
         <dict>

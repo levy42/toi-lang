@@ -1,0 +1,74 @@
+cli = import cli
+string = import string
+
+fn assert_true(cond, msg = nil)
+  if not cond
+    error(msg == nil ? "assert_true failed" : msg)
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error(msg == nil ? "assert_eq failed" : msg)
+
+fn expect_error(fn_)
+  msg = nil
+  try
+    fn_()
+  except e
+    msg = e
+  if msg == nil
+    error("expect_error failed")
+  return msg
+
+app = cli.App(name = "demo")
+
+@app.command
+fn add(a: int, b: int)
+  return a + b
+
+@app.command("hello")
+fn greet(name, times: int = 1)
+  out = ""
+  for i in 1..times
+    out = out + "hi " + name
+    if i < times out = out + ","
+  return out
+
+@app.command
+fn truthy(v: bool)
+  return v
+
+assert_eq(add(2, 3), 5)
+assert_eq(app.run({"add", "2", "5"}), 7)
+assert_eq(app.run({"hello", "Bob"}), "hi Bob")
+assert_eq(app.run({"hello", "Bob", "3"}), "hi Bob,hi Bob,hi Bob")
+assert_true(app.run({"truthy", "true"}) == true)
+assert_true(app.run({"truthy", "0"}) == false)
+
+err1 = expect_error(fn()
+  app.run({"missing"})
+)
+assert_true(err1 has "Unknown command")
+
+err2 = expect_error(fn()
+  app.run({"add", "1"})
+)
+assert_true(err2 has "Not enough arguments")
+
+help_text = app.help()
+assert_true(help_text has "add")
+assert_true(help_text has "hello")
+assert_true(help_text has "truthy")
+
+formatted = cli._format("[red]ERR[/] plain")
+assert_true(type(formatted) == "string")
+assert_true(string.byte(formatted, 1) == 27)
+assert_true(formatted has "ERR")
+
+formatted2 = cli._format("[red+underline]ERR[/]")
+assert_true(type(formatted2) == "string")
+local i31, j31 = string.find(formatted2, "[31m")
+local i4, j4 = string.find(formatted2, "[4m")
+assert_true(i31 != nil)
+assert_true(i4 != nil)
+
+print "cli framework ok"

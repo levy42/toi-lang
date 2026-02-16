@@ -43,67 +43,96 @@ static void sbFree(StringBuilder* sb) {
 static int nextNative(VM* vm, int argCount, Value* args) {
 
     ASSERT_ARGC_EQ(2);
-    ASSERT_TABLE(0);
-
-    ObjTable* objTable = GET_TABLE(0);
-    Table* table = &objTable->table;
+    Value state = args[0];
     Value currentKey = args[1];
 
-    // Array part first
-    if (IS_NIL(currentKey) || IS_NUMBER(currentKey)) {
-        double num = IS_NUMBER(currentKey) ? GET_NUMBER(1) : 0;
-        int start = 1;
-        if (IS_NUMBER(currentKey) && num >= 1 && (double)(int)num == num) {
-            start = (int)num + 1;
+    if (IS_TABLE(state)) {
+        ObjTable* objTable = AS_TABLE(state);
+        Table* table = &objTable->table;
+
+        // Array part first
+        if (IS_NIL(currentKey) || IS_NUMBER(currentKey)) {
+            double num = IS_NUMBER(currentKey) ? GET_NUMBER(1) : 0;
+            int start = 1;
+            if (IS_NUMBER(currentKey) && num >= 1 && (double)(int)num == num) {
+                start = (int)num + 1;
+            }
+            for (int i = start; i <= table->arrayCapacity; i++) {
+                Value val = NIL_VAL;
+                if (tableGetArray(table, i, &val) && !IS_NIL(val)) {
+                    push(vm, NUMBER_VAL((double)i));
+                    push(vm, val);
+                    return 2;
+                }
+            }
+            currentKey = NIL_VAL; // Move to hash iteration
         }
-        for (int i = start; i <= table->arrayCapacity; i++) {
-            Value val = NIL_VAL;
-            if (tableGetArray(table, i, &val) && !IS_NIL(val)) {
-                push(vm, NUMBER_VAL((double)i));
-                push(vm, val);
+
+        // Hash part
+        int foundCurrent = IS_NIL(currentKey);
+        ObjString* numKey = NULL;
+        if (IS_NUMBER(currentKey)) {
+            numKey = numberKeyString(GET_NUMBER(1));
+        }
+
+        for (int i = 0; i < table->capacity; i++) {
+            Entry* entry = &table->entries[i];
+            if (entry->key == NULL) continue;
+
+            if (foundCurrent) {
+                push(vm, OBJ_VAL(entry->key));
+                push(vm, entry->value);
                 return 2;
             }
+
+            if (IS_STRING(currentKey)) {
+                ObjString* sKey = GET_STRING(1);
+                if (entry->key == sKey || 
+                   (entry->key->length == sKey->length && 
+                    memcmp(entry->key->chars, sKey->chars, entry->key->length) == 0)) {
+                    foundCurrent = 1;
+                }
+            } else if (IS_NUMBER(currentKey)) {
+                if (entry->key == numKey ||
+                    (entry->key->length == numKey->length &&
+                     memcmp(entry->key->chars, numKey->chars, entry->key->length) == 0)) {
+                    foundCurrent = 1;
+                }
+            }
         }
-        currentKey = NIL_VAL; // Move to hash iteration
+
+        // Return 2 nils to match expected return count for for-in loops
+        push(vm, NIL_VAL);
+        push(vm, NIL_VAL);
+        return 2;
     }
 
-    // Hash part
-    int foundCurrent = IS_NIL(currentKey);
-    ObjString* numKey = NULL;
-    if (IS_NUMBER(currentKey)) {
-        numKey = numberKeyString(GET_NUMBER(1));
-    }
+    if (IS_STRING(state)) {
+        ObjString* str = AS_STRING(state);
+        int index = 1;
+        if (IS_NUMBER(currentKey)) {
+            double n = GET_NUMBER(1);
+            if (n >= 1 && (double)(int)n == n) {
+                index = (int)n + 1;
+            }
+        } else if (!IS_NIL(currentKey)) {
+            vmRuntimeError(vm, "next() string control must be number or nil.");
+            return 0;
+        }
 
-    for (int i = 0; i < table->capacity; i++) {
-        Entry* entry = &table->entries[i];
-        if (entry->key == NULL) continue;
-
-        if (foundCurrent) {
-            push(vm, OBJ_VAL(entry->key));
-            push(vm, entry->value);
+        if (index < 1 || index > str->length) {
+            push(vm, NIL_VAL);
+            push(vm, NIL_VAL);
             return 2;
         }
 
-        if (IS_STRING(currentKey)) {
-            ObjString* sKey = GET_STRING(1);
-            if (entry->key == sKey || 
-               (entry->key->length == sKey->length && 
-                memcmp(entry->key->chars, sKey->chars, entry->key->length) == 0)) {
-                foundCurrent = 1;
-            }
-        } else if (IS_NUMBER(currentKey)) {
-            if (entry->key == numKey ||
-                (entry->key->length == numKey->length &&
-                 memcmp(entry->key->chars, numKey->chars, entry->key->length) == 0)) {
-                foundCurrent = 1;
-            }
-        }
+        push(vm, NUMBER_VAL((double)index));
+        push(vm, OBJ_VAL(copyString(str->chars + (index - 1), 1)));
+        return 2;
     }
 
-    // Return 2 nils to match expected return count for for-in loops
-    push(vm, NIL_VAL);
-    push(vm, NIL_VAL);
-    return 2;
+    vmRuntimeError(vm, "next expects table or string as first argument.");
+    return 0;
 }
 
 static int inextNative(VM* vm, int argCount, Value* args) {

@@ -2514,7 +2514,9 @@ static void forStatement() {
             emitByte(0);
             int exitJump = currentChunk()->count - 2;
 
-            // Body
+            // Body executes in its own scope each iteration so locals don't
+            // interfere with loop-control locals.
+            beginScope();
             if (match(TOKEN_INDENT)) {
                 block();
                 match(TOKEN_DEDENT);
@@ -2524,6 +2526,7 @@ static void forStatement() {
                 }
                 statement();
             }
+            endScope();
 
             int loopInstrOffset = currentChunk()->count;
             for (int i = 0; i < loop.continueCount; i++) {
@@ -2655,7 +2658,9 @@ static void forStatement() {
         emitBytes(OP_SET_LOCAL, (uint8_t)(current->localCount - varCount - 1)); // control is just before loop vars
         emitByte(OP_POP);
 
-        // Body
+        // Body executes in its own scope each iteration so locals don't
+        // interfere with loop-control locals.
+        beginScope();
         if (match(TOKEN_INDENT)) {
             block();
             match(TOKEN_DEDENT);
@@ -2665,6 +2670,7 @@ static void forStatement() {
             }
             statement();
         }
+        endScope();
 
         // Pop loop variables
         for (int i = 0; i < varCount; i++) {

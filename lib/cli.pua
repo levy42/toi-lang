@@ -1,0 +1,241 @@
+inspect = import inspect
+os = import os
+string = import string
+table = import table
+types = import lib.types
+
+ESC = string.char(27)
+ANSI = {
+  reset = ESC + "[0m",
+  black = ESC + "[30m",
+  red = ESC + "[31m",
+  green = ESC + "[32m",
+  yellow = ESC + "[33m",
+  blue = ESC + "[34m",
+  magenta = ESC + "[35m",
+  cyan = ESC + "[36m",
+  white = ESC + "[37m",
+  bold = ESC + "[1m",
+  dim = ESC + "[2m",
+  underline = ESC + "[4m"
+}
+
+fn _tag_code(tag)
+  if tag == "/" or tag == "reset"
+    return ANSI.reset
+  codes = {}
+  token = ""
+  i = 1
+  for ch in tag
+    if ch == "+" or ch == "," or ch == "|" or ch == " "
+      if #token > 0
+        code = ANSI[token]
+        if code == nil return nil
+        codes[#codes + 1] = code
+        token = ""
+    else
+      token = token + ch
+
+  if #token > 0
+    code = ANSI[token]
+    if code == nil return nil
+    codes[#codes + 1] = code
+
+  if #codes == 0
+    return nil
+  return table.concat(codes, "")
+
+fn _format(text)
+  if text == nil return ""
+  if type(text) != "string"
+    text = str(text)
+
+  out = {}
+  used_color = false
+  i = 1
+  while i <= #text
+    consumed = false
+    c = text[i]
+    if c == "["
+      -- Escape: [[ => literal [
+      if i < #text and text[i + 1] == "["
+        out[#out + 1] = "["
+        i = i + 1
+        consumed = true
+
+      close_i = string.find(text, "]", i + 1)
+      if close_i != nil and close_i > i
+        tag = string.sub(text, i + 1, close_i - 1)
+        code = _tag_code(tag)
+        if code != nil
+          out[#out + 1] = code
+          used_color = true
+          i = close_i
+          consumed = true
+
+    if not consumed
+      out[#out + 1] = c
+    i = i + 1
+
+  if used_color
+    out[#out + 1] = ANSI.reset
+  return table.concat(out, "")
+
+fn printc(text)
+  print _format(text)
+
+fn coerce_arg(raw, p)
+  t = p.type
+  if t == nil or t == "any"
+    return raw
+  if t == "table"
+    error("CLI does not support table parameter parsing yet")
+
+  type_def = types.from_hint(t)
+  if type_def == nil
+    return raw
+  return types.coerce(type_def, raw)
+
+fn usage_for(name, cmd)
+  parts = {}
+  parts[#parts + 1] = name + " " + cmd.name
+  for p in cmd.sig.params
+    label = p.name == nil ? ("arg" + str(p.index)) : p.name
+    if p.variadic
+      parts[#parts + 1] = "[" + label + " ...]"
+    elif p.has_default
+      parts[#parts + 1] = "[" + label + "]"
+    else
+      parts[#parts + 1] = "<" + label + ">"
+  return table.concat(parts, " ")
+
+App = {}
+App.__index = App
+
+fn app_new(cls, opts = nil)
+  if type(opts) != "table" opts = {}
+  app = {
+    name = opts.name == nil ? "app" : opts.name,
+    commands = {},
+    order = {}
+  }
+  setmetatable(app, App)
+  return app
+
+AppMeta = {}
+AppMeta.__call = app_new
+setmetatable(App, AppMeta)
+
+fn register_command(self, name, fn_)
+  sig = inspect.signature(fn_)
+  cmd = {
+    name = name,
+    fn_ = fn_,
+    sig = sig
+  }
+  self.commands[name] = cmd
+  self.order[#self.order + 1] = name
+
+fn command(self, name = nil)
+  if type(name) == "function"
+    sig = inspect.signature(name)
+    cmd_name = sig.name == nil ? "cmd" : sig.name
+    register_command(self, cmd_name, name)
+    return name
+
+  return fn(fn_)
+    sig = inspect.signature(fn_)
+    cmd_name = name
+    if cmd_name == nil
+      cmd_name = sig.name == nil ? "cmd" : sig.name
+    register_command(self, cmd_name, fn_)
+    return fn_
+App.command = command
+
+fn help(self)
+  lines = {}
+  lines[#lines + 1] = "Usage: " + self.name + " <command> [args]"
+  lines[#lines + 1] = "Commands:"
+  for name in self.order
+    cmd = self.commands[name]
+    lines[#lines + 1] = "  " + usage_for(self.name, cmd)
+  return table.concat(lines, "\n")
+App.help = help
+
+fn build_args(cmd, raw_args)
+  params = cmd.sig.params
+  args = {}
+  param_count = #params
+
+  variadic = false
+  required = 0
+  if param_count > 0 and params[param_count].variadic
+    variadic = true
+
+  for i, p in params
+    if p.variadic
+      break
+    if not p.has_default
+      required = required + 1
+
+  min_needed = required
+  max_allowed = variadic ? nil : param_count
+
+  if #raw_args < min_needed
+    error("Not enough arguments for '" + cmd.name + "'")
+  if max_allowed != nil and #raw_args > max_allowed
+    error("Too many arguments for '" + cmd.name + "'")
+
+  fixed_count = variadic ? (param_count - 1) : param_count
+
+  i = 1
+  while i <= fixed_count
+    p = params[i]
+    if i <= #raw_args
+      args[#args + 1] = coerce_arg(raw_args[i], p)
+    elif p.has_default
+      -- Omit trailing defaults; function call will apply defaults.
+      break
+    else
+      error("Missing required argument '" + p.name + "'")
+    i = i + 1
+
+  if variadic
+    j = fixed_count + 1
+    while j <= #raw_args
+      args[#args + 1] = raw_args[j]
+      j = j + 1
+
+  return args
+
+fn run(self, argv = nil)
+  args = argv
+  if args == nil
+    args = os.argv
+
+  if args == nil or #args == 0
+    print self.help()
+    return nil
+
+  cmd_name = args[1]
+  if cmd_name == "-h" or cmd_name == "--help"
+    print self.help()
+    return nil
+
+  cmd = self.commands[cmd_name]
+  if cmd == nil
+    error("Unknown command: " + str(cmd_name))
+
+  raw = {}
+  for i in 2..#args
+    raw[#raw + 1] = args[i]
+
+  parsed = build_args(cmd, raw)
+  return cmd.fn_(*parsed)
+App.run = run
+
+return {
+  App = App,
+  _format = _format,
+  printc = printc
+}

@@ -2,6 +2,14 @@ from lib.types import *
 
 print "== types: validate + coerce =="
 
+fn expect_error(fn_)
+  msg = nil
+  try
+    fn_()
+  except e
+    msg = e
+  return msg
+
 User = Record {
   id = Union(Integer, String),
   role = Literal("admin", "staff", "member"),
@@ -21,52 +29,47 @@ raw_ok = {
 }
 
 -- Strict validation (no coercion): expected to fail.
-local ok1, err1, out1 = validate(User, raw_ok)
-print "strict ok = "
-print ok1
+err1 = expect_error(fn()
+  validate(User, raw_ok)
+)
+print "strict ok = false"
 print "strict err = "
 print err1
 
 -- Coercing validation: expected to pass and return normalized data.
-local ok2, err2, normalized = coerce(User, raw_ok)
-print "coerce ok = "
-print ok2
-if not ok2
-  print "coerce err = "
-  print err2
-else
-  user = User {
-    id = normalized.id,
-    role = normalized.role,
-    age = normalized.age,
-    active = normalized.active,
-    scores = normalized.scores,
-    nick = normalized.nick
-  }
-  local ok_self, err_self = user.check()
-  print "instance check ok = "
-  print ok_self
+normalized = coerce(User, raw_ok)
+print "coerce ok = true"
+user = User {
+  id = normalized.id,
+  role = normalized.role,
+  age = normalized.age,
+  active = normalized.active,
+  scores = normalized.scores,
+  nick = normalized.nick
+}
+self_checked = user.check()
+print "instance check ok = true"
 
-  print "id type:"
-  print type(user.id)
-  print "id value:"
-  print user.id
-  print "age type:"
-  print type(user.age)
-  print "age value:"
-  print user.age
-  print "active type:"
-  print type(user.active)
-  print "active value:"
-  print user.active
-  print "nick type:"
-  print type(user.nick)
-  print "nick value:"
-  print user.nick
-  print "score[1] type:"
-  print type(user.scores[1])
-  print "score[1] value:"
-  print user.scores[1]
+print "id type:"
+print type(self_checked.id)
+print "id value:"
+print self_checked.id
+print "age type:"
+print type(self_checked.age)
+print "age value:"
+print self_checked.age
+print "active type:"
+print type(self_checked.active)
+print "active value:"
+print self_checked.active
+print "nick type:"
+print type(self_checked.nick)
+print "nick value:"
+print self_checked.nick
+print "score[1] type:"
+print type(self_checked.scores[1])
+print "score[1] value:"
+print self_checked.scores[1]
 
 bad = {
   id = 1,
@@ -76,8 +79,9 @@ bad = {
   scores = {"ok"}         -- not coercible to number
 }
 
-local ok3, err3, out3 = coerce(User, bad)
-print "bad coerce ok = "
-print ok3
+err3 = expect_error(fn()
+  coerce(User, bad)
+)
+print "bad coerce ok = false"
 print "bad error = " -- path-aware, e.g. at $.role: ...
 print err3
