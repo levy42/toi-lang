@@ -1,0 +1,49 @@
+<idea-plugin>
+    <id>dev.pua.pycharm</id>
+    <name>Pua Language</name>
+    <vendor email="devnull@pua.dev" url="https://example.com">Pua</vendor>
+    <description><![CDATA[
+        Language support for Pua: file type, syntax highlighting, comments, brace matching, completion,
+        and basic formatting/code style.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.python</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType
+                name="Pua"
+                language="Pua"
+                implementationClass="dev.pua.idea.PuaFileType"
+                fieldName="INSTANCE"
+                extensions="pua"
+                description="Pua source file"/>
+
+        <lang.parserDefinition
+                language="Pua"
+                implementationClass="dev.pua.idea.PuaParserDefinition"/>
+
+        <lang.syntaxHighlighterFactory
+                language="Pua"
+                implementationClass="dev.pua.idea.PuaSyntaxHighlighterFactory"/>
+
+        <lang.braceMatcher
+                language="Pua"
+                implementationClass="dev.pua.idea.PuaBraceMatcher"/>
+
+        <lang.commenter
+                language="Pua"
+                implementationClass="dev.pua.idea.PuaCommenter"/>
+
+        <lang.formatter
+                language="Pua"
+                implementationClass="dev.pua.idea.PuaFormattingModelBuilder"/>
+
+        <completion.contributor
+                language="Pua"
+                implementationClass="dev.pua.idea.PuaCompletionContributor"/>
+
+        <codeStyleSettingsProvider
+                implementation="dev.pua.idea.PuaCodeStyleSettingsProvider"/>
+    </extensions>
+</idea-plugin>
