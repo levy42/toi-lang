@@ -34,6 +34,123 @@
 #define OUTPUT_TABLE    "\033[34m"  // Blue
 
 static void highlightLine(const char* line, char* output, size_t outputSize);
+static VM* replVMForCompletion = NULL;
+enum { REPL_COMPLETION_MAX = 7 };
+
+typedef struct {
+    const char* word;
+    int length;
+} CompletionWord;
+
+static int isIdentifierStartChar(char c) {
+    return (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z') ||
+           c == '_';
+}
+
+static int isIdentifierChar(char c) {
+    return isIdentifierStartChar(c) || (c >= '0' && c <= '9');
+}
+
+static int isValidIdentifier(const char* s, int length) {
+    if (length <= 0 || !isIdentifierStartChar(s[0])) return 0;
+    for (int i = 1; i < length; i++) {
+        if (!isIdentifierChar(s[i])) return 0;
+    }
+    return 1;
+}
+
+static int startsWith(const char* s, int slen, const char* prefix, int plen) {
+    if (plen > slen) return 0;
+    return memcmp(s, prefix, (size_t)plen) == 0;
+}
+
+static int completionExists(linenoiseCompletions *lc, const char* candidate) {
+    for (size_t i = 0; i < lc->len; i++) {
+        if (strcmp(lc->cvec[i], candidate) == 0) return 1;
+    }
+    return 0;
+}
+
+static void addCompletionCandidate(const char *buf, int replaceStart, const char* replacement,
+                                   linenoiseCompletions *lc) {
+    if ((int)lc->len >= REPL_COMPLETION_MAX) return;
+
+    int prefixLen = replaceStart;
+    int replacementLen = (int)strlen(replacement);
+    int outLen = prefixLen + replacementLen;
+    char* candidate = (char*)malloc((size_t)outLen + 1);
+    if (candidate == NULL) return;
+
+    memcpy(candidate, buf, (size_t)prefixLen);
+    memcpy(candidate + prefixLen, replacement, (size_t)replacementLen);
+    candidate[outLen] = '\0';
+
+    if (!completionExists(lc, candidate)) {
+        linenoiseAddCompletion(lc, candidate);
+    }
+    free(candidate);
+}
+
+static void addIdentifierMatches(const char *buf, int replaceStart, const char* prefix, int prefixLen,
+                                 linenoiseCompletions *lc, const CompletionWord* words) {
+    for (int i = 0; words[i].word != NULL && (int)lc->len < REPL_COMPLETION_MAX; i++) {
+        if (startsWith(words[i].word, words[i].length, prefix, prefixLen)) {
+            addCompletionCandidate(buf, replaceStart, words[i].word, lc);
+        }
+    }
+}
+
+static void addGlobalsMatches(const char *buf, int replaceStart, const char* prefix, int prefixLen,
+                              linenoiseCompletions *lc) {
+    if (replVMForCompletion == NULL) return;
+    Table* globals = &replVMForCompletion->globals;
+
+    for (int i = 0; i < globals->capacity && (int)lc->len < REPL_COMPLETION_MAX; i++) {
+        Entry* entry = &globals->entries[i];
+        if (entry->key == NULL || IS_NIL(entry->value)) continue;
+
+        ObjString* key = entry->key;
+        if (!isValidIdentifier(key->chars, key->length)) continue;
+        if (!startsWith(key->chars, key->length, prefix, prefixLen)) continue;
+        addCompletionCandidate(buf, replaceStart, key->chars, lc);
+    }
+}
+
+static void addTableMemberMatches(const char *buf, int memberStart, const char* prefix, int prefixLen,
+                                  ObjTable* table, linenoiseCompletions *lc) {
+    for (int i = 0; i < table->table.capacity && (int)lc->len < REPL_COMPLETION_MAX; i++) {
+        Entry* entry = &table->table.entries[i];
+        if (entry->key == NULL || IS_NIL(entry->value)) continue;
+
+        ObjString* key = entry->key;
+        if (!isValidIdentifier(key->chars, key->length)) continue;
+        if (!startsWith(key->chars, key->length, prefix, prefixLen)) continue;
+        addCompletionCandidate(buf, memberStart, key->chars, lc);
+    }
+}
+
+static int extractMemberContext(const char *buf, int len, int* outBaseStart, int* outBaseLen,
+                                int* outMemberStart, int* outMemberLen) {
+    int i = len - 1;
+    while (i >= 0 && isIdentifierChar(buf[i])) i--;
+    if (i < 0 || buf[i] != '.') return 0;
+
+    int memberStart = i + 1;
+    int memberLen = len - memberStart;
+    int baseEnd = i;
+    i--;
+    while (i >= 0 && isIdentifierChar(buf[i])) i--;
+    int baseStart = i + 1;
+    int baseLen = baseEnd - baseStart;
+    if (baseLen <= 0 || !isValidIdentifier(buf + baseStart, baseLen)) return 0;
+
+    *outBaseStart = baseStart;
+    *outBaseLen = baseLen;
+    *outMemberStart = memberStart;
+    *outMemberLen = memberLen;
+    return 1;
+}
 
 static void formatNumber(double value, char* out, size_t outSize) {
     snprintf(out, outSize, "%.6f", value);
@@ -301,45 +418,72 @@ static void syntaxHighlightCallback(const char *buf, char *highlighted, size_t m
 
 // Linenoise completion callback for keyword/function completion
 static void completionCallback(const char *buf, linenoiseCompletions *lc) {
-    // Add keyword completions
-    if (strncmp(buf, "f", 1) == 0) {
-        linenoiseAddCompletion(lc, "fn");
-        linenoiseAddCompletion(lc, "for");
-        linenoiseAddCompletion(lc, "false");
+    static const CompletionWord keywords[] = {
+        {"fn", 2},
+        {"for", 3},
+        {"false", 5},
+        {"if", 2},
+        {"in", 2},
+        {"import", 6},
+        {"local", 5},
+        {"return", 6},
+        {"while", 5},
+        {"true", 4},
+        {"nil", 3},
+        {"print", 5},
+        {"break", 5},
+        {"continue", 8},
+        {"else", 4},
+        {"elif", 4},
+        {NULL, 0}
+    };
+
+    int len = (int)strlen(buf);
+
+    int baseStart = 0, baseLen = 0, memberStart = 0, memberLen = 0;
+    if (extractMemberContext(buf, len, &baseStart, &baseLen, &memberStart, &memberLen)) {
+        if (replVMForCompletion == NULL) return;
+
+        char baseName[128];
+        if (baseLen >= (int)sizeof(baseName)) return;
+        memcpy(baseName, buf + baseStart, (size_t)baseLen);
+        baseName[baseLen] = '\0';
+
+        ObjString* baseKey = copyString(baseName, baseLen);
+        Value baseVal = NIL_VAL;
+        if (!tableGet(&replVMForCompletion->globals, baseKey, &baseVal)) return;
+
+        if (IS_TABLE(baseVal)) {
+            addTableMemberMatches(buf, memberStart, buf + memberStart, memberLen, AS_TABLE(baseVal), lc);
+            return;
+        }
+
+        if (IS_USERDATA(baseVal)) {
+            ObjUserdata* udata = AS_USERDATA(baseVal);
+            if (udata->metatable != NULL) {
+                addTableMemberMatches(buf, memberStart, buf + memberStart, memberLen, udata->metatable, lc);
+            }
+            return;
+        }
+        return;
     }
-    if (strncmp(buf, "i", 1) == 0) {
-        linenoiseAddCompletion(lc, "if");
-        linenoiseAddCompletion(lc, "in");
-        linenoiseAddCompletion(lc, "import");
-    }
-    if (strncmp(buf, "l", 1) == 0) {
-        linenoiseAddCompletion(lc, "local");
-    }
-    if (strncmp(buf, "r", 1) == 0) {
-        linenoiseAddCompletion(lc, "return");
-    }
-    if (strncmp(buf, "w", 1) == 0) {
-        linenoiseAddCompletion(lc, "while");
-    }
-    if (strncmp(buf, "t", 1) == 0) {
-        linenoiseAddCompletion(lc, "true");
-    }
-    if (strncmp(buf, "n", 1) == 0) {
-        linenoiseAddCompletion(lc, "nil");
-    }
-    if (strncmp(buf, "p", 1) == 0) {
-        linenoiseAddCompletion(lc, "print");
-    }
-    if (strncmp(buf, "b", 1) == 0) {
-        linenoiseAddCompletion(lc, "break");
-    }
-    if (strncmp(buf, "c", 1) == 0) {
-        linenoiseAddCompletion(lc, "continue");
-    }
-    if (strncmp(buf, "e", 1) == 0) {
-        linenoiseAddCompletion(lc, "else");
-        linenoiseAddCompletion(lc, "elif");
-    }
+
+    int start = len;
+    while (start > 0 && isIdentifierChar(buf[start - 1])) start--;
+    if (start < len && !isIdentifierStartChar(buf[start])) return;
+
+    const char* prefix = buf + start;
+    int prefixLen = len - start;
+    addIdentifierMatches(buf, start, prefix, prefixLen, lc, keywords);
+    addGlobalsMatches(buf, start, prefix, prefixLen, lc);
+}
+
+static void initCompletionState(VM* vm) {
+    replVMForCompletion = vm;
+}
+
+static void clearCompletionState(void) {
+    replVMForCompletion = NULL;
 }
 
 // Linenoise hints callback - shows syntax-highlighted hint after cursor
@@ -365,7 +509,7 @@ static int isInputComplete(const char* input) {
 
     for (;;) {
         Token token = scanToken(&lexer);
-        
+
         if (token.type == TOKEN_EOF) break;
         // If we hit an error (like unterminated string), it's incomplete
         if (token.type == TOKEN_ERROR) return 0;
@@ -377,7 +521,7 @@ static int isInputComplete(const char* input) {
             case TOKEN_RIGHT_PAREN: parenDepth--; break;
             case TOKEN_LEFT_BRACKET: bracketDepth++; break;
             case TOKEN_RIGHT_BRACKET: bracketDepth--; break;
-            
+
             case TOKEN_IF:
             case TOKEN_WHILE:
             case TOKEN_FOR:
@@ -406,7 +550,7 @@ static int isInputComplete(const char* input) {
         lastType == TOKEN_EQUALS || lastType == TOKEN_COLON) {
         return 0;
     }
-    
+
     // If control flow keywords are present, assume incomplete until explicit empty line
     if (hasControlFlow) return 0;
 
@@ -421,10 +565,11 @@ static void handleSigint(int sig) {
 void startREPL(void) {
     VM vm;
     initVM(&vm);
+    initCompletionState(&vm);
     vm.disableGC = 1;  // Disable GC in REPL to keep all objects alive
     vm.isREPL = 1;     // Enable REPL mode
 
-    printf("%s𝗣𝗨𝗔 %s%s\n", COLOR_KEYWORD, VERSION, COLOR_RESET);
+    printf("%sPUA %s%s\n", COLOR_KEYWORD, VERSION, COLOR_RESET);
 
     // Configure linenoise
     linenoiseSetMultiLine(1);  // Enable multi-line editing
@@ -530,5 +675,6 @@ void startREPL(void) {
     // linenoiseHistorySave(".mylang_history");
 
     printf("\n");
+    clearCompletionState();
     freeVM(&vm);
 }

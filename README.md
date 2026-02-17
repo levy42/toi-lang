@@ -111,6 +111,7 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 - `io`: open, read/write, close (file operations)
 - `os`: getenv, rename, remove, system, clock
 - `json`: encode/decode
+- `binary`: `pack(value)` / `unpack(bytes)`
 - `socket`: tcp, select, send/recv
 - `coroutine`: create, resume, status, yield
 - `thread`: threads and scheduling helpers

@@ -19,6 +19,7 @@ void registerJSON(VM* vm);
 void registerTemplate(VM* vm);
 void registerHTTP(VM* vm);
 void registerInspect(VM* vm);
+void registerBinary(VM* vm);
 
 static int loadRegisteredModule(VM* vm, const char* name, void (*registerFn)(VM*)) {
     registerFn(vm);
@@ -51,6 +52,7 @@ static int loadJSON(VM* vm) { return loadRegisteredModule(vm, "json", registerJS
 static int loadTemplate(VM* vm) { return loadRegisteredModule(vm, "template", registerTemplate); }
 static int loadHTTP(VM* vm) { return loadRegisteredModule(vm, "http", registerHTTP); }
 static int loadInspect(VM* vm) { return loadRegisteredModule(vm, "inspect", registerInspect); }
+static int loadBinary(VM* vm) { return loadRegisteredModule(vm, "binary", registerBinary); }
 
 // Native module registry - modules that can be imported on demand
 static const ModuleReg nativeModules[] = {
@@ -67,6 +69,7 @@ static const ModuleReg nativeModules[] = {
     {"template", loadTemplate},
     {"http", loadHTTP},
     {"inspect", loadInspect},
+    {"binary", loadBinary},
     {NULL, NULL}  // Sentinel
 };
 

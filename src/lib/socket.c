@@ -611,6 +611,12 @@ void registerSocket(VM* vm) {
     pop(vm);
     pop(vm);
 
+    push(vm, OBJ_VAL(copyString("__name", 6)));
+    push(vm, OBJ_VAL(copyString("socket.socket", 13)));
+    tableSet(&socketMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
     // Store metatable in socket._socket_mt
     push(vm, OBJ_VAL(copyString("_socket_mt", 10)));
     push(vm, OBJ_VAL(socketMT));

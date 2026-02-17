@@ -249,6 +249,35 @@ Value pop(VM* vm) {
 static void concatenate(VM* vm);
 static int isFalsey(Value v);
 static Value getMetamethodCached(VM* vm, Value val, ObjString* name);
+static int callNamed(VM* vm, ObjClosure* closure, int argCount);
+
+static int finishClosureCall(VM* vm, ObjClosure* closure, int argCount) {
+    ObjFunction* function = closure->function;
+
+    if (function->paramTypesCount > 0) {
+        int checkCount = function->paramTypesCount < function->arity ? function->paramTypesCount : function->arity;
+        Value* args = vm->currentThread->stackTop - argCount;
+        for (int i = 0; i < checkCount; i++) {
+            uint8_t type = function->paramTypes[i];
+            if (type == TYPEHINT_ANY) continue;
+            if (!valueMatchesType(args[i], type)) {
+                vmRuntimeError(vm, "Type mismatch for parameter %d.", i + 1);
+                return 0;
+            }
+        }
+    }
+
+    if (vm->currentThread->frameCount == FRAMES_MAX) {
+        vmRuntimeError(vm, "Stack overflow.");
+        return 0;
+    }
+
+    CallFrame* frame = &vm->currentThread->frames[vm->currentThread->frameCount++];
+    frame->closure = closure;
+    frame->ip = function->chunk.code;
+    frame->slots = vm->currentThread->stackTop - argCount - 1;
+    return 1;
+}
 
 static int callValue(VM* vm, Value callee, int argCount, CallFrame** frame, uint8_t** ip) {
     if (IS_NATIVE(callee)) {
@@ -324,6 +353,71 @@ static int invokeCallWithArgCount(VM* vm, int argCount, CallFrame** frame, uint8
             argCount++;
             if (!callValue(vm, mm, argCount, frame, ip)) {
                 return 0;
+            }
+            return 1;
+        }
+    }
+
+    vmRuntimeError(vm, "Can only call functions.");
+    return 0;
+}
+
+static int invokeCallWithNamedArgCount(VM* vm, int argCount, CallFrame** frame, uint8_t** ip) {
+    Value callee = peek(vm, argCount);
+    if (IS_BOUND_METHOD(callee)) {
+        ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
+        Value methodVal = OBJ_VAL(bound->method);
+
+        for (int i = 0; i < argCount; i++) {
+            vm->currentThread->stackTop[0 - i] = vm->currentThread->stackTop[-1 - i];
+        }
+        vm->currentThread->stackTop[-argCount] = bound->receiver;
+        vm->currentThread->stackTop[-argCount - 1] = methodVal;
+        vm->currentThread->stackTop++;
+        argCount++;
+        callee = methodVal;
+    }
+
+    if (IS_NATIVE(callee)) {
+        if (!callValue(vm, callee, argCount, frame, ip)) {
+            return 0;
+        }
+        return 1;
+    }
+
+    if (IS_CLOSURE(callee)) {
+        (*frame)->ip = *ip;
+        if (!callNamed(vm, AS_CLOSURE(callee), argCount)) {
+            return 0;
+        }
+        *frame = &vm->currentThread->frames[vm->currentThread->frameCount - 1];
+        *ip = (*frame)->ip;
+        return 1;
+    }
+
+    if (IS_TABLE(callee)) {
+        Value mm = getMetamethodCached(vm, callee, vm->mm_call);
+        if (IS_CLOSURE(mm) || IS_NATIVE(mm)) {
+            for (int i = 0; i < argCount; i++) {
+                vm->currentThread->stackTop[0 - i] = vm->currentThread->stackTop[-1 - i];
+            }
+
+            vm->currentThread->stackTop[-argCount] = callee;
+            vm->currentThread->stackTop[-argCount - 1] = mm;
+            vm->currentThread->stackTop++;
+
+            argCount++;
+            if (IS_CLOSURE(mm)) {
+                (*frame)->ip = *ip;
+                if (!callNamed(vm, AS_CLOSURE(mm), argCount)) {
+                    return 0;
+                }
+                *frame = &vm->currentThread->frames[vm->currentThread->frameCount - 1];
+                *ip = (*frame)->ip;
+            } else {
+                if (!callValue(vm, mm, argCount, frame, ip)) {
+                    return 0;
+                }
             }
             return 1;
         }
@@ -475,12 +569,11 @@ int call(VM* vm, ObjClosure* closure, int argCount) {
         int extraArgs = argCount - requiredArgs;
         ObjTable* varargs = newTable();
 
-        // Pop extra args and put them in the table with numeric keys
+        // Pop extra args and put them in the varargs array part so
+        // call-spread (`fn(*args)`) can iterate them via tableGetArray.
         for (int i = 0; i < extraArgs; i++) {
             Value arg = vm->currentThread->stackTop[-extraArgs + i];
-            // Create numeric key (1-indexed like Lua)
-            ObjString* key = numberKeyString(i + 1);
-            tableSet(&varargs->table, key, arg);
+            tableSetArray(&varargs->table, i + 1, arg);
             #ifdef DEBUG_VARIADIC
             printf("Vararg[%d] = ", i + 1);
             printValue(arg);
@@ -524,29 +617,152 @@ int call(VM* vm, ObjClosure* closure, int argCount) {
         }
     }
 
-    if (function->paramTypesCount > 0) {
-        int checkCount = function->paramTypesCount < function->arity ? function->paramTypesCount : function->arity;
-        Value* args = vm->currentThread->stackTop - argCount;
-        for (int i = 0; i < checkCount; i++) {
-            uint8_t type = function->paramTypes[i];
-            if (type == TYPEHINT_ANY) continue;
-            if (!valueMatchesType(args[i], type)) {
-                vmRuntimeError(vm, "Type mismatch for parameter %d.", i + 1);
-                return 0;
-            }
+    return finishClosureCall(vm, closure, argCount);
+}
+
+static int findNamedParamIndex(ObjFunction* function, ObjString* key, int nonVariadicArity) {
+    if (function->paramNames == NULL) return -1;
+    int limit = function->paramNamesCount < nonVariadicArity ? function->paramNamesCount : nonVariadicArity;
+    for (int i = 0; i < limit; i++) {
+        ObjString* name = function->paramNames[i];
+        if (name == NULL) continue;
+        if (name == key) return i;
+        if (name->hash == key->hash &&
+            name->length == key->length &&
+            memcmp(name->chars, key->chars, name->length) == 0) {
+            return i;
         }
     }
+    return -1;
+}
 
-    if (vm->currentThread->frameCount == FRAMES_MAX) {
-        vmRuntimeError(vm, "Stack overflow.");
+static int isOptionsParamName(ObjString* name) {
+    if (name == NULL) return 0;
+    if (name->length == 4 && memcmp(name->chars, "opts", 4) == 0) return 1;
+    if (name->length == 7 && memcmp(name->chars, "options", 7) == 0) return 1;
+    if (name->length == 6 && memcmp(name->chars, "kwargs", 6) == 0) return 1;
+    return 0;
+}
+
+static int callNamed(VM* vm, ObjClosure* closure, int argCount) {
+    ObjFunction* function = closure->function;
+    if (argCount < 1) {
+        vmRuntimeError(vm, "Named call requires a named-arguments table.");
         return 0;
     }
 
-    CallFrame* frame = &vm->currentThread->frames[vm->currentThread->frameCount++];
-    frame->closure = closure;
-    frame->ip = function->chunk.code;
-    frame->slots = vm->currentThread->stackTop - argCount - 1;
-    return 1;
+    Value namedValue = vm->currentThread->stackTop[-1];
+    if (!IS_TABLE(namedValue)) {
+        vmRuntimeError(vm, "Named call requires a table as final argument.");
+        return 0;
+    }
+
+    ObjTable* namedArgs = AS_TABLE(namedValue);
+    int positionalCount = argCount - 1;
+    int nonVariadicArity = function->isVariadic ? (function->arity - 1) : function->arity;
+    if (nonVariadicArity < 0) nonVariadicArity = 0;
+
+    Value* incoming = vm->currentThread->stackTop - argCount;
+    Value boundArgs[256];
+    uint8_t assigned[256];
+    memset(assigned, 0, sizeof(assigned));
+
+    ObjTable* varargs = NULL;
+    int varargPos = 0;
+    if (function->isVariadic) {
+        varargs = newTable();
+    }
+    ObjTable* legacyOptions = NULL;
+    ObjString* firstUnexpected = NULL;
+
+    int positionalToBind = positionalCount < nonVariadicArity ? positionalCount : nonVariadicArity;
+    for (int i = 0; i < positionalToBind; i++) {
+        boundArgs[i] = incoming[i];
+        assigned[i] = 1;
+    }
+
+    if (positionalCount > nonVariadicArity) {
+        if (!function->isVariadic) {
+            vmRuntimeError(vm, "Expected %d arguments but got %d.", function->arity, positionalCount);
+            return 0;
+        }
+        for (int i = nonVariadicArity; i < positionalCount; i++) {
+            tableSetArray(&varargs->table, ++varargPos, incoming[i]);
+        }
+    }
+
+    for (int i = 0; i < namedArgs->table.capacity; i++) {
+        Entry* entry = &namedArgs->table.entries[i];
+        if (entry->key == NULL) continue;
+
+        int index = findNamedParamIndex(function, entry->key, nonVariadicArity);
+        if (index >= 0) {
+            if (assigned[index]) {
+                vmRuntimeError(vm, "Multiple values for argument '%s'.", entry->key->chars);
+                return 0;
+            }
+            boundArgs[index] = entry->value;
+            assigned[index] = 1;
+            continue;
+        }
+
+        if (function->isVariadic) {
+            tableSet(&varargs->table, entry->key, entry->value);
+            continue;
+        }
+
+        if (legacyOptions == NULL) {
+            legacyOptions = newTable();
+            firstUnexpected = entry->key;
+        }
+        tableSet(&legacyOptions->table, entry->key, entry->value);
+    }
+
+    if (legacyOptions != NULL) {
+        int target = -1;
+        for (int i = 0; i < nonVariadicArity; i++) {
+            if (assigned[i]) continue;
+            if (function->paramNames != NULL && i < function->paramNamesCount &&
+                isOptionsParamName(function->paramNames[i])) {
+                target = i;
+                break;
+            }
+        }
+        if (target >= 0) {
+            boundArgs[target] = OBJ_VAL(legacyOptions);
+            assigned[target] = 1;
+        } else {
+            vmRuntimeError(vm, "Unexpected named argument '%s'.", firstUnexpected->chars);
+            return 0;
+        }
+    }
+
+    int defaultStart = nonVariadicArity - function->defaultsCount;
+    for (int i = 0; i < nonVariadicArity; i++) {
+        if (assigned[i]) continue;
+        if (i >= defaultStart) {
+            boundArgs[i] = function->defaults[i - defaultStart];
+            assigned[i] = 1;
+            continue;
+        }
+        if (function->paramNames != NULL && i < function->paramNamesCount && function->paramNames[i] != NULL) {
+            vmRuntimeError(vm, "Missing required argument '%s'.", function->paramNames[i]->chars);
+        } else {
+            vmRuntimeError(vm, "Missing required argument %d.", i + 1);
+        }
+        return 0;
+    }
+
+    if (function->isVariadic) {
+        boundArgs[nonVariadicArity] = OBJ_VAL(varargs);
+    }
+
+    vm->currentThread->stackTop -= argCount;
+    for (int i = 0; i < function->arity; i++) {
+        push(vm, boundArgs[i]);
+    }
+
+    return finishClosureCall(vm, closure, function->arity);
 }
 
 static void markRoots(VM* vm) {
@@ -1529,6 +1745,13 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
                 }
                 break;
             }
+            case OP_CALL_NAMED: {
+                int argCount = READ_BYTE();
+                if (!invokeCallWithNamedArgCount(vm, argCount, &frame, &ip)) {
+                    goto runtime_error;
+                }
+                break;
+            }
             case OP_CALL_EXPAND: {
                 int fixedArgCount = READ_BYTE();
                 Value spread = peek(vm, 0);
@@ -1539,6 +1762,7 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
 
                 ObjTable* spreadTable = AS_TABLE(spread);
                 int spreadCount = 0;
+                int hasNamed = spreadTable->table.count > 0;
                 for (int i = 1; ; i++) {
                     Value val = NIL_VAL;
                     if (!tableGetArray(&spreadTable->table, i, &val) || IS_NIL(val)) {
@@ -1559,8 +1783,21 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
                 }
 
                 int argCount = fixedArgCount + spreadCount;
-                if (!invokeCallWithArgCount(vm, argCount, &frame, &ip)) {
-                    goto runtime_error;
+                if (hasNamed) {
+                    ObjTable* named = newTable();
+                    tableAddAll(&spreadTable->table, &named->table);
+                    push(vm, OBJ_VAL(named));
+                    if (argCount + 1 > 255) {
+                        vmRuntimeError(vm, "Can't have more than 255 arguments.");
+                        goto runtime_error;
+                    }
+                    if (!invokeCallWithNamedArgCount(vm, argCount + 1, &frame, &ip)) {
+                        goto runtime_error;
+                    }
+                } else {
+                    if (!invokeCallWithArgCount(vm, argCount, &frame, &ip)) {
+                        goto runtime_error;
+                    }
                 }
                 break;
             }

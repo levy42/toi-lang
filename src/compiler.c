@@ -2100,9 +2100,9 @@ static void multiAssignmentStatement(void) {
         emitConstant(NUMBER_VAL(i + 1));
         emitByte(OP_GET_TABLE);
         assignNameFromStack(targets[i], TYPEHINT_ANY);
-        if (!isREPLMode) {
-            emitByte(OP_POP);
-        }
+        // Always discard the assignment value in multi-assign to keep
+        // the temporary RHS table at the top for the next target.
+        emitByte(OP_POP);
     }
 
     // Pop temp table.
@@ -3167,6 +3167,8 @@ static void parseCall(int canAssign) {
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
     if (hasSpreadArg) {
         emitBytes(OP_CALL_EXPAND, argCount);
+    } else if (inNamedArgs) {
+        emitBytes(OP_CALL_NAMED, argCount);
     } else {
         emitBytes(OP_CALL, argCount);
     }

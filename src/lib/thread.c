@@ -545,6 +545,11 @@ void registerThread(VM* vm) {
     tableSet(&threadMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 
+    push(vm, OBJ_VAL(copyString("__name", 6)));
+    push(vm, OBJ_VAL(copyString("thread.handle", 13)));
+    tableSet(&threadMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm); pop(vm);
+
     push(vm, OBJ_VAL(copyString("_thread_mt", 10)));
     push(vm, OBJ_VAL(threadMT));
     tableSet(&threadModule->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
@@ -573,6 +578,11 @@ void registerThread(VM* vm) {
 
     push(vm, OBJ_VAL(copyString("__index", 7)));
     push(vm, OBJ_VAL(mutexMT));
+    tableSet(&mutexMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm); pop(vm);
+
+    push(vm, OBJ_VAL(copyString("__name", 6)));
+    push(vm, OBJ_VAL(copyString("thread.mutex", 12)));
     tableSet(&mutexMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 
@@ -605,6 +615,11 @@ void registerThread(VM* vm) {
 
     push(vm, OBJ_VAL(copyString("__index", 7)));
     push(vm, OBJ_VAL(channelMT));
+    tableSet(&channelMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm); pop(vm);
+
+    push(vm, OBJ_VAL(copyString("__name", 6)));
+    push(vm, OBJ_VAL(copyString("thread.channel", 14)));
     tableSet(&channelMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 

@@ -270,6 +270,35 @@ static void formatValue(VM* vm, Value val, StringBuilder* sb, int depth) {
         sbAppend(sb, "}", 1);
 
 
+    } else if (IS_USERDATA(val)) {
+        ObjUserdata* userdata = AS_USERDATA(val);
+        ObjString* typeName = NULL;
+        if (userdata->metatable != NULL) {
+            for (int i = 0; i < userdata->metatable->table.capacity; i++) {
+                Entry* entry = &userdata->metatable->table.entries[i];
+                if (entry->key == NULL || IS_NIL(entry->value)) continue;
+                if (entry->key->length == 6 &&
+                    memcmp(entry->key->chars, "__name", 6) == 0 &&
+                    IS_STRING(entry->value)) {
+                    typeName = AS_STRING(entry->value);
+                    break;
+                }
+            }
+        }
+
+        if (typeName != NULL) {
+            sbAppend(sb, "<", 1);
+            sbAppend(sb, typeName->chars, typeName->length);
+            if (userdata->data == NULL) {
+                sbAppend(sb, " closed>", 8);
+            } else {
+                sbAppend(sb, ">", 1);
+            }
+        } else if (userdata->data == NULL) {
+            sbAppend(sb, "<userdata closed>", 17);
+        } else {
+            sbAppend(sb, "<userdata>", 10);
+        }
     } else if (IS_NATIVE(val)) {
         ObjNative* native = (ObjNative*)AS_OBJ(val);
         if (native->name != NULL) {

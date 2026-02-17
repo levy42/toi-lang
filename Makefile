@@ -7,7 +7,7 @@ TIMEOUT := $(shell command -v gtimeout >/dev/null 2>&1 && echo gtimeout || echo 
 
 SRC = src/main.c src/lexer.c src/object.c src/table.c src/value.c src/chunk.c src/debug.c src/vm.c src/compiler.c src/opt.c src/repl.c src/linenoise.c \
       src/lib/math.c src/lib/time.c src/lib/io.c src/lib/os.c src/lib/coroutine.c src/lib/string.c src/lib/core.c src/lib/libs.c src/lib/table.c src/lib/socket.c src/lib/thread.c src/lib/json.c src/lib/template.c src/lib/http.c \
-      src/lib/inspect.c
+      src/lib/inspect.c src/lib/binary.c
 OBJ = $(SRC:.c=.o)
 TARGET =pua
 

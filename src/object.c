@@ -148,6 +148,20 @@ ObjBoundMethod* newBoundMethod(Value receiver, struct Obj* method) {
 
 static void printValueRec(Value value, int depth);
 
+static ObjString* metatableName(ObjTable* metatable) {
+    if (metatable == NULL) return NULL;
+    for (int i = 0; i < metatable->table.capacity; i++) {
+        Entry* entry = &metatable->table.entries[i];
+        if (entry->key == NULL || IS_NIL(entry->value)) continue;
+        if (entry->key->length == 6 &&
+            memcmp(entry->key->chars, "__name", 6) == 0 &&
+            IS_STRING(entry->value)) {
+            return AS_STRING(entry->value);
+        }
+    }
+    return NULL;
+}
+
 static void printTable(ObjTable* table, int depth) {
     if (depth > 5) {
         printf("...");
@@ -260,8 +274,21 @@ void printObject(Value value) {
             break;
 
         case OBJ_USERDATA:
-
-            printf("userdata");
+            {
+                ObjUserdata* userdata = AS_USERDATA(value);
+                ObjString* typeName = metatableName(userdata->metatable);
+                if (typeName != NULL) {
+                    if (userdata->data != NULL) {
+                        printf("<%s %p>", typeName->chars, userdata->data);
+                    } else {
+                        printf("<%s closed>", typeName->chars);
+                    }
+                } else if (userdata->data != NULL) {
+                    printf("<userdata %p>", userdata->data);
+                } else {
+                    printf("<userdata closed>");
+                }
+            }
 
             break;
 
