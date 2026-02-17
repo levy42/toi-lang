@@ -1,0 +1,4 @@
+name = "Pua"
+grammar = "pua"
+path_suffixes = ["pua"]
+line_comments = ["-- "]

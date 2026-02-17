@@ -1,0 +1,18 @@
+id = "pua"
+name = "Pua"
+version = "0.0.1"
+schema_version = 1
+authors = ["Levy"]
+description = "Pua language support"
+repository = "https://example.com/pua"
+themes = []
+icon_themes = ["icon_themes/pua-icons.json"]
+languages = ["languages/pua"]
+capabilities = []
+
+[lib]
+
+[grammars.pua]
+repository = "file:///Users/levy/Projects/pua"
+rev = "main"
+path = "editor/treesitter"

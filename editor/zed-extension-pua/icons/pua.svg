@@ -1,0 +1,17 @@
+<svg
+    xmlns="http://www.w3.org/2000/svg"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    style="isolation:isolate"
+    viewBox="-4 -4 28 28"
+    width="48"
+    height="48"
+>
+  <path
+        d="M10,3 m-2,2 l-6,6 8,8 M14,3 l8,8 -6,6 m"
+        fill="none"
+        stroke="#d9f"
+        stroke-width="3.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+    />
+</svg>

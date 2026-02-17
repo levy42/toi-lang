@@ -1,0 +1,10 @@
+{
+  "name": "tree-sitter-pua",
+  "version": "0.0.1",
+  "description": "Tree-sitter grammar for the Pua language",
+  "main": "grammar.js",
+  "keywords": [
+    "tree-sitter",
+    "pua"
+  ]
+}
