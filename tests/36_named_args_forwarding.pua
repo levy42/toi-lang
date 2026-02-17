@@ -1,0 +1,59 @@
+fn assert_true(cond, msg = nil)
+  if not cond
+    error(msg == nil ? "assert_true failed" : msg)
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error(msg == nil ? "assert_eq failed" : msg)
+
+fn calc(a, b, c = 4, d = 5)
+  return a + b + c + d
+
+assert_eq(calc(1, 2), 12)
+assert_eq(calc(1, 2, c = 30), 38)
+assert_eq(calc(1, 2, d = 40, c = 3), 46)
+
+fn passthrough(fn_)
+  return fn(*args)
+    return fn_(*args)
+
+@passthrough
+fn decorated(arg1, arg2, arg3 = 4, arg4 = 5)
+  return arg1 + arg2 + arg3 + arg4
+
+assert_eq(decorated(1, 2, arg4 = 9), 16)
+
+fn capture(fn_)
+  return fn(*args)
+    assert_eq(args[1], 1)
+    assert_eq(args[2], 2)
+    assert_eq(args.arg3, 30)
+    return fn_(*args)
+
+@capture
+fn via_wrapper(arg1, arg2, arg3 = 4, arg4 = 5)
+  return arg1 + arg2 + arg3 + arg4
+
+assert_eq(via_wrapper(1, 2, arg3 = 30), 38)
+
+spread_mix = {1, 2, c = 7, d = 8}
+assert_eq(calc(*spread_mix), 18)
+
+fn pack(*args)
+  return args
+
+packed = pack(1, 2, a = 3, b = 4)
+assert_eq(packed[1], 1)
+assert_eq(packed[2], 2)
+assert_eq(packed.a, 3)
+assert_eq(packed.b, 4)
+
+caught = false
+try
+  calc(1, 2, nope = 9)
+except e
+  caught = true
+  assert_true(e has "Unexpected named argument")
+assert_true(caught)
+
+print "named forwarding ok"

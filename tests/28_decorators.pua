@@ -10,6 +10,10 @@ fn plus_one(fn_)
   return fn(x)
     return fn_(x) + 1
 
+fn passthrough(fn_)
+  return fn(*args)
+    return fn_(*args)
+
 fn times(n)
   return fn(fn_)
     return fn(x)
@@ -42,5 +46,11 @@ fn greet(name)
   return name
 
 assert_eq(greet("bob"), "hi bob")
+
+@passthrough
+fn echo(name)
+  return name
+
+assert_eq(echo("alice"), "alice")
 
 print "decorators ok"

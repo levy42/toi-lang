@@ -1,0 +1,47 @@
+binary = import binary
+
+fn assert_true(cond, msg = nil)
+  if not cond
+    error(msg == nil ? "assert_true failed" : msg)
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error(msg == nil ? "assert_eq failed" : msg)
+
+assert_true(binary.unpack(binary.pack(nil)) == nil)
+assert_true(binary.unpack(binary.pack(true)) == true)
+assert_true(binary.unpack(binary.pack(false)) == false)
+assert_eq(binary.unpack(binary.pack(12.5)), 12.5)
+assert_eq(binary.unpack(binary.pack("hello")), "hello")
+
+payload = {
+  10,
+  20,
+  ok = true,
+  name = "pua",
+  score = 9.25,
+  nested = {x = 1, y = "z"},
+  skip_fn = fn() return 1
+}
+
+packed = binary.pack(payload)
+decoded = binary.unpack(packed)
+
+assert_eq(decoded[1], 10)
+assert_eq(decoded[2], 20)
+assert_true(decoded.ok == true)
+assert_eq(decoded.name, "pua")
+assert_eq(decoded.score, 9.25)
+assert_eq(decoded.nested.x, 1)
+assert_eq(decoded.nested.y, "z")
+assert_true(decoded.skip_fn == nil)
+
+caught = false
+try
+  binary.unpack(packed + "x")
+except e
+  caught = true
+  assert_true(e has "trailing data")
+assert_true(caught)
+
+print "binary ok"
