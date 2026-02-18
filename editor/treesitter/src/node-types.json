@@ -175,7 +175,23 @@
             "named": true
           }
         ]
-      },
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "elif_header",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "elif_header",
+    "named": true,
+    "fields": {
       "condition": {
         "multiple": false,
         "required": true,
@@ -202,6 +218,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "else_header",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -217,7 +243,23 @@
             "named": true
           }
         ]
-      },
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "except_header",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "except_header",
+    "named": true,
+    "fields": {
       "name": {
         "multiple": false,
         "required": false,
@@ -301,22 +343,22 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "finally_header",
+          "named": true
+        }
+      ]
     }
   },
   {
-    "type": "for_statement",
+    "type": "for_header",
     "named": true,
     "fields": {
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "block",
-            "named": true
-          }
-        ]
-      },
       "iterables": {
         "multiple": true,
         "required": true,
@@ -345,6 +387,32 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "for_statement",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "for_header",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -403,13 +471,29 @@
             "named": true
           }
         ]
-      },
-      "name": {
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "function_header",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "function_expression",
+    "named": true,
+    "fields": {
+      "body": {
         "multiple": false,
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "block",
             "named": true
           }
         ]
@@ -427,15 +511,15 @@
     }
   },
   {
-    "type": "function_expression",
+    "type": "function_header",
     "named": true,
     "fields": {
-      "body": {
+      "name": {
         "multiple": false,
         "required": true,
         "types": [
           {
-            "type": "block",
+            "type": "identifier",
             "named": true
           }
         ]
@@ -469,7 +553,7 @@
     }
   },
   {
-    "type": "if_statement",
+    "type": "if_header",
     "named": true,
     "fields": {
       "condition": {
@@ -481,7 +565,13 @@
             "named": true
           }
         ]
-      },
+      }
+    }
+  },
+  {
+    "type": "if_statement",
+    "named": true,
+    "fields": {
       "consequence": {
         "multiple": false,
         "required": true,
@@ -495,7 +585,7 @@
     },
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "elif_clause",
@@ -503,6 +593,10 @@
         },
         {
           "type": "else_clause",
+          "named": true
+        },
+        {
+          "type": "if_header",
           "named": true
         }
       ]
@@ -745,11 +839,39 @@
           "named": true
         },
         {
+          "type": "elif_header",
+          "named": true
+        },
+        {
+          "type": "else_header",
+          "named": true
+        },
+        {
+          "type": "except_header",
+          "named": true
+        },
+        {
           "type": "expression_statement",
           "named": true
         },
         {
+          "type": "finally_header",
+          "named": true
+        },
+        {
+          "type": "for_header",
+          "named": true
+        },
+        {
+          "type": "function_header",
+          "named": true
+        },
+        {
           "type": "gc_statement",
+          "named": true
+        },
+        {
+          "type": "if_header",
           "named": true
         },
         {
@@ -766,6 +888,18 @@
         },
         {
           "type": "throw_statement",
+          "named": true
+        },
+        {
+          "type": "try_header",
+          "named": true
+        },
+        {
+          "type": "while_header",
+          "named": true
+        },
+        {
+          "type": "with_header",
           "named": true
         },
         {
@@ -906,6 +1040,10 @@
         {
           "type": "finally_clause",
           "named": true
+        },
+        {
+          "type": "try_header",
+          "named": true
         }
       ]
     }
@@ -915,6 +1053,22 @@
     "named": true,
     "fields": {
       "argument": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "while_header",
+    "named": true,
+    "fields": {
+      "condition": {
         "multiple": false,
         "required": true,
         "types": [
@@ -939,8 +1093,34 @@
             "named": true
           }
         ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "while_header",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "with_header",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
       },
-      "condition": {
+      "value": {
         "multiple": false,
         "required": true,
         "types": [
@@ -965,27 +1145,17 @@
             "named": true
           }
         ]
-      },
-      "name": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "value": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "expression",
-            "named": true
-          }
-        ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "with_header",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -1142,8 +1312,8 @@
     "named": false
   },
   {
-    "type": "else",
-    "named": false
+    "type": "else_header",
+    "named": true
   },
   {
     "type": "except",
@@ -1162,8 +1332,8 @@
     "named": false
   },
   {
-    "type": "finally",
-    "named": false
+    "type": "finally_header",
+    "named": true
   },
   {
     "type": "fn",
@@ -1262,8 +1432,8 @@
     "named": false
   },
   {
-    "type": "try",
-    "named": false
+    "type": "try_header",
+    "named": true
   },
   {
     "type": "while",

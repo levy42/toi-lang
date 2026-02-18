@@ -29,6 +29,10 @@ module.exports = grammar({
   word: ($) => $.identifier,
 
   externals: ($) => [$.newline, $.indent, $.dedent],
+  conflicts: ($) => [
+    [$.if_statement],
+    [$.try_statement],
+  ],
 
   rules: {
     source_file: ($) => repeat(choice($._statement, $.newline)),
@@ -41,6 +45,16 @@ module.exports = grammar({
       seq(
         choice(
           $.decorator,
+          $.function_header,
+          $.if_header,
+          $.elif_header,
+          $.else_header,
+          $.while_header,
+          $.for_header,
+          $.with_header,
+          $.try_header,
+          $.except_header,
+          $.finally_header,
           $.return_statement,
           $.throw_statement,
           $.yield_statement,
@@ -67,42 +81,56 @@ module.exports = grammar({
     block: ($) => seq($.newline, $.indent, repeat(choice($._statement, $.newline)), $.dedent),
 
     function_definition: ($) =>
-      seq("fn", field("name", $.identifier), field("parameters", $.parameter_list), field("body", $.block)),
+      seq($.function_header, field("body", $.block)),
+    function_header: ($) =>
+      seq(
+        "fn",
+        field("name", $.identifier),
+        field("parameters", $.parameter_list),
+      ),
 
     if_statement: ($) =>
       seq(
-        "if",
-        field("condition", $.expression),
+        $.if_header,
         field("consequence", $.block),
         repeat($.elif_clause),
         optional($.else_clause),
       ),
-    elif_clause: ($) => seq("elif", field("condition", $.expression), field("body", $.block)),
-    else_clause: ($) => seq("else", field("body", $.block)),
+    if_header: ($) => seq("if", field("condition", $.expression)),
+    elif_clause: ($) => seq($.elif_header, field("body", $.block)),
+    elif_header: ($) => seq("elif", field("condition", $.expression)),
+    else_clause: ($) => seq($.else_header, field("body", $.block)),
+    else_header: (_) => "else",
 
-    while_statement: ($) => seq("while", field("condition", $.expression), field("body", $.block)),
+    while_statement: ($) =>
+      seq($.while_header, field("body", $.block)),
+    while_header: ($) => seq("while", field("condition", $.expression)),
 
     for_statement: ($) =>
+      seq(
+        $.for_header,
+        field("body", $.block),
+      ),
+    for_header: ($) =>
       seq(
         "for",
         field("variables", sepBy1(",", $.identifier)),
         "in",
         field("iterables", sepBy1(",", $.expression)),
-        field("body", $.block),
       ),
 
     with_statement: ($) =>
-      seq(
-        "with",
-        field("value", $.expression),
-        optional(seq("as", field("name", $.identifier))),
-        field("body", $.block),
-      ),
+      seq($.with_header, field("body", $.block)),
+    with_header: ($) =>
+      seq("with", field("value", $.expression), optional(seq("as", field("name", $.identifier)))),
 
     try_statement: ($) =>
-      seq("try", field("body", $.block), repeat1($.except_clause), optional($.finally_clause)),
-    except_clause: ($) => seq("except", optional(field("name", $.identifier)), field("body", $.block)),
-    finally_clause: ($) => seq("finally", field("body", $.block)),
+      seq($.try_header, field("body", $.block), repeat1($.except_clause), optional($.finally_clause)),
+    try_header: (_) => "try",
+    except_clause: ($) => seq($.except_header, field("body", $.block)),
+    except_header: ($) => seq("except", optional(field("name", $.identifier))),
+    finally_clause: ($) => seq($.finally_header, field("body", $.block)),
+    finally_header: (_) => "finally",
 
     parameter_list: ($) => seq("(", sepBy(",", $.parameter), ")"),
     parameter: ($) =>
