@@ -29,7 +29,24 @@
 (binary_expression "has" @keyword.operator)
 (unary_expression "not" @keyword.operator)
 
-(binary_expression) @operator
+
+(binary_expression "==" @operator)
+(binary_expression "!=" @operator)
+(binary_expression "<=" @operator)
+(binary_expression ">=" @operator)
+(binary_expression "<" @operator)
+(binary_expression ">" @operator)
+(binary_expression "+" @operator)
+(binary_expression "-" @operator)
+(binary_expression "*" @operator)
+(binary_expression "/" @operator)
+(binary_expression "//" @operator)
+(binary_expression "%" @operator)
+(binary_expression "**" @operator)
+(binary_expression ".." @operator)
+(binary_expression "<+" @operator)
+(unary_expression "-" @operator)
+(unary_expression "#" @operator)
 
 (decorator) @attribute
 
