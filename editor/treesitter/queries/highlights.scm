@@ -38,6 +38,11 @@
 (boolean) @constant.builtin.boolean
 (nil) @constant.builtin
 
+(identifier) @variable
+(import_expression module: (dotted_name (identifier) @module))
+(function_header name: (identifier) @function)
+(parameter name: (identifier) @variable.parameter)
+
 (identifier) @keyword.control
   (#match? @keyword.control "^(if|elif|else|while|for|in|break|continue|yield|with|as|try|except|finally)$")
 
@@ -47,10 +52,14 @@
 (identifier) @keyword.operator
   (#match? @keyword.operator "^(and|or|not|has)$")
 
-(identifier) @variable
-(import_expression module: (dotted_name (identifier) @module))
-(function_header name: (identifier) @function)
-(parameter name: (identifier) @variable.parameter)
+(ERROR (identifier) @keyword.control
+  (#match? @keyword.control "^(if|elif|else|while|for|in|break|continue|yield|with|as|try|except|finally)$"))
+
+(ERROR (identifier) @keyword
+  (#match? @keyword "^(fn|return|throw|import|print|gc|local|global|from|del)$"))
+
+(ERROR (identifier) @keyword.operator
+  (#match? @keyword.operator "^(and|or|not|has)$"))
 
 (number) @number
 (string) @string
