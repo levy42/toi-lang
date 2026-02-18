@@ -1,13 +1,13 @@
 (function_definition) @indent
-(if_header) @indent
-(elif_header) @indent
-(else_header) @indent
-(while_header) @indent
-(for_header) @indent
-(with_header) @indent
-(try_header) @indent
-(except_header) @indent
-(finally_header) @indent
+(if_statement) @indent
+(elif_clause) @indent
+(else_clause) @indent
+(while_statement) @indent
+(for_statement) @indent
+(with_statement) @indent
+(try_statement) @indent
+(except_clause) @indent
+(finally_clause) @indent
 
 (_ "[" "]" @end) @indent
 (_ "{" "}" @end) @indent

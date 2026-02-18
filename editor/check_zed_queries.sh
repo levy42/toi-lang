@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SAMPLE="$ROOT/test.pua"
 PTML_SAMPLE="$ROOT/examples/showcase.ptml"
-REV="main"
+REV="${ZED_GRAMMAR_REV:-WORKTREE}"
 
 TMP_DIR="$(mktemp -d /tmp/pua-zed-query-XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -20,10 +20,18 @@ prepare_grammar_from_rev() {
   local out_dir="$2"
   local fallback_dir="${3:-}"
   mkdir -p "$out_dir"
-  if git cat-file -e "$REV:$rel_path/grammar.js" 2>/dev/null; then
+  if [[ "$REV" != "WORKTREE" ]] && git cat-file -e "$REV:$rel_path/grammar.js" 2>/dev/null; then
     git show "$REV:$rel_path/grammar.js" > "$out_dir/grammar.js"
+    if git cat-file -e "$REV:$rel_path/src/scanner.c" 2>/dev/null; then
+      mkdir -p "$out_dir/src"
+      git show "$REV:$rel_path/src/scanner.c" > "$out_dir/src/scanner.c"
+    fi
   elif [[ -n "$fallback_dir" && -f "$fallback_dir/grammar.js" ]]; then
     cp "$fallback_dir/grammar.js" "$out_dir/grammar.js"
+    if [[ -f "$fallback_dir/src/scanner.c" ]]; then
+      mkdir -p "$out_dir/src"
+      cp "$fallback_dir/src/scanner.c" "$out_dir/src/scanner.c"
+    fi
   else
     echo "Missing grammar.js for $rel_path"
     return 1

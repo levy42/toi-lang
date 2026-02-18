@@ -1,15 +1,15 @@
 (comment) @comment
 
 [
-  (if_header)
-  (elif_header)
-  (else_header)
-  (while_header)
-  (for_header)
-  (with_header)
-  (try_header)
-  (except_header)
-  (finally_header)
+  (if_statement)
+  (elif_clause)
+  (else_clause)
+  (while_statement)
+  (for_statement)
+  (with_statement)
+  (try_statement)
+  (except_clause)
+  (finally_clause)
   (break_statement)
   (continue_statement)
   (yield_statement)
@@ -21,6 +21,8 @@
   (throw_statement)
   (import_expression)
   (function_expression)
+  (print_statement)
+  (gc_statement)
 ] @keyword
 
 (unary_expression) @keyword.operator
