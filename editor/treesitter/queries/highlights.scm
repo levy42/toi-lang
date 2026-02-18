@@ -1,30 +1,28 @@
 (comment) @comment
 
-[
-  (if_header)
-  (elif_header)
-  (else_header)
-  (while_header)
-  (for_header)
-  (with_header)
-  (try_header)
-  (except_header)
-  (finally_header)
-  (break_statement)
-  (continue_statement)
-  (yield_statement)
-] @keyword.control
+(if_header "if" @keyword.control)
+(elif_header "elif" @keyword.control)
+(else_header) @keyword.control
+(while_header "while" @keyword.control)
+(for_header "for" @keyword.control)
+(for_header "in" @keyword.control)
+(with_header "with" @keyword.control)
+(with_header "as" @keyword.control)
+(try_header) @keyword.control
+(except_header "except" @keyword.control)
+(finally_header) @keyword.control
 
-[
-  (function_header)
-  (function_definition)
-  (function_expression)
-  (return_statement)
-  (throw_statement)
-  (import_expression)
-  (print_statement)
-  (gc_statement)
-] @keyword
+(break_statement) @keyword.control
+(continue_statement) @keyword.control
+(yield_statement "yield" @keyword.control)
+
+(function_header "fn" @keyword)
+(function_expression "fn" @keyword)
+(return_statement "return" @keyword)
+(throw_statement "throw" @keyword)
+(import_expression "import" @keyword)
+(print_statement "print" @keyword)
+(gc_statement "gc" @keyword)
 
 (binary_expression "and" @keyword.operator)
 (binary_expression "or" @keyword.operator)
