@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ page.title }}</title>
+    <style>
+      body { font-family: sans-serif; margin: 2rem; }
+      .muted { color: #666; }
+      .active { font-weight: 700; color: #1264a3; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>{{ page.heading }}</h1>
+      {% if page.subtitle %}
+        <p class="muted">{{ page.subtitle }}</p>
+      {% endif %}
+    </header>
+
+    <main>
+      <ul>
+      {% for item in page.items %}
+        <li class="{{ item.active ? 'active' : '' }}">
+          <strong>{{ item.label }}</strong>
+          <span>{{ item.value }}</span>
+        </li>
+      {% endfor %}
+      </ul>
+    </main>
+
+    <footer>
+      <small>Generated at {{ page.generated_at }}</small>
+    </footer>
+  </body>
+</html>

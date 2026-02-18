@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{ __ctx.title }}</title>
+</head>
+<body>
+  <header>
+    <h1>{{ __ctx.title }}</h1>
+    <p>Generated for {{ __ctx.site_name }} by {{ __ctx.author }}</p>
+  </header>
+
+  {% set banner = "Template syntax demo" %}
+  <p>{{ banner }}</p>
+
+  {% if __ctx.mode == "admin" %}
+    <section>
+      <h2>Admin Dashboard</h2>
+      <p>Environment: {{ __ctx.env }}</p>
+      <p>Build: {{ __ctx.build_id }}</p>
+    </section>
+  {% elif __ctx.mode == "staff" %}
+    <section>
+      <h2>Staff Dashboard</h2>
+      <p>Team: {{ __ctx.team_name }}</p>
+    </section>
+  {% else %}
+    <section>
+      <h2>Public View</h2>
+      <p>Welcome, guest.</p>
+    </section>
+  {% endif %}
+
+  <section>
+    <h2>Users</h2>
+    <ul>
+      {% for user in __ctx.users %}
+        <li>
+          <strong>{{ user.name }}</strong>
+          {% if user.role == "admin" %}
+            <span>(admin)</span>
+          {% elif user.role == "staff" %}
+            <span>(staff)</span>
+          {% else %}
+            <span>(member)</span>
+          {% endif %}
+
+          <div>
+            <span>ID: {{ user.id }}</span>
+            <span>Email: {{ user.email }}</span>
+          </div>
+
+          <div>
+            <span>Projects:</span>
+            <ol>
+              {% for project in user.projects %}
+                <li>
+                  {{ project.name }}
+                  {% if project.active %}
+                    <em>active</em>
+                  {% else %}
+                    <em>inactive</em>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ol>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Metrics</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>Value</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for metric in __ctx.metrics %}
+          <tr>
+            <td>{{ metric.key }}</td>
+            <td>{{ metric.value }}</td>
+            <td>
+              {% if metric.value > metric.warn %}
+                warn
+              {% elif metric.value < metric.min %}
+                low
+              {% else %}
+                ok
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Feature Flags</h2>
+    <ul>
+      {% for flag in __ctx.flags %}
+        <li>
+          {{ flag.name }}:
+          {% if flag.enabled %}
+            enabled
+          {% else %}
+            disabled
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <footer>
+    <p>Generated at {{ __ctx.generated_at }}</p>
+    <p>Version {{ __ctx.version }}</p>
+  </footer>
+</body>
+</html>

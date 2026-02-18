@@ -11,7 +11,8 @@
         "expanded": "./icons/folder-open.svg"
       },
       "file_suffixes": {
-        "pua": "pua"
+        "pua": "pua",
+        "ptml": "pua"
       },
       "file_icons": {
         "pua": {
