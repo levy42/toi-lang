@@ -1,31 +1,35 @@
 (comment) @comment
 
+(if_statement "if" @keyword.control)
+(elif_clause "elif" @keyword.control)
+(else_clause "else" @keyword.control)
+(while_statement "while" @keyword.control)
+(for_statement "for" @keyword.control)
+(for_statement "in" @keyword.control)
+(with_statement "with" @keyword.control)
+(with_statement "as" @keyword.control)
+(try_statement "try" @keyword.control)
+(except_clause "except" @keyword.control)
+(finally_clause "finally" @keyword.control)
 [
-  (if_statement)
-  (elif_clause)
-  (else_clause)
-  (while_statement)
-  (for_statement)
-  (with_statement)
-  (try_statement)
-  (except_clause)
-  (finally_clause)
   (break_statement)
   (continue_statement)
   (yield_statement)
 ] @keyword.control
 
-[
-  (function_definition)
-  (return_statement)
-  (throw_statement)
-  (import_expression)
-  (function_expression)
-  (print_statement)
-  (gc_statement)
-] @keyword
+(function_definition "fn" @keyword)
+(function_expression "fn" @keyword)
+(return_statement "return" @keyword)
+(throw_statement "throw" @keyword)
+(import_expression "import" @keyword)
+(print_statement "print" @keyword)
+(gc_statement "gc" @keyword)
 
-(unary_expression) @keyword.operator
+(binary_expression "and" @keyword.operator)
+(binary_expression "or" @keyword.operator)
+(binary_expression "has" @keyword.operator)
+(unary_expression "not" @keyword.operator)
+
 (binary_expression) @operator
 
 (decorator) @attribute
