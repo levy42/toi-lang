@@ -1,49 +1,36 @@
 (comment) @comment
 
 [
-  "if"
-  "elif"
-  "else"
-  "while"
-  "for"
-  "in"
-  "break"
-  "continue"
-  "yield"
-  "with"
-  "as"
-  "try"
-  "except"
-  "finally"
+  (if_header)
+  (elif_header)
+  (else_header)
+  (while_header)
+  (for_header)
+  (with_header)
+  (try_header)
+  (except_header)
+  (finally_header)
+  (break_statement)
+  (continue_statement)
+  (yield_statement)
 ] @keyword.control
 
 [
-  "local"
-  "global"
-  "import"
-  "from"
-  "fn"
-  "return"
-  "del"
-  "throw"
-  "print"
-  "gc"
+  (function_definition)
+  (return_statement)
+  (throw_statement)
+  (import_expression)
+  (function_expression)
 ] @keyword
 
-[
-  "and"
-  "or"
-  "not"
-  "has"
-] @keyword.operator
+(unary_expression) @keyword.operator
+(binary_expression) @operator
 
 (decorator) @attribute
-(decorator "@" @attribute)
 
 (boolean) @constant.builtin.boolean
 (nil) @constant.builtin
 
-(builtin) @function.builtin
 (identifier) @variable
 (import_expression module: (dotted_name (identifier) @module))
 (function_definition name: (identifier) @function)
@@ -58,40 +45,3 @@
 (fstring_escape) @string.escape
 (fstring_interpolation "{" @punctuation.special)
 (fstring_interpolation "}" @punctuation.special)
-
-[
-  "+"
-  "-"
-  "*"
-  "/"
-  "%"
-  "//"
-  "**"
-  "="
-  "=="
-  "!="
-  "<"
-  ">"
-  "<="
-  ">="
-  ".."
-  "#"
-  "?"
-  "<+"
-] @operator
-
-[
-  "("
-  ")"
-  "["
-  "]"
-  "{"
-  "}"
-] @punctuation.bracket
-
-[
-  ","
-  "."
-  ":"
-  ";"
-] @punctuation.delimiter
