@@ -17,6 +17,37 @@
 (ERROR "with" @indent)
 (ERROR "except" @indent)
 
+((simple_statement
+   (function_header)
+   (newline) @end) @indent)
+((simple_statement
+   (if_header)
+   (newline) @end) @indent)
+((simple_statement
+   (elif_header)
+   (newline) @end) @indent)
+((simple_statement
+   (else_header)
+   (newline) @end) @indent)
+((simple_statement
+   (while_header)
+   (newline) @end) @indent)
+((simple_statement
+   (for_header)
+   (newline) @end) @indent)
+((simple_statement
+   (with_header)
+   (newline) @end) @indent)
+((simple_statement
+   (try_header)
+   (newline) @end) @indent)
+((simple_statement
+   (except_header)
+   (newline) @end) @indent)
+((simple_statement
+   (finally_header)
+   (newline) @end) @indent)
+
 (_ "[" "]" @end) @indent
 (_ "{" "}" @end) @indent
 (_ "(" ")" @end) @indent
