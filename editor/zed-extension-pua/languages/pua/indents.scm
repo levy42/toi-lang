@@ -9,6 +9,14 @@
 (except_header) @indent
 (finally_header) @indent
 
+(ERROR "fn" @indent)
+(ERROR "if" @indent)
+(ERROR "elif" @indent)
+(ERROR "while" @indent)
+(ERROR "for" @indent)
+(ERROR "with" @indent)
+(ERROR "except" @indent)
+
 (_ "[" "]" @end) @indent
 (_ "{" "}" @end) @indent
 (_ "(" ")" @end) @indent

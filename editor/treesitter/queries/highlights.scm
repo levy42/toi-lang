@@ -1,5 +1,27 @@
 (comment) @comment
 
+(ERROR "if" @keyword.control)
+(ERROR "elif" @keyword.control)
+(ERROR "while" @keyword.control)
+(ERROR "for" @keyword.control)
+(ERROR "in" @keyword.control)
+(ERROR "with" @keyword.control)
+(ERROR "as" @keyword.control)
+(ERROR "except" @keyword.control)
+(ERROR "yield" @keyword.control)
+
+(ERROR "fn" @keyword)
+(ERROR "return" @keyword)
+(ERROR "throw" @keyword)
+(ERROR "import" @keyword)
+(ERROR "print" @keyword)
+(ERROR "gc" @keyword)
+
+(ERROR "and" @keyword.operator)
+(ERROR "or" @keyword.operator)
+(ERROR "not" @keyword.operator)
+(ERROR "has" @keyword.operator)
+
 (if_header "if" @keyword.control)
 (elif_header "elif" @keyword.control)
 (else_header) @keyword.control
@@ -58,23 +80,7 @@
 (function_header name: (identifier) @function)
 (parameter name: (identifier) @variable.parameter)
 
-((identifier) @keyword.control
-  (#match? @keyword.control "^(if|elif|else|while|for|in|break|continue|yield|with|as|try|except|finally)$"))
 
-((identifier) @keyword
-  (#match? @keyword "^(fn|return|throw|import|print|gc|local|global|from|del)$"))
-
-((identifier) @keyword.operator
-  (#match? @keyword.operator "^(and|or|not|has)$"))
-
-(ERROR (identifier) @keyword.control
-  (#match? @keyword.control "^(if|elif|else|while|for|in|break|continue|yield|with|as|try|except|finally)$"))
-
-(ERROR (identifier) @keyword
-  (#match? @keyword "^(fn|return|throw|import|print|gc|local|global|from|del)$"))
-
-(ERROR (identifier) @keyword.operator
-  (#match? @keyword.operator "^(and|or|not|has)$"))
 
 (number) @number
 (string) @string
