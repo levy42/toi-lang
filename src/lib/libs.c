@@ -58,6 +58,7 @@ static int loadInspect(VM* vm) { return loadRegisteredModule(vm, "inspect", regi
 static int loadBinary(VM* vm) { return loadRegisteredModule(vm, "binary", registerBinary); }
 static int loadStruct(VM* vm) { return loadRegisteredModule(vm, "struct", registerStruct); }
 static int loadBTree(VM* vm) { return loadRegisteredModule(vm, "btree", registerBTree); }
+static int loadUuid(VM* vm) { return loadRegisteredModule(vm, "uuid", registerUuid); }
 
 // Native module registry - modules that can be imported on demand
 static const ModuleReg nativeModules[] = {
@@ -77,6 +78,7 @@ static const ModuleReg nativeModules[] = {
     {"binary", loadBinary},
     {"struct", loadStruct},
     {"btree", loadBTree},
+    {"uuid", loadUuid},
     {NULL, NULL}  // Sentinel
 };
 
