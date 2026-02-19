@@ -142,7 +142,8 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 ./editor/build_grammars.sh
 ```
 
-- Prototype language server is at `editor/lsp/pua_lsp.py` and supports:
+- Prototype language server is in the separate extension repo at
+  `/Users/levy/Projects/zed-extension-pua/lsp/pua_lsp.py` and supports:
   - completion (keywords + workspace symbols)
   - goto definition (cross-file in workspace)
   - document symbols
@@ -157,7 +158,7 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
     "pua-lsp": {
       "binary": {
         "path": "/usr/bin/env",
-        "arguments": ["python3", "/Users/levy/Projects/pua/editor/lsp/pua_lsp.py"]
+        "arguments": ["python3", "/Users/levy/Projects/zed-extension-pua/lsp/pua_lsp.py"]
       }
     }
   }
