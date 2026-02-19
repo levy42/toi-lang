@@ -1,0 +1,47 @@
+uuid = import uuid
+
+fn assert_true(cond, msg = nil)
+  if not cond
+    error(msg or "assert_true failed")
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error(msg or "assert_eq failed")
+
+fn is_alnum(c)
+  return (c >= "A" and c <= "Z") or (c >= "a" and c <= "z") or (c >= "0" and c <= "9")
+
+id1 = uuid.uid()
+id2 = uuid.uid()
+
+assert_eq(type(id1), "string")
+assert_eq(type(id2), "string")
+assert_eq(#id1, 16)
+assert_eq(#id2, 16)
+assert_true(id1 != id2)
+
+for c in id1
+  assert_true(is_alnum(c), "uuid must be alphanumeric")
+
+for c in id2
+  assert_true(is_alnum(c), "uuid must be alphanumeric")
+
+sec1 = uuid.secret()
+sec2 = uuid.secret()
+sec3 = uuid.secret(96)
+
+assert_eq(type(sec1), "string")
+assert_eq(type(sec2), "string")
+assert_eq(type(sec3), "string")
+assert_eq(#sec1, 64)
+assert_eq(#sec2, 64)
+assert_eq(#sec3, 96)
+assert_true(sec1 != sec2)
+
+for c in sec1
+  assert_true(is_alnum(c), "secret must be alphanumeric")
+
+for c in sec3
+  assert_true(is_alnum(c), "secret must be alphanumeric")
+
+print "uuid ok"

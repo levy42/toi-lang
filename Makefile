@@ -67,7 +67,7 @@ test: $(TARGET) test-fmt
 	printf "Timeout: $$timedout\n"; \
 	[ $$failed -eq 0 ] && [ $$timedout -eq 0 ]
 
-.PHONY: all clean release release-perf test pi perf peft test-fmt peft-comp perf-comp
+.PHONY: all clean release release-perf test pi perf peft test-fmt peft-comp perf-comp benchmark-comp
 
 perf: $(TARGET)
 	@for f in tests/peft/*.pua; do \
@@ -78,15 +78,11 @@ perf: $(TARGET)
 peft: perf
 
 peft-comp:
-	@echo "\nPua\n"
-	@./$(TARGET) examples/perf.pua
-	@echo "\n\nPython\n"
-	python3.14 examples/perf.py
-	@echo "\n\nLua\n"
-	lua examples/perf.lua
-	@echo "Done!"
+	@./benchmarks/run_comparison.sh
 
 perf-comp: peft-comp
+
+benchmark-comp: peft-comp
 
 test-fmt: $(TARGET)
 	@tests/fmt_regression.sh
