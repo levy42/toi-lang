@@ -22,6 +22,7 @@ void registerInspect(VM* vm);
 void registerBinary(VM* vm);
 void registerStruct(VM* vm);
 void registerBTree(VM* vm);
+void registerUuid(VM* vm);
 
 static int loadRegisteredModule(VM* vm, const char* name, void (*registerFn)(VM*)) {
     registerFn(vm);
@@ -92,7 +93,7 @@ int loadNativeModule(VM* vm, const char* name) {
     // Check if already loaded (in modules cache)
     ObjString* moduleName = copyString(name, (int)strlen(name));
     push(vm, OBJ_VAL(moduleName));
-    
+
     Value cached;
     if (tableGet(&vm->modules, moduleName, &cached)) {
         // Already loaded - push cached module
@@ -100,7 +101,7 @@ int loadNativeModule(VM* vm, const char* name) {
         push(vm, cached);
         return 1;
     }
-    
+
     // Find and load the module
     for (int i = 0; nativeModules[i].name != NULL; i++) {
         if (strcmp(name, nativeModules[i].name) == 0) {
@@ -109,12 +110,12 @@ int loadNativeModule(VM* vm, const char* name) {
                 pop(vm); // moduleName
                 return 0;
             }
-            
+
             // Stack now: [..., moduleName, module]
             // Cache the module in vm->modules
             Value module = peek(vm, 0);
             tableSet(&vm->modules, moduleName, module);
-            
+
             // Pop module and moduleName, then push module back
             pop(vm); // Pop module, stack: [..., moduleName]
             pop(vm); // Pop moduleName, stack: [...]
@@ -122,7 +123,7 @@ int loadNativeModule(VM* vm, const char* name) {
             return 1;
         }
     }
-    
+
     pop(vm); // moduleName
     return 0;  // Not found
 }
@@ -147,7 +148,7 @@ void registerModule(VM* vm, const char* name, const NativeReg* funcs) {
         ObjTable* module = newTable();
         module->isModule = 1;
         push(vm, OBJ_VAL(module)); // Push module onto stack to protect from GC
-        
+
         for (int i = 0; funcs[i].name != NULL; i++) {
             ObjString* nameStr = copyString(funcs[i].name, (int)strlen(funcs[i].name));
             push(vm, OBJ_VAL(nameStr));
@@ -156,13 +157,13 @@ void registerModule(VM* vm, const char* name, const NativeReg* funcs) {
             pop(vm); // Pop native function
             pop(vm); // Pop name string
         }
-        
+
         push(vm, OBJ_VAL(copyString(name, (int)strlen(name)))); // Push module name
         push(vm, OBJ_VAL(module)); // Push module object (already on stack)
         tableSet(&vm->globals, AS_STRING(peek(vm, 1)), peek(vm, 0));
         pop(vm); // Pop module object (from tableSet)
         pop(vm); // Pop module name
-        
+
         // Module object is still on stack (from line 24)
     }
 }

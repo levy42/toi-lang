@@ -1,3 +1,6 @@
 *.o
 .idea
 .env
+# Keep Zed grammar repos external
+editor/zed-extension-pua/grammars/pua
+editor/zed-extension-pua/grammars/ptml

@@ -37,7 +37,7 @@ InterpretResult vmHandleOpImport(VM* vm, ObjString* moduleName, CallFrame** fram
     }
 
     if (file == NULL) {
-        printf("Could not open module '%s' (tried '%s.pua', '%s/__.pua', "
+        printf("\033[31mCould not open module '%s'\033[0m (tried '%s.pua', '%s/__.pua', "
                "'lib/%s.pua', and 'lib/%s/__.pua').\n",
                moduleName->chars, modulePath, modulePath, modulePath, modulePath);
         return INTERPRET_RUNTIME_ERROR;

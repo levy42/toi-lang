@@ -13,14 +13,14 @@ capabilities = []
 [lib]
 
 [grammars.pua]
-repository = "file:///Users/levy/Projects/pua"
+repository = "file:///Users/levy/Projects/zed-grammars/pua"
 rev = "main"
-path = "editor/treesitter"
+path = "."
 
 [grammars.ptml]
-repository = "file:///Users/levy/Projects/pua"
+repository = "file:///Users/levy/Projects/zed-grammars/ptml"
 rev = "main"
-path = "editor/treesitter-ptml"
+path = "."
 
 [language_servers.pua-lsp]
 languages = ["Pua"]

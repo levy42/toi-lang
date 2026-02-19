@@ -1,13 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 #include <stdarg.h>
 #include <time.h>
 #include <signal.h>
 
 #include "common.h"
-#include "debug.h"
 #include "table.h"
 #include "vm.h"
 #include "vm/build_string.h"
@@ -1082,7 +1080,7 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
                     if (vm->currentThread->caller != NULL) {
                         ObjThread* caller = vm->currentThread->caller;
                         vm->currentThread->caller = NULL;
-                        
+
                         // Check stack overflow
                         if (caller->stackTop + 2 >= caller->stack + STACK_MAX) {
                             vmRuntimeError(vm, "Stack overflow in caller.");
@@ -1093,7 +1091,7 @@ InterpretResult vmRun(VM* vm, int minFrameCount) {
                         caller->stackTop++;
                         *caller->stackTop = result;
                         caller->stackTop++;
-                        
+
                         vm->currentThread = caller;
                         frame = &vm->currentThread->frames[vm->currentThread->frameCount - 1];
                         ip = frame->ip;
