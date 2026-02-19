@@ -20,6 +20,8 @@ void registerTemplate(VM* vm);
 void registerHTTP(VM* vm);
 void registerInspect(VM* vm);
 void registerBinary(VM* vm);
+void registerStruct(VM* vm);
+void registerBTree(VM* vm);
 
 static int loadRegisteredModule(VM* vm, const char* name, void (*registerFn)(VM*)) {
     registerFn(vm);
@@ -53,6 +55,8 @@ static int loadTemplate(VM* vm) { return loadRegisteredModule(vm, "template", re
 static int loadHTTP(VM* vm) { return loadRegisteredModule(vm, "http", registerHTTP); }
 static int loadInspect(VM* vm) { return loadRegisteredModule(vm, "inspect", registerInspect); }
 static int loadBinary(VM* vm) { return loadRegisteredModule(vm, "binary", registerBinary); }
+static int loadStruct(VM* vm) { return loadRegisteredModule(vm, "struct", registerStruct); }
+static int loadBTree(VM* vm) { return loadRegisteredModule(vm, "btree", registerBTree); }
 
 // Native module registry - modules that can be imported on demand
 static const ModuleReg nativeModules[] = {
@@ -70,6 +74,8 @@ static const ModuleReg nativeModules[] = {
     {"http", loadHTTP},
     {"inspect", loadInspect},
     {"binary", loadBinary},
+    {"struct", loadStruct},
+    {"btree", loadBTree},
     {NULL, NULL}  // Sentinel
 };
 

@@ -111,10 +111,21 @@ static int table_push(VM* vm, int argCount, Value* args) {
 
     ObjTable* table = GET_TABLE(0);
     int index = table->table.arrayMax + 1;
-    if (!tableSetArray(&table->table, index, args[1])) {
-        ObjString* key = numberKeyString((double)index);
-        tableSet(&table->table, key, args[1]);
+
+    int rawIndex = index - 1;
+    if (rawIndex >= table->table.arrayCapacity) {
+        int newCapacity = table->table.arrayCapacity == 0 ? 8 : table->table.arrayCapacity * 2;
+        while (rawIndex >= newCapacity) newCapacity *= 2;
+
+        table->table.array = (Value*)realloc(table->table.array, sizeof(Value) * newCapacity);
+        for (int i = table->table.arrayCapacity; i < newCapacity; i++) {
+            table->table.array[i] = NIL_VAL;
+        }
+        table->table.arrayCapacity = newCapacity;
     }
+
+    table->table.array[rawIndex] = args[1];
+    table->table.arrayMax = index;
     RETURN_NUMBER((double)index);
 }
 

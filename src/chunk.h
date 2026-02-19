@@ -6,6 +6,7 @@
 
 typedef enum {
     OP_CONSTANT,
+    OP_APPEND,
     OP_ADD,
     OP_ADD_CONST,
     OP_SUBTRACT,
@@ -83,6 +84,7 @@ typedef enum {
     OP_IMPORT,
     OP_IMPORT_STAR,
     OP_THROW,
+    OP_BUILD_STRING,
     OP_ITER_PREP,
     OP_ITER_PREP_IPAIRS,
     OP_RANGE,

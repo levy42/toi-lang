@@ -23,6 +23,8 @@ typedef struct VM {
     ObjString* mm_str;
     ObjString* mm_call;
     ObjString* mm_new;
+    ObjString* mm_append;
+    ObjString* mm_next;
 } VM;
 
 typedef enum {
@@ -42,6 +44,8 @@ void defineNative(VM* vm, const char* name, NativeFn function);
 void vmRuntimeError(VM* vm, const char* format, ...);
 ObjString* numberKeyString(double num);
 int call(VM* vm, ObjClosure* closure, int argCount);
+int callValue(VM* vm, Value callee, int argCount, CallFrame** frame, uint8_t** ip);
+void maybeCollectGarbage(VM* vm);
 InterpretResult vmRun(VM* vm, int minFrameCount);
 Value getMetamethod(VM* vm, Value val, const char* name);
 void vmRequestInterrupt(void);

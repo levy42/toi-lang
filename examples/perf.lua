@@ -14,6 +14,14 @@ local function bench_math()
   return acc
 end
 
+local function bench_random()
+  local acc = 0
+  for i = 1, 2000000 do
+    acc = acc + math.random()
+  end
+  return acc
+end
+
 local function bench_string_concat()
   local s = ""
   for i = 1, 20000 do
@@ -59,6 +67,7 @@ end
 
 print("Lua perf:")
 bench("math", bench_math)
+bench("random", bench_random)
 bench("string concat", bench_string_concat)
 bench("string ops", bench_string_ops)
 bench("table", bench_table)

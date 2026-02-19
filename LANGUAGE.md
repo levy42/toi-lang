@@ -111,6 +111,7 @@ statement := print_stmt
            | while_stmt
            | for_stmt
            | return_stmt
+           | yield_stmt
            | break_stmt
            | continue_stmt
            | try_stmt
@@ -124,6 +125,7 @@ print_stmt    := "print" expression
 if_stmt       := "if" expression block ("elif" expression block)* ("else" block)?
 while_stmt    := "while" expression block
 return_stmt   := "return" (expression ("," expression)*)?
+yield_stmt    := "yield" (expression ("," expression)*)?
 break_stmt    := "break"
 continue_stmt := "continue"
 throw_stmt    := "throw" expression
@@ -156,6 +158,10 @@ Notes:
 - `i#` must be attached directly to identifier (no whitespace before `#`).
 - `i#` is only valid with implicit table iteration (single non-call iterator expression).
 - `for v in a..b` is a numeric inclusive loop (`v = a, a+1, ..., b`).
+- For implicit iteration (`for ... in expr` with one non-call expression):
+  - If `expr` has `__next` (field or metamethod), loop uses `(__next, expr, nil)`.
+  - Else tables/strings fall back to global `next`.
+- `yield` is valid only inside functions; it lowers to `coroutine.yield(...)`.
 
 ### 3.5 `try` / `with` / `del`
 
@@ -291,7 +297,7 @@ Highest to lowest:
 1. Postfix: call `()`, member `.`, index/slice `[]`, metatable constructor `{...}`
 2. Unary: `not`, unary `-`, length `#`
 3. Multiplicative: `*`, `/`, `//`, `%`, `**`
-4. Additive and range: `+`, `-`, `..`
+4. Additive and range: `+`, `-`, `<+`, `..`
 5. Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`, `has`
 6. Logical `and`
 7. Logical `or`
@@ -302,6 +308,8 @@ Notes:
 
 - `a ? b : c` is supported and right-associative.
 - `..` is both range operator and part of slice syntax.
+- `<+` appends to a table (`t <+ v`), returning the appended index. If a `__append`
+  metamethod exists, it is called as `__append(lhs, rhs)` instead.
 
 ### 5.5 Assignment targets
 

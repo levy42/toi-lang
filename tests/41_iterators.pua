@@ -1,0 +1,72 @@
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error("assert_eq failed")
+
+iter_obj = {
+  n = 4
+}
+
+fn iter_obj_step(state, control)
+  i = control
+  if i == nil
+    i = 1
+  else
+    i = i + 1
+  if i > state.n
+    return nil, nil
+  return i, i * 10
+
+iter_obj.__next = iter_obj_step
+
+sum_vals = 0
+sum_keys = 0
+for k, v in iter_obj
+  sum_keys = sum_keys + k
+  sum_vals = sum_vals + v
+assert_eq(sum_keys, 10)
+assert_eq(sum_vals, 100)
+
+next_obj = {
+  n = 3
+}
+
+fn next_obj_next(self, control)
+  i = control
+  if i == nil
+    i = 1
+  else
+    i = i + 1
+  if i > self.n
+    return nil, nil
+  return i, i + 1
+
+next_obj.__next = next_obj_next
+
+vals = 0
+for v in next_obj
+  vals = vals + v
+assert_eq(vals, 9)
+
+override = {
+  10, 20, 30
+}
+
+fn override_step(state, control)
+  i = control
+  if i == nil
+    i = 1
+  else
+    i = i + 1
+  if i > state.n
+    return nil, nil
+  return i, i
+
+override.n = 3
+override.__next = override_step
+
+custom_sum = 0
+for v in override
+  custom_sum = custom_sum + v
+assert_eq(custom_sum, 6)
+
+print "iterators ok"

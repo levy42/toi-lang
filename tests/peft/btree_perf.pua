@@ -1,0 +1,69 @@
+btree = import btree
+os = import os
+string = import string
+
+
+timeit = {
+  n = 0
+  _startime = 0
+  __enter = fn(self)
+    self._startime = os.clock()
+    print "started"
+  __exit = fn()
+    elapsed = os.clock() - self._startime
+    print f"finished {self.n} in {elapsed}s"
+}
+
+fn now()
+  return os.clock()
+
+fn to_int_or(v, fallback)
+  if v == nil
+    return fallback
+  return int(v)
+
+n = to_int_or(os.getenv("N"), 100_000)
+lookup_n = n
+delete_n = n / 2
+
+path = "tests/tmp_btree_perf.db"
+os.remove(path)
+
+db = btree.open(path)
+
+start = now()
+for i in 1..n
+  db.put(i, i * 3)
+insert_s = now() - start
+
+start = now()
+ok = 0
+for i in 1..lookup_n
+  key = ((i * 7919) % n) + 1
+  val = db.get(key)
+  if val == key * 3
+    ok = ok + 1
+
+lookup_s = now() - start
+
+start = now()
+for i in 1..delete_n
+  db.delete(i)
+delete_s = now() - start
+
+db.close()
+
+-- Reopen and validate a few points
+check = btree.open(path)
+assert1 = check.get(1) == nil
+assert2 = check.get(delete_n + 1) == (delete_n + 1) * 3
+check.close()
+-- os.remove(path)
+
+print "btree perf"
+print "  n=" + string(n)
+print f"  insert_s {int(n / insert_s)} op/s"
+print f"  lookup_s {int(n / lookup_s)} op/s"
+print f"  delete_s {int(delete_n / delete_s)} op/s"
+print "  lookup_ok=" + string(ok) + "/" + string(lookup_n)
+print "  reopen_checks=" + string(assert1) + "," + string(assert2)

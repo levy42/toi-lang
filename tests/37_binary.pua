@@ -36,6 +36,20 @@ assert_eq(decoded.nested.x, 1)
 assert_eq(decoded.nested.y, "z")
 assert_true(decoded.skip_fn == nil)
 
+h = binary.hex(packed)
+assert_true(type(h) == "string")
+roundtrip = binary.unhex(h)
+assert_true(roundtrip == packed)
+assert_true(binary.unpack(roundtrip).name == "pua")
+
+caught_hex = false
+try
+  binary.unhex("0xz1")
+except e
+  caught_hex = true
+  assert_true(e has "invalid hex")
+assert_true(caught_hex)
+
 caught = false
 try
   binary.unpack(packed + "x")

@@ -76,9 +76,32 @@
 (nil) @constant.builtin
 
 (identifier) @variable
+((identifier) @variable.special
+ (#eq? @variable.special "self"))
+((identifier) @function.special
+ (#match? @function.special "^__"))
+((identifier) @constant
+ (#match? @constant "^[A-Z][A-Z0-9_]*$"))
+((identifier) @type
+ (#match? @type "^[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*$"))
+
 (import_expression module: (dotted_name (identifier) @module))
 (function_header name: (identifier) @function)
+((function_header
+   name: (identifier) @function.special)
+ (#match? @function.special "^__"))
+((call_argument
+   name: (identifier) @property))
+((table_entry
+   key: (identifier) @function.special)
+ (#match? @function.special "^__"))
+((postfix_operator
+   property: (identifier) @function.special)
+ (#match? @function.special "^__"))
 (parameter name: (identifier) @variable.parameter)
+((parameter
+   name: (identifier) @variable.special)
+ (#eq? @variable.special "self"))
 
 
 

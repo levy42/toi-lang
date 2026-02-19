@@ -392,10 +392,78 @@ static int binary_unpack(VM* vm, int argCount, Value* args) {
     RETURN_VAL(out);
 }
 
+static int hexNibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+static int binary_hex(VM* vm, int argCount, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* bytes = GET_STRING(0);
+    int outLen = bytes->length * 2;
+    char* out = (char*)malloc((size_t)outLen + 1);
+    if (out == NULL) {
+        vmRuntimeError(vm, "Out of memory.");
+        return 0;
+    }
+
+    static const char* HEX = "0123456789abcdef";
+    for (int i = 0; i < bytes->length; i++) {
+        unsigned char b = (unsigned char)bytes->chars[i];
+        out[i * 2] = HEX[(b >> 4) & 0x0F];
+        out[i * 2 + 1] = HEX[b & 0x0F];
+    }
+    out[outLen] = '\0';
+
+    ObjString* s = copyString(out, outLen);
+    free(out);
+    RETURN_OBJ(s);
+}
+
+static int binary_unhex(VM* vm, int argCount, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* hex = GET_STRING(0);
+    if ((hex->length % 2) != 0) {
+        vmRuntimeError(vm, "binary.unhex expects even-length hex string.");
+        return 0;
+    }
+
+    int outLen = hex->length / 2;
+    char* out = (char*)malloc((size_t)outLen + 1);
+    if (out == NULL) {
+        vmRuntimeError(vm, "Out of memory.");
+        return 0;
+    }
+
+    for (int i = 0; i < outLen; i++) {
+        int hi = hexNibble(hex->chars[i * 2]);
+        int lo = hexNibble(hex->chars[i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            free(out);
+            vmRuntimeError(vm, "binary.unhex got invalid hex character.");
+            return 0;
+        }
+        out[i] = (char)((hi << 4) | lo);
+    }
+    out[outLen] = '\0';
+
+    ObjString* s = copyString(out, outLen);
+    free(out);
+    RETURN_OBJ(s);
+}
+
 void registerBinary(VM* vm) {
     const NativeReg binaryFuncs[] = {
         {"pack", binary_pack},
         {"unpack", binary_unpack},
+        {"hex", binary_hex},
+        {"unhex", binary_unhex},
         {NULL, NULL}
     };
     registerModule(vm, "binary", binaryFuncs);

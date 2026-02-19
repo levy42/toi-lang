@@ -9,6 +9,7 @@ make
 make release
 make clean
 make test
+make test-fmt
 ```
 
 ## Run
@@ -16,6 +17,9 @@ make test
 ```bash
 ./pua                  # REPL
 ./pua path/to/file.pua # run script
+./pua fmt file.pua     # print formatted code
+./pua fmt -w file.pua  # format in place
+./pua fmt --check file.pua  # exit 1 if formatting would change
 ```
 
 ## Syntax (quick reference)
@@ -112,6 +116,7 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 - `os`: getenv, rename, remove, system, clock
 - `json`: encode/decode
 - `binary`: `pack(value)` / `unpack(bytes)`
+- `struct`: `pack(fmt, ...)` / `unpack(fmt, bytes, offset=1)`
 - `socket`: tcp, select, send/recv
 - `coroutine`: create, resume, status, yield
 - `thread`: threads and scheduling helpers
@@ -128,3 +133,33 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 ## Notes
 
 - Userdata can expose methods via `__index` (table or function). The `io` file handle uses a function `__index` to resolve methods like `f.read` and `f.write`.
+
+## Zed Setup (WIP)
+
+- Rebuild extension grammars after grammar/query edits:
+
+```bash
+./editor/build_grammars.sh
+```
+
+- Prototype language server is at `editor/lsp/pua_lsp.py` and supports:
+  - completion (keywords + workspace symbols)
+  - goto definition (cross-file in workspace)
+  - document symbols
+  - basic formatting
+  - basic diagnostics (indentation, missing block after headers, bracket balance)
+
+- Example Zed user settings to run the prototype server:
+
+```json
+{
+  "lsp": {
+    "pua-lsp": {
+      "binary": {
+        "path": "/usr/bin/env",
+        "arguments": ["python3", "/Users/levy/Projects/pua/editor/lsp/pua_lsp.py"]
+      }
+    }
+  }
+}
+```

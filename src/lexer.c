@@ -80,6 +80,7 @@ static Keyword keywords[] = {
     {"for",      3, TOKEN_FOR},
     {"fn",       2, TOKEN_FN},
     {"return",   6, TOKEN_RETURN},
+    {"yield",    5, TOKEN_YIELD},
     {"if",       2, TOKEN_IF},
     {"in",       2, TOKEN_IN},
     {"has",      3, TOKEN_HAS},
@@ -328,6 +329,7 @@ Token scanToken(Lexer* lexer) {
             if (peek(lexer) == '=') { advance(lexer); return makeToken(lexer, TOKEN_BANG_EQUAL); }
             break;
         case '<':
+            if (peek(lexer) == '+') { advance(lexer); return makeToken(lexer, TOKEN_APPEND); }
             if (peek(lexer) == '=') { advance(lexer); return makeToken(lexer, TOKEN_LESS_EQUAL); }
             return makeToken(lexer, TOKEN_LESS);
         case '>':

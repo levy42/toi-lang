@@ -1,0 +1,38 @@
+table = import table
+
+fn assert_true(cond, msg = nil)
+  if not cond
+    error(msg == nil ? "assert_true failed" : msg)
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error(msg == nil ? "assert_eq failed" : msg)
+
+t = {}
+i1 = t <+ 10
+i2 = t <+ 20
+assert_eq(i1, 1)
+assert_eq(i2, 2)
+assert_eq(t[1], 10)
+assert_eq(t[2], 20)
+
+box = {items = {}}
+setmetatable(box, {
+  __append = fn(self, v)
+    table.push(self.items, v)
+    return self
+})
+
+r = box <+ 7
+assert_true(r == box)
+assert_eq(box.items[1], 7)
+
+caught = false
+try
+  1 <+ 2
+except e
+  caught = true
+  assert_true(e has "__append")
+assert_true(caught)
+
+print "append operator ok"

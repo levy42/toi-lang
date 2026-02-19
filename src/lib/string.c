@@ -44,7 +44,7 @@ static int string_sub(VM* vm, int argCount, Value* args) {
     memcpy(sub, str->chars + start, len);
     sub[len] = '\0';
     
-    RETURN_STRING(sub, len);
+    RETURN_OBJ(takeString(sub, len));
 }
 
 static int string_lower(VM* vm, int argCount, Value* args) {
@@ -59,7 +59,7 @@ static int string_lower(VM* vm, int argCount, Value* args) {
     }
     buf[str->length] = '\0';
     
-    RETURN_STRING(buf, str->length);
+    RETURN_OBJ(takeString(buf, str->length));
 }
 
 static int string_upper(VM* vm, int argCount, Value* args) {
@@ -74,7 +74,7 @@ static int string_upper(VM* vm, int argCount, Value* args) {
     }
     buf[str->length] = '\0';
     
-    RETURN_STRING(buf, str->length);
+    RETURN_OBJ(takeString(buf, str->length));
 }
 
 static int string_char(VM* vm, int argCount, Value* args) {
@@ -87,7 +87,7 @@ static int string_char(VM* vm, int argCount, Value* args) {
     }
     buf[len] = '\0';
     
-    RETURN_STRING(buf, len);
+    RETURN_OBJ(takeString(buf, len));
 }
 
 static int string_byte(VM* vm, int argCount, Value* args) {
@@ -159,7 +159,7 @@ static int string_trim(VM* vm, int argCount, Value* args) {
     char* buf = (char*)malloc(newLen + 1);
     memcpy(buf, s + start, newLen);
     buf[newLen] = '\0';
-    RETURN_STRING(buf, newLen);
+    RETURN_OBJ(takeString(buf, newLen));
 }
 
 static int string_split(VM* vm, int argCount, Value* args) {
@@ -232,7 +232,7 @@ static int string_rep(VM* vm, int argCount, Value* args) {
     }
     buf[newLen] = '\0';
 
-    RETURN_STRING(buf, newLen);
+    RETURN_OBJ(takeString(buf, newLen));
 }
 
 static int string_reverse(VM* vm, int argCount, Value* args) {
@@ -247,7 +247,7 @@ static int string_reverse(VM* vm, int argCount, Value* args) {
     }
     buf[str->length] = '\0';
 
-    RETURN_STRING(buf, str->length);
+    RETURN_OBJ(takeString(buf, str->length));
 }
 
 static int string_join(VM* vm, int argCount, Value* args) {
@@ -507,8 +507,7 @@ static int string_format(VM* vm, int argCount, Value* args) {
     }
 
     result[rlen] = '\0';
-    ObjString* str = copyString(result, rlen);
-    free(result);
+    ObjString* str = takeString(result, rlen);
     RETURN_OBJ(str);
 }
 

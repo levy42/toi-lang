@@ -84,9 +84,8 @@ static int io_open(VM* vm, int argCount, Value* args) {
     
     FILE* fp = fopen(path, mode);
     if (fp == NULL) {
-        push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copyString("cannot open file", 16))); // Push error message
-        return 2; // Return 2 values for Lua style error handling
+        vmRuntimeError(vm, "cannot open file");
+        return 0;
     }
     
     ObjUserdata* udata = newUserdata(fp);

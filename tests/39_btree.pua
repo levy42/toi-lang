@@ -1,0 +1,76 @@
+btree = import btree
+os = import os
+
+fn assert_true(cond, msg = nil)
+  if not cond
+    error(msg == nil ? "assert_true failed" : msg)
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error(msg == nil ? "assert_eq failed" : msg)
+
+-- Best effort cleanup from previous runs.
+os.remove("tests/tmp_btree.db")
+
+-- in-memory mode (no path)
+mem = btree.open()
+mem.put("k", "v")
+assert_eq(mem.get("k"), "v")
+assert_true(mem.delete("k"))
+assert_true(mem.get("k") == nil)
+mem.close()
+
+db = btree.open("tests/tmp_btree.db")
+
+-- basic string key/value
+db.put("name", "pua")
+assert_eq(db.get("name"), "pua")
+
+-- numeric keys and values
+db.put(1, "one")
+db.put(2, 200)
+assert_eq(db.get(1), "one")
+assert_eq(db.get(2), 200)
+
+-- overwrite existing key
+db.put("name", "pua2")
+assert_eq(db.get("name"), "pua2")
+
+-- force splits with many inserts
+i = 3
+while i <= 600
+  db.put(i, i * 10)
+  i = i + 1
+
+assert_eq(db.get(80), 800)
+assert_eq(db.get(600), 6000)
+assert_true(db.get("missing") == nil)
+
+assert_true(db.delete("name"))
+assert_true(db.get("name") == nil)
+db.put("name", "pua3")
+assert_eq(db.get("name"), "pua3")
+
+db.close()
+
+-- reopen and verify persistence
+db2 = btree.open("tests/tmp_btree.db")
+assert_eq(db2.get("name"), "pua3")
+assert_eq(db2.get(1), "one")
+assert_eq(db2.get(80), 800)
+assert_eq(db2.get(600), 6000)
+assert_true(db2.get(9999) == nil)
+
+assert_true(db2.delete(1))
+assert_true(db2.get(1) == nil)
+assert_true(db2.delete(424242) == false)
+db2.close()
+
+db3 = btree.open("tests/tmp_btree.db")
+assert_true(db3.get(1) == nil)
+assert_eq(db3.get("name"), "pua3")
+db3.close()
+
+os.remove("tests/tmp_btree.db")
+
+print "btree ok"

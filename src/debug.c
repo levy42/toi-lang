@@ -71,6 +71,8 @@ int disassembleInstruction(Chunk* chunk, int offset) {
     switch (instruction) {
         case OP_CONSTANT:
             return constantInstruction("OP_CONSTANT", chunk, offset);
+        case OP_APPEND:
+            return simpleInstruction("OP_APPEND", offset);
         case OP_RETURN:
             return simpleInstruction("OP_RETURN", offset);
         case OP_RETURN_N:
@@ -89,6 +91,8 @@ int disassembleInstruction(Chunk* chunk, int offset) {
             return simpleInstruction("OP_IMPORT_STAR", offset);
         case OP_THROW:
             return simpleInstruction("OP_THROW", offset);
+        case OP_BUILD_STRING:
+            return byteInstruction("OP_BUILD_STRING", chunk, offset);
         case OP_FOR_PREP: {
             uint8_t varSlot = chunk->code[offset + 1];
             uint8_t endSlot = chunk->code[offset + 2];

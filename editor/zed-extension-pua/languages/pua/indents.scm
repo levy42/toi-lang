@@ -9,6 +9,10 @@
 (except_header) @indent
 (finally_header) @indent
 
+; Ensure Enter after `fn a()` indents as a block opener, not as a closed `()`.
+(function_header
+  (parameter_list ")" @indent))
+
 (ERROR "fn" @indent)
 (ERROR "if" @indent)
 (ERROR "elif" @indent)
@@ -16,6 +20,17 @@
 (ERROR "for" @indent)
 (ERROR "with" @indent)
 (ERROR "except" @indent)
+
+((ERROR (function_header)) @indent)
+((ERROR (if_header)) @indent)
+((ERROR (elif_header)) @indent)
+((ERROR (else_header)) @indent)
+((ERROR (while_header)) @indent)
+((ERROR (for_header)) @indent)
+((ERROR (with_header)) @indent)
+((ERROR (try_header)) @indent)
+((ERROR (except_header)) @indent)
+((ERROR (finally_header)) @indent)
 
 ((simple_statement
    (function_header)
@@ -50,4 +65,3 @@
 
 (_ "[" "]" @end) @indent
 (_ "{" "}" @end) @indent
-(_ "(" ")" @end) @indent

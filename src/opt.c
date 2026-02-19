@@ -34,6 +34,7 @@ static int instrLength(Chunk* chunk, int offset) {
         case OP_CALL_NAMED:
         case OP_CALL_EXPAND:
         case OP_IMPORT:
+        case OP_BUILD_STRING:
             return 2;
         case OP_TRY:
             return 7;

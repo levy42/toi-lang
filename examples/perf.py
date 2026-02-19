@@ -1,6 +1,7 @@
 import time
 import tracemalloc
 import gc
+import random
 
 
 def bench(name, func):
@@ -15,6 +16,13 @@ def bench_math():
     acc = 0.0
     for i in range(1, 2_000_000 + 1):
         acc += (i * 3.14159) / ((i % 97) + 1)
+    return acc
+
+
+def bench_random():
+    acc = 0.0
+    for _ in range(2_000_000):
+        acc += random.random()
     return acc
 
 
@@ -59,6 +67,14 @@ def bench_calls():
     return acc
 
 
+def bench_fstring():
+    total = 0
+    for i in range(1, 200_000 + 1):
+        s = f"user:{i}-x{i % 10}"
+        total += len(s)
+    return total
+
+
 def bench_memory():
     gc.collect()
     tracemalloc.start()
@@ -79,10 +95,12 @@ def bench_memory():
 def main():
     print("Python perf:")
     bench("math", bench_math)
+    bench("random", bench_random)
     bench("string concat", bench_string_concat)
     bench("string ops", bench_string_ops)
     bench("table", bench_table)
     bench("calls", bench_calls)
+    bench("f-string", bench_fstring)
     cur_delta, peak_delta, current, peak = bench("memory", bench_memory)
     print(f"memory current {current} bytes (delta {cur_delta})")
     print(f"memory peak {peak} bytes (delta {peak_delta})")

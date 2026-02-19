@@ -1,6 +1,7 @@
 time = import time
 string = import string
 table = import table
+math = import math
 
 fn bench(name, func)
   start = time.clock()
@@ -13,6 +14,12 @@ fn bench_math()
   acc = 0
   for i in 1..2000000
     acc = acc + (i * 3.14159) / ((i % 97) + 1)
+  return acc
+
+fn bench_random()
+  acc = 0
+  for i in 1..2000000
+    acc = acc + math.random()
   return acc
 
 
@@ -54,6 +61,13 @@ fn bench_calls()
     acc = add(acc, i)
   return acc
 
+fn bench_fstring()
+  total = 0
+  for i in 1..200000
+    s = f"user:{i}-x{i % 10}"
+    total = total + #s
+  return total
+
 fn bench_memory()
   gc
   base = mem()
@@ -66,9 +80,11 @@ fn bench_memory()
 
 print("Pua perf (clock):")
 bench("math", bench_math)
+bench("random", bench_random)
 bench("string concat", bench_string_concat)
 bench("string ops", bench_string_ops)
 bench("table", bench_table)
 bench("calls", bench_calls)
+bench("f-string", bench_fstring)
 used = bench("memory", bench_memory)
 print string.format("memory %d bytes", used)

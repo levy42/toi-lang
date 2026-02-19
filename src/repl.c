@@ -231,7 +231,7 @@ static int isKeyword(TokenType type) {
            type == TOKEN_RETURN || type == TOKEN_LOCAL || type == TOKEN_NIL ||
            type == TOKEN_TRUE || type == TOKEN_FALSE || type == TOKEN_BREAK ||
            type == TOKEN_CONTINUE || type == TOKEN_IMPORT || type == TOKEN_PRINT ||
-           type == TOKEN_GC || type == TOKEN_DEL;
+           type == TOKEN_GC || type == TOKEN_DEL || type == TOKEN_YIELD;
 }
 
 // Check if a token is an operator
@@ -241,6 +241,7 @@ static int isOperator(TokenType type) {
            type == TOKEN_BANG_EQUAL || type == TOKEN_EQUAL_EQUAL ||
            type == TOKEN_GREATER || type == TOKEN_GREATER_EQUAL ||
            type == TOKEN_LESS || type == TOKEN_LESS_EQUAL ||
+           type == TOKEN_APPEND ||
            type == TOKEN_AND || type == TOKEN_OR || type == TOKEN_NOT ||
            type == TOKEN_DOT || type == TOKEN_DOT_DOT || type == TOKEN_QUESTION ||
            type == TOKEN_HASH || type == TOKEN_COLON || type == TOKEN_POWER ||
@@ -427,6 +428,7 @@ static void completionCallback(const char *buf, linenoiseCompletions *lc) {
         {"import", 6},
         {"local", 5},
         {"return", 6},
+        {"yield", 5},
         {"while", 5},
         {"true", 4},
         {"nil", 3},

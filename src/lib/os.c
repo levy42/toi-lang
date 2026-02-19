@@ -26,9 +26,13 @@ static int os_exit(VM* vm, int argCount, Value* args) {
     return 0; // Unreachable
 }
 
-// os.getenv(name)
+// os.getenv(name, fallback?)
 static int os_getenv(VM* vm, int argCount, Value* args) {
-    ASSERT_ARGC_EQ(1);
+    ASSERT_ARGC_GE(1);
+    if (argCount > 2) {
+        vmRuntimeError(vm, "Expected at most 2 arguments but got %d.", argCount);
+        return 0;
+    }
     ASSERT_STRING(0);
     
     const char* name = GET_CSTRING(0);
@@ -36,9 +40,13 @@ static int os_getenv(VM* vm, int argCount, Value* args) {
     
     if (value != NULL) {
         RETURN_STRING(value, (int)strlen(value));
-    } else {
-        RETURN_NIL;
     }
+
+    if (argCount == 2) {
+        RETURN_VAL(args[1]);
+    }
+
+    RETURN_NIL;
 }
 
 // os.system(command)
