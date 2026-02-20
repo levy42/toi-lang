@@ -33,14 +33,14 @@ fn bench_string_concat()
 fn bench_string_ops()
   s = "the quick brown fox jumps over the lazy dog"
   total = 0
-  x = ""
-  y = ""
-  z = ""
+  -- x = ""
+  -- y = ""
+  -- z = ""
   for i in 1..20000
-    x = string.upper(s)
-    y = string.lower(x)
-    z = string.sub(y, 5, 19)
-    total = total + #z
+    x = s.upper()
+    -- y = x.lower()
+    -- z = y[5..19]
+    -- total = total + #z
   return total
 
 fn bench_table()

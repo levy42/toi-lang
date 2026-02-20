@@ -26,13 +26,13 @@ if ! command -v lua >/dev/null 2>&1; then
   exit 1
 fi
 
-printf "\nPua\n\n"
-"$ROOT_DIR/pua" "$ROOT_DIR/benchmarks/perf.pua"
-
 printf "\nPython (%s)\n\n" "$PYA"
 "$PYA" "$ROOT_DIR/benchmarks/perf.py"
 
 printf "\nLua\n\n"
 lua "$ROOT_DIR/benchmarks/perf.lua"
+
+printf "\nPua\n\n"
+"$ROOT_DIR/pua" "$ROOT_DIR/benchmarks/perf.pua"
 
 printf "\nDone!\n"

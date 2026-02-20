@@ -8,6 +8,38 @@ make release
 make test
 ```
 
+## Build (WASM / WASI)
+
+```bash
+make wasm
+make wasm-release
+```
+
+Default `make wasm` uses `zig cc` (recommended).
+Use `make wasm-release` for a smaller production-oriented `pua.wasm`.
+
+If you prefer `clang` + explicit WASI sysroot, pass both:
+
+```bash
+make wasm WASM_CC=clang WASM_SYSROOT=/path/to/wasi-sysroot
+```
+
+## Browser Playground (Static HTML)
+
+Build the wasm binary first:
+
+```bash
+make wasm
+```
+
+Open directly:
+
+```bash
+open web/playground.html
+```
+
+In the page, pick your local `pua.wasm` (built by `make wasm`) and run code from the textarea.
+
 ## Run
 
 ```bash

@@ -2,6 +2,18 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -g
 LDFLAGS =
 LDLIBS ?=
+WASM_CC ?= zig cc
+WASM_SYSROOT ?=
+WASM_ENV ?= ZIG_GLOBAL_CACHE_DIR=/tmp/zig-cache ZIG_LOCAL_CACHE_DIR=/tmp/zig-local
+WASM_CFLAGS_BASE = -Wall -Wextra -std=c99 -O2 --target=wasm32-wasi -DPUA_WASM -D_WASI_EMULATED_SIGNAL
+WASM_LDFLAGS_BASE = --target=wasm32-wasi
+WASM_LDLIBS_BASE = -lwasi-emulated-signal
+WASM_RELEASE_CFLAGS = $(WASM_CFLAGS_BASE) -Oz -DNDEBUG -flto -ffunction-sections -fdata-sections
+WASM_RELEASE_LDFLAGS = $(WASM_LDFLAGS_BASE) -flto -Wl,--gc-sections -Wl,--strip-all
+ifneq ($(strip $(WASM_SYSROOT)),)
+WASM_CFLAGS_BASE += --sysroot=$(WASM_SYSROOT)
+WASM_LDFLAGS_BASE += --sysroot=$(WASM_SYSROOT)
+endif
 UNAME_S := $(shell uname -s)
 TIMEOUT := $(shell command -v gtimeout >/dev/null 2>&1 && echo gtimeout || echo timeout)
 
@@ -10,8 +22,24 @@ SRC = src/main.c src/lexer.c src/object.c src/table.c src/value.c src/chunk.c sr
       src/lib/inspect.c src/lib/binary.c src/lib/structlib.c src/lib/btree.c src/lib/uuid.c
 OBJ = $(SRC:.c=.o)
 TARGET =pua
+WASM_TARGET = pua.wasm
+WASM_SRC = $(filter-out src/repl.c src/pua_lineedit.c src/lib/os.c src/lib/socket.c src/lib/thread.c src/lib/time.c src/lib/uuid.c,$(SRC)) src/repl_stub.c
+WASM_OBJ = $(WASM_SRC:.c=.wasm.o)
 
 all: $(TARGET)
+
+wasm: CC = $(WASM_CC)
+wasm: CFLAGS = $(WASM_CFLAGS_BASE)
+wasm: LDFLAGS = $(WASM_LDFLAGS_BASE)
+wasm: $(WASM_TARGET)
+
+wasm-release: CC = $(WASM_CC)
+wasm-release: CFLAGS = $(WASM_RELEASE_CFLAGS)
+wasm-release: LDFLAGS = $(WASM_RELEASE_LDFLAGS)
+wasm-release: clean $(WASM_TARGET)
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz -o $(WASM_TARGET) $(WASM_TARGET); \
+	fi
 
 # Release build for minimal size
 release: CFLAGS = -Wall -Wextra -std=c99 -Os -DNDEBUG -flto -ffunction-sections -fdata-sections
@@ -36,11 +64,17 @@ release-perf: clean $(TARGET)
 $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lpthread -lm $(LDLIBS)
 
+$(WASM_TARGET): $(WASM_OBJ)
+	$(WASM_ENV) $(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm $(WASM_LDLIBS_BASE) $(LDLIBS)
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+%.wasm.o: %.c
+	$(WASM_ENV) $(CC) $(CFLAGS) -c $< -o $@
+
 clean:
-	rm -f $(OBJ) $(TARGET)
+	rm -f $(OBJ) $(TARGET) $(WASM_OBJ) $(WASM_TARGET)
 
 pi:
 	@echo "Syncing.."
@@ -50,7 +84,7 @@ test: $(TARGET) test-fmt
 	@passed=0; failed=0; timedout=0; \
 	for f in tests/*.pua; do \
 		printf "Testing $$f... "; \
-		if $(TIMEOUT) 30s ./$(TARGET) "$$f" > /dev/null 2>&1; then \
+		if $(TIMEOUT) 30s ./$(TARGET) "$$f" < /dev/null > /dev/null 2>&1; then \
 			printf "PASS\n"; \
 			passed=$$((passed + 1)); \
 		elif [ $$? -eq 124 ]; then \
@@ -67,7 +101,7 @@ test: $(TARGET) test-fmt
 	printf "Timeout: $$timedout\n"; \
 	[ $$failed -eq 0 ] && [ $$timedout -eq 0 ]
 
-.PHONY: all clean release release-perf test pi perf peft test-fmt peft-comp perf-comp benchmark-comp
+.PHONY: all clean release release-perf test wasm wasm-release pi perf peft test-fmt peft-comp perf-comp benchmark-comp
 
 perf: $(TARGET)
 	@for f in tests/peft/*.pua; do \

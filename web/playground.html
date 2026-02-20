@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pua WASM Playground</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #111827;
+            --muted: #94a3b8;
+            --text: #e2e8f0;
+            --accent: #22d3ee;
+            --ok: #4ade80;
+            --err: #f87171;
+            --border: #1e293b;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", Menlo, Consolas, monospace;
+            background: radial-gradient(circle at top, #1e293b 0%, var(--bg) 55%);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .app {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: grid;
+            gap: 14px;
+        }
+
+        .panel {
+            background: color-mix(in srgb, var(--panel) 90%, black 10%);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        button {
+            border: 1px solid #0e7490;
+            background: linear-gradient(180deg, #155e75, #0e7490);
+            color: #ecfeff;
+            padding: 8px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 700;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .status {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        textarea, pre {
+            width: 100%;
+            border: 0;
+            margin: 0;
+            background: transparent;
+            color: var(--text);
+            font: inherit;
+            line-height: 1.45;
+            padding: 12px;
+        }
+
+        pre {
+            min-height: 180px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .editor {
+            position: relative;
+            min-height: 260px;
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .editor-highlight,
+        .editor-input {
+            font: inherit;
+            line-height: 1.45;
+            padding: 12px;
+            margin: 0;
+            width: 100%;
+            min-height: 260px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow: auto;
+        }
+
+        .editor-highlight {
+            color: var(--text);
+            pointer-events: none;
+        }
+
+        .editor-input {
+            position: absolute;
+            inset: 0;
+            border: 0;
+            resize: vertical;
+            outline: none;
+            background: transparent;
+            color: transparent;
+            caret-color: var(--text);
+        }
+
+        #output {
+            min-height: 180px;
+        }
+
+        .hint {
+            color: var(--muted);
+            font-size: 13px;
+            padding: 0 12px 12px;
+        }
+
+        .tok-kw { color: #60a5fa; }
+        .tok-str { color: #34d399; }
+        .tok-num { color: #f59e0b; }
+        .tok-com { color: #94a3b8; }
+        .tok-bool { color: #f87171; }
+        .tok-fn { color: #f472b6; }
+
+        .ok { color: var(--ok); }
+        .err { color: var(--err); }
+    </style>
+</head>
+<body>
+    <main class="app">
+        <section class="panel">
+            <div class="row">
+                <button id="runBtn">Run</button>
+                <button id="clearBtn" type="button">Clear Output</button>
+                <input id="wasmFile" type="file" accept=".wasm,application/wasm">
+                <span class="status" id="status">Ready</span>
+            </div>
+            <div class="editor">
+                <pre id="highlight" class="editor-highlight" aria-hidden="true"></pre>
+                <textarea id="source" class="editor-input" spellcheck="false">print "Hello from Pua WASM"
+print 1 + 2
+</textarea>
+            </div>
+            <div class="hint">Runs your code as <code>/main.pua</code>. Select a local <code>pua.wasm</code> file first.</div>
+        </section>
+
+        <section class="panel">
+            <div class="row"><strong>Output</strong></div>
+            <pre id="output"></pre>
+        </section>
+    </main>
+
+    <script type="module">
+        import {
+            WASI,
+            File,
+            OpenFile,
+            ConsoleStdout,
+            PreopenDirectory
+        } from "https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@0.4.2/+esm";
+
+        const runBtn = document.getElementById("runBtn");
+        const clearBtn = document.getElementById("clearBtn");
+        const wasmFileEl = document.getElementById("wasmFile");
+        const sourceEl = document.getElementById("source");
+        const highlightEl = document.getElementById("highlight");
+        const outputEl = document.getElementById("output");
+        const statusEl = document.getElementById("status");
+        const keywordSet = new Set(["fn", "return", "if", "else", "elif", "for", "while", "break", "continue", "import", "from", "as", "try", "catch", "throw", "with", "yield", "in", "print", "assert"]);
+        const boolSet = new Set(["true", "false", "nil"]);
+
+        function setStatus(text, kind = "") {
+            statusEl.textContent = text;
+            statusEl.className = `status ${kind}`.trim();
+        }
+
+        function appendOutput(line) {
+            outputEl.textContent += line;
+            outputEl.scrollTop = outputEl.scrollHeight;
+        }
+
+        function escHtml(text) {
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+        }
+
+        function highlightLine(line) {
+            let out = "";
+            let i = 0;
+            while (i < line.length) {
+                const ch = line[i];
+
+                if (ch === "#") {
+                    out += `<span class="tok-com">${escHtml(line.slice(i))}</span>`;
+                    break;
+                }
+
+                if (ch === "'" || ch === "\"") {
+                    const quote = ch;
+                    let j = i + 1;
+                    while (j < line.length) {
+                        if (line[j] === "\\") {
+                            j += 2;
+                            continue;
+                        }
+                        if (line[j] === quote) {
+                            j++;
+                            break;
+                        }
+                        j++;
+                    }
+                    out += `<span class="tok-str">${escHtml(line.slice(i, j))}</span>`;
+                    i = j;
+                    continue;
+                }
+
+                if (/[0-9]/.test(ch)) {
+                    let j = i + 1;
+                    while (j < line.length && /[0-9._]/.test(line[j])) j++;
+                    out += `<span class="tok-num">${escHtml(line.slice(i, j))}</span>`;
+                    i = j;
+                    continue;
+                }
+
+                if (/[A-Za-z_]/.test(ch)) {
+                    let j = i + 1;
+                    while (j < line.length && /[A-Za-z0-9_]/.test(line[j])) j++;
+                    const word = line.slice(i, j);
+                    if (keywordSet.has(word)) {
+                        out += `<span class="tok-kw">${word}</span>`;
+                    } else if (boolSet.has(word)) {
+                        out += `<span class="tok-bool">${word}</span>`;
+                    } else if (line.slice(j).match(/^\s*\(/)) {
+                        out += `<span class="tok-fn">${word}</span>`;
+                    } else {
+                        out += escHtml(word);
+                    }
+                    i = j;
+                    continue;
+                }
+
+                out += escHtml(ch);
+                i++;
+            }
+            return out;
+        }
+
+        function renderHighlight() {
+            const lines = sourceEl.value.split("\n");
+            let html = lines.map((line) => highlightLine(line)).join("\n");
+            if (sourceEl.value.endsWith("\n")) html += "\n";
+            highlightEl.innerHTML = html || " ";
+            highlightEl.scrollTop = sourceEl.scrollTop;
+            highlightEl.scrollLeft = sourceEl.scrollLeft;
+        }
+
+        async function loadWasmModule() {
+            const selectedFile = wasmFileEl.files && wasmFileEl.files[0];
+            if (!selectedFile) {
+                throw new Error("Select your local pua.wasm file first.");
+            }
+
+            const bytes = await selectedFile.arrayBuffer();
+            return {
+                module: await WebAssembly.compile(bytes),
+                sourceLabel: selectedFile.name
+            };
+        }
+
+        async function runCode() {
+            runBtn.disabled = true;
+            setStatus("Running...");
+            outputEl.textContent = "";
+
+            try {
+                const encoder = new TextEncoder();
+                const sourceBytes = encoder.encode(sourceEl.value);
+                const stdout = ConsoleStdout.lineBuffered((msg) => appendOutput(msg + "\n"));
+                const stderr = ConsoleStdout.lineBuffered((msg) => appendOutput(msg + "\n"));
+
+                const args = ["pua.wasm", "/main.pua"];
+                const env = [];
+                const fds = [
+                    new OpenFile(new File([])),
+                    stdout,
+                    stderr,
+                    new PreopenDirectory("/", [["main.pua", new File(sourceBytes)]])
+                ];
+                const wasi = new WASI(args, env, fds);
+
+                const { module, sourceLabel } = await loadWasmModule();
+                const instance = await WebAssembly.instantiate(module, {
+                    wasi_snapshot_preview1: wasi.wasiImport
+                });
+
+                wasi.start(instance);
+                setStatus(`Done (${sourceLabel})`, "ok");
+            } catch (err) {
+                appendOutput(String(err) + "\n");
+                setStatus("Failed", "err");
+            } finally {
+                runBtn.disabled = false;
+            }
+        }
+
+        runBtn.addEventListener("click", runCode);
+        clearBtn.addEventListener("click", () => {
+            outputEl.textContent = "";
+            setStatus("Ready");
+        });
+        sourceEl.addEventListener("input", renderHighlight);
+        sourceEl.addEventListener("scroll", () => {
+            highlightEl.scrollTop = sourceEl.scrollTop;
+            highlightEl.scrollLeft = sourceEl.scrollLeft;
+        });
+        renderHighlight();
+    </script>
+</body>
+</html>

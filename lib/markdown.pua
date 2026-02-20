@@ -7,8 +7,8 @@ fn starts_with(s, prefix)
   return s[1..#prefix] == prefix
 
 fn escape_html(text)
-  if not text return ""
-  out = {}
+  if text == nil return ""
+  local out = {}
   for ch in text
     if ch == "&"
       out[#out + 1] = "&amp;"
@@ -25,42 +25,110 @@ fn escape_html(text)
   return table.concat(out, "")
 
 fn find_token(text, token, start)
-  i, j = string.find(text, token, start)
+  local i, j = string.find(text, token, start)
   return i, j
 
 fn parse_inline(text)
-  if not text return ""
+  if text == nil or #text == 0 return ""
 
-  out = {}
-  i = 1
+  local out = {}
+  local i = 1
   while i <= #text
-    ch = text[i]
+    local ch = text[i]
 
     if ch == "`"
-      close_i, close_j = find_token(text, "`", i + 1)
-      if close_i
-        code = string.sub(text, i + 1, close_i - 1)
-        out[#out + 1] = "<code>" + escape_html(code) + "</code>"
-        i = close_j + 1
+      local j = i + 1
+      while j <= #text and text[j] != "`"
+        j = j + 1
+      if j <= #text
+        out[#out + 1] = "<code>"
+        local k = i + 1
+        while k < j
+          local c = text[k]
+          if c == "&"
+            out[#out + 1] = "&amp;"
+          elif c == "<"
+            out[#out + 1] = "&lt;"
+          elif c == ">"
+            out[#out + 1] = "&gt;"
+          elif c == '"'
+            out[#out + 1] = "&quot;"
+          elif c == "'"
+            out[#out + 1] = "&#39;"
+          else
+            out[#out + 1] = c
+          k = k + 1
+        out[#out + 1] = "</code>"
+        i = j + 1
         continue
 
     if ch == "*" and i < #text and text[i + 1] == "*"
-      close_i, close_j = find_token(text, "**", i + 2)
-      if close_i
-        inner = string.sub(text, i + 2, close_i - 1)
-        out[#out + 1] = "<strong>" + parse_inline(inner) + "</strong>"
-        i = close_j + 1
+      local j = i + 2
+      while j < #text
+        if text[j] == "*" and text[j + 1] == "*"
+          break
+        j = j + 1
+      if j < #text
+        out[#out + 1] = "<strong>"
+        local k = i + 2
+        while k < j
+          local c = text[k]
+          if c == "&"
+            out[#out + 1] = "&amp;"
+          elif c == "<"
+            out[#out + 1] = "&lt;"
+          elif c == ">"
+            out[#out + 1] = "&gt;"
+          elif c == '"'
+            out[#out + 1] = "&quot;"
+          elif c == "'"
+            out[#out + 1] = "&#39;"
+          else
+            out[#out + 1] = c
+          k = k + 1
+        out[#out + 1] = "</strong>"
+        i = j + 2
         continue
 
     if ch == "*"
-      close_i, close_j = find_token(text, "*", i + 1)
-      if close_i
-        inner = string.sub(text, i + 1, close_i - 1)
-        out[#out + 1] = "<em>" + parse_inline(inner) + "</em>"
-        i = close_j + 1
+      local j = i + 1
+      while j <= #text and text[j] != "*"
+        j = j + 1
+      if j <= #text
+        out[#out + 1] = "<em>"
+        local k = i + 1
+        while k < j
+          local c = text[k]
+          if c == "&"
+            out[#out + 1] = "&amp;"
+          elif c == "<"
+            out[#out + 1] = "&lt;"
+          elif c == ">"
+            out[#out + 1] = "&gt;"
+          elif c == '"'
+            out[#out + 1] = "&quot;"
+          elif c == "'"
+            out[#out + 1] = "&#39;"
+          else
+            out[#out + 1] = c
+          k = k + 1
+        out[#out + 1] = "</em>"
+        i = j + 1
         continue
 
-    out[#out + 1] = escape_html(ch)
+    if ch == "&"
+      out[#out + 1] = "&amp;"
+    elif ch == "<"
+      out[#out + 1] = "&lt;"
+    elif ch == ">"
+      out[#out + 1] = "&gt;"
+    elif ch == '"'
+      out[#out + 1] = "&quot;"
+    elif ch == "'"
+      out[#out + 1] = "&#39;"
+    else
+      out[#out + 1] = ch
+
     i = i + 1
 
   return table.concat(out, "")
@@ -68,34 +136,34 @@ fn parse_inline(text)
 fn flush_paragraph(out, paragraph_lines)
   if #paragraph_lines == 0
     return nil
-  s = parse_inline(table.concat(paragraph_lines, " "))
+  local s = parse_inline(table.concat(paragraph_lines, " "))
   out[#out + 1] = "<p>" + s + "</p>"
 
   while #paragraph_lines > 0
-    paragraph_lines[-1] = nil
+    paragraph_lines[#paragraph_lines] = nil
 
 fn flush_code_block(out, code_lines, code_lang)
-  class_attr = ""
-  if code_lang and #code_lang > 0
+  local class_attr = ""
+  if code_lang != nil and #code_lang > 0
     class_attr = " class=\"language-" + escape_html(code_lang) + "\""
-  code = escape_html(table.concat(code_lines, "\n"))
+  local code = escape_html(table.concat(code_lines, "\n"))
   out[#out + 1] = "<pre><code" + class_attr + ">" + code + "</code></pre>"
 
   while #code_lines > 0
-    code_lines[-1] = nil
+    code_lines[#code_lines] = nil
 
 fn to_html(markdown)
-  if not markdown return ""
+  if markdown == nil return ""
   if type(markdown) != "string"
     markdown = str(markdown)
 
-  lines = string.split(markdown, "\n")
-  out = {}
-  paragraph_lines = {}
-  code_lines = {}
+  local lines = string.split(markdown, "\n")
+  local out = {}
+  local paragraph_lines = {}
+  local code_lines = {}
 
-  in_code_block = false
-  code_lang = nil
+  local in_code_block = false
+  local code_lang = nil
 
   for line in lines
     if #line > 0 and line[#line] == "\r"

@@ -1,0 +1,43 @@
+from lib.test import assert_eq, assert_true
+
+fn classify(n)
+  match n
+    case 0
+      return "zero"
+    case 1
+      return "one"
+    else
+      return "many"
+
+assert_eq(classify(0), "zero")
+assert_eq(classify(1), "one")
+assert_eq(classify(9), "many")
+
+value = "b"
+result = ""
+match value
+  case "a"
+    result = "A"
+  case "b"
+    result = "B"
+  else
+    result = "?"
+assert_eq(result, "B")
+
+count = 0
+fn next_value()
+  count = count + 1
+  return 2
+
+match next_value()
+  case 1
+    result = "one"
+  case 2
+    result = "two"
+  else
+    result = "other"
+assert_eq(result, "two")
+assert_true(count > 0)
+assert_true(not (count > 1))
+
+print "match/case ok"

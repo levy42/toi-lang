@@ -108,8 +108,19 @@ static void try_statement();
 static void throw_statement();
 static void yield_statement();
 static void with_statement();
+static void match_statement();
+static Token synthetic_token(const char* name);
 static int is_multi_assignment_statement(void);
 static void multi_assignment_statement(void);
+
+static int match_identifier_keyword(const char* keyword) {
+    int length = (int)strlen(keyword);
+    if (!check(TOKEN_IDENTIFIER)) return 0;
+    if (parser.current.length != length) return 0;
+    if (memcmp(parser.current.start, keyword, (size_t)length) != 0) return 0;
+    advance();
+    return 1;
+}
 
 static void assign_name_from_stack(Token name, uint8_t rhs_type) {
     uint8_t set_op;
@@ -252,6 +263,115 @@ static void if_statement() {
     }
     
     patch_jump(else_jump);
+}
+
+static void match_statement() {
+    begin_scope();
+
+    type_stack_top = 0;
+    expression();
+    Token match_value_token = synthetic_token("$match_value");
+    int match_slot = current->local_count;
+    add_local(match_value_token);
+    mark_initialized();
+    type_stack_top = 0;
+
+    consume(TOKEN_INDENT, "Expected indented block after 'match'.");
+
+    int clause_end_jumps[256];
+    int clause_end_count = 0;
+    int pending_case_fail_jump = -1;
+    int saw_clause = 0;
+    int saw_else = 0;
+
+    while (!check(TOKEN_DEDENT) && !check(TOKEN_EOF)) {
+        if (pending_case_fail_jump != -1) {
+            patch_jump(pending_case_fail_jump);
+            emit_byte(OP_POP); // Pop failed comparison result.
+            pending_case_fail_jump = -1;
+        }
+
+        if (match_identifier_keyword("case")) {
+            if (saw_else) {
+                error("Can't have 'case' after 'else' in match.");
+                break;
+            }
+
+            saw_clause = 1;
+            type_stack_top = 0;
+            emit_bytes(OP_GET_LOCAL, (uint8_t)match_slot);
+            expression();
+            emit_byte(OP_EQUAL);
+
+            int case_fail_jump = emit_jump(OP_JUMP_IF_FALSE);
+            emit_byte(OP_POP); // Pop successful comparison result.
+
+            int case_line = parser.previous.line;
+            begin_scope();
+            if (match(TOKEN_INDENT)) {
+                block();
+                match(TOKEN_DEDENT);
+            } else {
+                if (parser.current.line > case_line) {
+                    error("Expected indented block after 'case'.");
+                }
+                statement();
+            }
+            end_scope();
+
+            if (clause_end_count >= 256) {
+                error("Too many clauses in match statement.");
+            } else {
+                clause_end_jumps[clause_end_count++] = emit_jump(OP_JUMP);
+            }
+            pending_case_fail_jump = case_fail_jump;
+            continue;
+        }
+
+        if (match(TOKEN_ELSE)) {
+            if (saw_else) {
+                error("Can't have multiple 'else' clauses in match.");
+                break;
+            }
+
+            saw_clause = 1;
+            saw_else = 1;
+
+            int else_line = parser.previous.line;
+            begin_scope();
+            if (match(TOKEN_INDENT)) {
+                block();
+                match(TOKEN_DEDENT);
+            } else {
+                if (parser.current.line > else_line) {
+                    error("Expected indented block after 'else'.");
+                }
+                statement();
+            }
+            end_scope();
+            break;
+        }
+
+        error("Expect 'case' or 'else' in match block.");
+        break;
+    }
+
+    if (pending_case_fail_jump != -1) {
+        patch_jump(pending_case_fail_jump);
+        emit_byte(OP_POP); // Pop failed comparison result.
+    }
+
+    consume(TOKEN_DEDENT, "Expect end of match block.");
+
+    for (int i = 0; i < clause_end_count; i++) {
+        patch_jump(clause_end_jumps[i]);
+    }
+
+    end_scope();
+
+    if (!saw_clause) {
+        error("Match block must contain at least one clause.");
+    }
 }
 
 static void try_statement() {
@@ -919,6 +1039,8 @@ void statement(void) {
         print_statement();
     } else if (match(TOKEN_IF)) {
         if_statement();
+    } else if (match_identifier_keyword("match")) {
+        match_statement();
     } else if (match(TOKEN_TRY)) {
         try_statement();
     } else if (match(TOKEN_WITH)) {
