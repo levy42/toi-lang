@@ -1,13 +1,7 @@
+from lib.test import assert_eq, assert_true
+
 btree = import btree
 os = import os
-
-fn assert_true(cond, msg = nil)
-  if not cond
-    error(msg == nil ? "assert_true failed" : msg)
-
-fn assert_eq(actual, expected, msg = nil)
-  if actual != expected
-    error(msg == nil ? "assert_eq failed" : msg)
 
 -- Best effort cleanup from previous runs.
 os.remove("tests/tmp_btree.db")

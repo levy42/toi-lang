@@ -23,18 +23,18 @@ typedef struct {
  
  // Load a native module by name. Returns 1 if found and loaded, 0 otherwise.
  // The module table is pushed onto the stack if successful.
- int loadNativeModule(VM* vm, const char* name);
+ int load_native_module(VM* vm, const char* name);
  
  // Check if a module name is a known native module
- int isNativeModule(const char* name);
+ int is_native_module(const char* name);
  
-void registerLibs(VM* vm);
+void register_libs(VM* vm);
 
 // Helper to register a module with a list of native functions
-void registerModule(VM* vm, const char* name, const NativeReg* funcs);
+void register_module(VM* vm, const char* name, const NativeReg* funcs);
 
 // Exposed Core Function
-int core_tostring(VM* vm, int argCount, Value* args);
+int core_tostring(VM* vm, int arg_count, Value* args);
 
 // --- Macros for Native Functions ---
 
@@ -61,17 +61,17 @@ int core_tostring(VM* vm, int argCount, Value* args);
     do { push(vm, val); return 1; } while(0)
 
 #define RETURN_STRING(s, len) \
-    do { push(vm, OBJ_VAL(copyString(s, len))); return 1; } while(0)
+    do { push(vm, OBJ_VAL(copy_string(s, len))); return 1; } while(0)
 
 // Argument checking helpers
 #define ASSERT_ARGC_GE(n) \
-    if (argCount < (n)) { vmRuntimeError(vm, "Expected at least %d arguments but got %d.", (n), argCount); return 0; }
+    if (arg_count < (n)) { vm_runtime_error(vm, "Expected at least %d arguments but got %d.", (n), arg_count); return 0; }
 
 #define ASSERT_ARGC_EQ(n) \
-    if (argCount != (n)) { vmRuntimeError(vm, "Expected %d arguments but got %d.", (n), argCount); return 0; }
+    if (arg_count != (n)) { vm_runtime_error(vm, "Expected %d arguments but got %d.", (n), arg_count); return 0; }
 
 #define ASSERT_TYPE(index, check_macro, type_name) \
-    if ((index) >= argCount || !check_macro(args[index])) { vmRuntimeError(vm, "Argument %d must be a %s.", (index) + 1, type_name); return 0; }
+    if ((index) >= arg_count || !check_macro(args[index])) { vm_runtime_error(vm, "Argument %d must be a %s.", (index) + 1, type_name); return 0; }
 
 #define ASSERT_NUMBER(index) ASSERT_TYPE(index, IS_NUMBER, "number")
 #define ASSERT_STRING(index) ASSERT_TYPE(index, IS_STRING, "string")

@@ -1,9 +1,9 @@
 #include "ops_import_star.h"
 
-int vmHandleOpImportStar(VM* vm) {
+int vm_handle_op_import_star(VM* vm) {
     Value module = pop(vm);
     if (!IS_TABLE(module)) {
-        vmRuntimeError(vm, "from ... import * expects module table export.");
+        vm_runtime_error(vm, "from ... import * expects module table export.");
         return 0;
     }
 
@@ -11,9 +11,9 @@ int vmHandleOpImportStar(VM* vm) {
     for (int i = 0; i < t->table.capacity; i++) {
         Entry* entry = &t->table.entries[i];
         if (entry->key != NULL && !IS_NIL(entry->value)) {
-            tableSet(&vm->globals, entry->key, entry->value);
+            table_set(&vm->globals, entry->key, entry->value);
         }
     }
-    maybeCollectGarbage(vm);
+    maybe_collect_garbage(vm);
     return 1;
 }

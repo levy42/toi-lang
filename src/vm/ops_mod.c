@@ -11,7 +11,7 @@ static inline int to_int64_local(double x, int64_t* out) {
     return 1;
 }
 
-void vmHandleOpIMod(VM* vm) {
+void vm_handle_op_i_mod(VM* vm) {
     double bd = AS_NUMBER(pop(vm));
     double ad = AS_NUMBER(pop(vm));
     int64_t ia, ib;
@@ -22,7 +22,7 @@ void vmHandleOpIMod(VM* vm) {
     }
 }
 
-int vmHandleOpModConst(VM* vm, CallFrame** frame, uint8_t** ip, Value b) {
+int vm_handle_op_mod_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b) {
     Value a = pop(vm);
     if (IS_NUMBER(a) && IS_NUMBER(b)) {
         double ad = AS_NUMBER(a);
@@ -36,15 +36,15 @@ int vmHandleOpModConst(VM* vm, CallFrame** frame, uint8_t** ip, Value b) {
         return 1;
     }
 
-    Value method = getMetamethod(vm, a, "__mod");
-    if (IS_NIL(method)) method = getMetamethod(vm, b, "__mod");
+    Value method = get_metamethod(vm, a, "__mod");
+    if (IS_NIL(method)) method = get_metamethod(vm, b, "__mod");
     if (IS_NIL(method)) return 0;
     push(vm, method);
     push(vm, a);
     push(vm, b);
     (*frame)->ip = *ip;
     if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-    *frame = &vm->currentThread->frames[vm->currentThread->frameCount - 1];
+    *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
     *ip = (*frame)->ip;
     return 1;
 }

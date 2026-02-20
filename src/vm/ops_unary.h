@@ -3,8 +3,8 @@
 
 #include "../vm.h"
 
-void vmHandleOpNegate(VM* vm);
-void vmHandleOpNot(VM* vm);
-int vmHandleOpLength(VM* vm);
+void vm_handle_op_negate(VM* vm);
+void vm_handle_op_not(VM* vm);
+int vm_handle_op_length(VM* vm);
 
 #endif

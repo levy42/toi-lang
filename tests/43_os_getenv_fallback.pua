@@ -1,8 +1,6 @@
-os = import os
+from lib.test import assert_eq
 
-fn assert_eq(actual, expected)
-  if actual != expected
-    error("assert_eq failed")
+os = import os
 
 assert_eq(os.getenv("PUA__MISSING_ENV_TEST"), nil)
 assert_eq(os.getenv("PUA__MISSING_ENV_TEST", "fallback"), "fallback")

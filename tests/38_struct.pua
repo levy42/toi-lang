@@ -1,14 +1,8 @@
+from lib.test import assert_eq, assert_true
+
 struct = import struct
 binary = import binary
 string = import string
-
-fn assert_true(cond, msg = nil)
-  if not cond
-    error(msg == nil ? "assert_true failed" : msg)
-
-fn assert_eq(actual, expected, msg = nil)
-  if actual != expected
-    error(msg == nil ? "assert_eq failed" : msg)
 
 b = struct.pack("10s I", "abc", 123456)
 hex = binary.hex(b)

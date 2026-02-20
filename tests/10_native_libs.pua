@@ -1,3 +1,5 @@
+from lib.test import assert_eq, assert_true
+
 time = import time
 math = import math
 string = import string
@@ -5,14 +7,6 @@ io = import io
 os = import os
 table = import table
 inspect = import inspect
-
-fn assert_true(cond, msg = nil)
-  if not cond
-    error("assert_true failed")
-
-fn assert_eq(actual, expected, msg = nil)
-  if actual != expected
-    error("assert_eq failed")
 
 -- time
 secs = time.seconds()

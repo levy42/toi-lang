@@ -3,6 +3,6 @@
 
 #include "../vm.h"
 
-int vmHandleOpHas(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_has(VM* vm, CallFrame** frame, uint8_t** ip);
 
 #endif

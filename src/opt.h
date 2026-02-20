@@ -3,6 +3,6 @@
 
 #include "chunk.h"
 
-void optimizeChunk(Chunk* chunk);
+void optimize_chunk(Chunk* chunk);
 
 #endif

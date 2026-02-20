@@ -2,6 +2,12 @@
 
 Pua is a small, Lua-like scripting language with indentation-based blocks and a compact standard library.
 
+## Documentation
+
+Full documentation is in `docs/`:
+
+- `docs/README.md`
+
 ## Build
 
 ```bash

@@ -3,6 +3,6 @@
 
 #include "../vm.h"
 
-int vmBuildString(VM* vm, uint8_t partCount);
+int vm_build_string(VM* vm, uint8_t part_count);
 
 #endif

@@ -1,10 +1,6 @@
 http_server = import lib.http_server
 string = import string
 
-fn assert_true(cond, msg = nil)
-  if not cond
-    error("assert_true failed")
-
 fn assert_has(haystack, needle)
   local i, j = string.find(haystack, needle)
   if i == nil

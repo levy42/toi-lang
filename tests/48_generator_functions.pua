@@ -1,0 +1,28 @@
+from lib.test import assert_eq, assert_true
+
+coroutine = import coroutine
+
+fn gen(n)
+  i = 1
+  while i <= n
+    yield i
+    i += 1
+
+g = gen(5)
+assert_eq(type(g), "thread")
+
+sum = 0
+for v in g
+  sum += v
+assert_eq(sum, 15)
+assert_eq(coroutine.status(g), "dead")
+
+g2 = gen(2)
+ok1 = coroutine.resume(g2)
+assert_eq(ok1, 1)
+ok2 = coroutine.resume(g2)
+assert_eq(ok2, 2)
+ok3 = coroutine.resume(g2)
+assert_eq(ok3, 3)
+
+print "generator functions ok"

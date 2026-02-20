@@ -4,15 +4,15 @@
 #include "value.h"
 #include "object.h"
 
-// We need forward decl for callFunction or tableGet if we want full __str support?
-// `printValue` in `value.c` cannot easily call into the VM/Interpreter for `__str` without circular dependency or callback.
-// For the Debug/VM phase, let's stick to a raw `printValue` that debugs the value type without executing code.
-// The existing `printValue` in parser.c was rich (called __str).
-// Let's implement a "raw" printValue here for debugging, and keep the rich one in the VM/Parser later.
+// We need forward decl for call_function or table_get if we want full __str support?
+// `print_value` in `value.c` cannot easily call into the VM/Interpreter for `__str` without circular dependency or callback.
+// For the Debug/VM phase, let's stick to a raw `print_value` that debugs the value type without executing code.
+// The existing `print_value` in parser.c was rich (called __str).
+// Let's implement a "raw" print_value here for debugging, and keep the rich one in the VM/Parser later.
 
-void printValue(Value value) {
+void print_value(Value value) {
     if (IS_OBJ(value)) {
-        printObject(value);
+        print_object(value);
     } else if (IS_NIL(value)) {
         printf("nil");
     } else if (IS_BOOL(value)) {
@@ -34,16 +34,16 @@ void printValue(Value value) {
     }
 }
 
-void initValueArray(ValueArray* array) {
+void init_value_array(ValueArray* array) {
     array->values = NULL;
     array->capacity = 0;
     array->count = 0;
 }
 
-void writeValueArray(ValueArray* array, Value value) {
+void write_value_array(ValueArray* array, Value value) {
     if (array->capacity < array->count + 1) {
-        int oldCapacity = array->capacity;
-        array->capacity = oldCapacity < 8 ? 8 : oldCapacity * 2;
+        int old_capacity = array->capacity;
+        array->capacity = old_capacity < 8 ? 8 : old_capacity * 2;
         array->values = (Value*)realloc(array->values, sizeof(Value) * array->capacity);
     }
     
@@ -51,7 +51,7 @@ void writeValueArray(ValueArray* array, Value value) {
     array->count++;
 }
 
-void freeValueArray(ValueArray* array) {
+void free_value_array(ValueArray* array) {
     free(array->values);
-    initValueArray(array);
+    init_value_array(array);
 }

@@ -1,20 +1,4 @@
-fn assert_true(cond, msg = nil)
-  if not cond
-    error("assert_true failed")
-
-fn assert_eq(actual, expected, msg = nil)
-  if actual != expected
-    error("assert_eq failed")
-
-fn expect_error(fn_)
-  msg = nil
-  try
-    fn_()
-  except e
-    msg = e
-  if msg == nil
-    error("expect_error failed")
-  return msg
+from lib.test import assert_eq, assert_true, expect_error
 
 -- types module
 types = import lib.types

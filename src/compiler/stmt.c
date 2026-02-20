@@ -4,135 +4,135 @@
 #include "stmt.h"
 #include "stmt_control.h"
 
-static void importStatement() {
+static void import_statement() {
     // Parse: import module_name[.submodule...]
     consume(TOKEN_IDENTIFIER, "Expect module name after 'import'.");
 
     // Build the full dotted module path
-    char modulePath[256];
+    char module_path[256];
     int len = 0;
-    Token lastComponent = parser.previous;  // Track last component for variable name
+    Token last_component = parser.previous;  // Track last component for variable name
 
     // Copy first identifier
-    int firstLen = parser.previous.length;
-    if (firstLen >= 256) firstLen = 255;
-    memcpy(modulePath, parser.previous.start, firstLen);
-    len = firstLen;
+    int first_len = parser.previous.length;
+    if (first_len >= 256) first_len = 255;
+    memcpy(module_path, parser.previous.start, first_len);
+    len = first_len;
 
     // Parse additional .submodule components
     while (match(TOKEN_DOT)) {
-        if (len < 255) modulePath[len++] = '.';
+        if (len < 255) module_path[len++] = '.';
         consume(TOKEN_IDENTIFIER, "Expect module name after '.'.");
-        lastComponent = parser.previous;  // Update to last component
-        int partLen = parser.previous.length;
-        if (len + partLen >= 256) partLen = 255 - len;
-        if (partLen > 0) {
-            memcpy(modulePath + len, parser.previous.start, partLen);
-            len += partLen;
+        last_component = parser.previous;  // Update to last component
+        int part_len = parser.previous.length;
+        if (len + part_len >= 256) part_len = 255 - len;
+        if (part_len > 0) {
+            memcpy(module_path + len, parser.previous.start, part_len);
+            len += part_len;
         }
     }
-    modulePath[len] = '\0';
+    module_path[len] = '\0';
 
     // Use the last component as the variable name
-    parser.previous = lastComponent;
+    parser.previous = last_component;
 
     // Declare the local variable using last component
-    declareVariable();
+    declare_variable();
 
     // Create a string constant with the full path
-    ObjString* pathString = copyString(modulePath, len);
-    uint8_t pathConstant = makeConstant(OBJ_VAL(pathString));
+    ObjString* path_string = copy_string(module_path, len);
+    uint8_t path_constant = make_constant(OBJ_VAL(path_string));
 
     // Emit the import opcode with full path
-    emitBytes(OP_IMPORT, pathConstant);
+    emit_bytes(OP_IMPORT, path_constant);
 
     // Define the variable.
-    if (current->scopeDepth > 0) {
-        markInitialized();
+    if (current->scope_depth > 0) {
+        mark_initialized();
     } else {
-        uint8_t varName = identifierConstant(&lastComponent);
-        emitBytes(OP_DEFINE_GLOBAL, varName);
+        uint8_t var_name = identifier_constant(&last_component);
+        emit_bytes(OP_DEFINE_GLOBAL, var_name);
     }
 }
 
-static void fromImportStatement(void) {
+static void from_import_statement(void) {
     // Parse: from module_name[.submodule...] import name[, name...]
     consume(TOKEN_IDENTIFIER, "Expect module name after 'from'.");
 
-    char modulePath[256];
+    char module_path[256];
     int len = 0;
 
-    int firstLen = parser.previous.length;
-    if (firstLen >= 256) firstLen = 255;
-    memcpy(modulePath, parser.previous.start, firstLen);
-    len = firstLen;
+    int first_len = parser.previous.length;
+    if (first_len >= 256) first_len = 255;
+    memcpy(module_path, parser.previous.start, first_len);
+    len = first_len;
 
     while (match(TOKEN_DOT)) {
-        if (len < 255) modulePath[len++] = '.';
+        if (len < 255) module_path[len++] = '.';
         consume(TOKEN_IDENTIFIER, "Expect module name after '.'.");
-        int partLen = parser.previous.length;
-        if (len + partLen >= 256) partLen = 255 - len;
-        if (partLen > 0) {
-            memcpy(modulePath + len, parser.previous.start, partLen);
-            len += partLen;
+        int part_len = parser.previous.length;
+        if (len + part_len >= 256) part_len = 255 - len;
+        if (part_len > 0) {
+            memcpy(module_path + len, parser.previous.start, part_len);
+            len += part_len;
         }
     }
-    modulePath[len] = '\0';
+    module_path[len] = '\0';
 
     consume(TOKEN_IMPORT, "Expect 'import' after module path.");
 
     // Prepare module path constant for repeated imports.
-    ObjString* pathString = copyString(modulePath, len);
-    uint8_t pathConstant = makeConstant(OBJ_VAL(pathString));
+    ObjString* path_string = copy_string(module_path, len);
+    uint8_t path_constant = make_constant(OBJ_VAL(path_string));
     if (match(TOKEN_STAR)) {
-        emitBytes(OP_IMPORT, pathConstant);
-        emitByte(OP_IMPORT_STAR);
+        emit_bytes(OP_IMPORT, path_constant);
+        emit_byte(OP_IMPORT_STAR);
         return;
     }
 
     do {
         consume(TOKEN_IDENTIFIER, "Expect imported name.");
-        Token importedName = parser.previous;
+        Token imported_name = parser.previous;
 
-        emitBytes(OP_IMPORT, pathConstant);
+        emit_bytes(OP_IMPORT, path_constant);
 
         // module[name]
-        emitConstant(OBJ_VAL(copyString(importedName.start, importedName.length)));
-        emitByte(OP_GET_TABLE);
+        emit_constant(OBJ_VAL(copy_string(imported_name.start, imported_name.length)));
+        emit_byte(OP_GET_TABLE);
 
         // Define imported symbol in current scope.
-        parser.previous = importedName;
-        if (current->scopeDepth > 0) {
-            declareVariable();
-            markInitialized();
+        parser.previous = imported_name;
+        if (current->scope_depth > 0) {
+            declare_variable();
+            mark_initialized();
         } else {
-            uint8_t varName = identifierConstant(&importedName);
-            emitBytes(OP_DEFINE_GLOBAL, varName);
+            uint8_t var_name = identifier_constant(&imported_name);
+            emit_bytes(OP_DEFINE_GLOBAL, var_name);
         }
     } while (match(TOKEN_COMMA));
 }
 
 void declaration(void) {
     if (match(TOKEN_AT)) {
-        decoratedFunctionDeclaration();
+        decorated_function_declaration();
     } else if (match(TOKEN_FN)) {
-        functionDeclaration();
+        function_declaration();
     } else if (match(TOKEN_IMPORT)) {
-        importStatement();
+        import_statement();
     } else if (match(TOKEN_FROM)) {
-        fromImportStatement();
+        from_import_statement();
     } else if (match(TOKEN_GLOBAL)) {
         if (match(TOKEN_FN)) {
-            globalFunctionDeclaration();
+            global_function_declaration();
         } else {
-            globalDeclaration();
+            global_declaration();
         }
     } else if (match(TOKEN_LOCAL)) {
         // Check if this is "local fn name()" syntax
         if (match(TOKEN_FN)) {
-            functionDeclaration();
+            function_declaration();
         } else {
-            variableDeclaration();
+            variable_declaration();
         }
     } else {
         statement();

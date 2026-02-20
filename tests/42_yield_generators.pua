@@ -1,6 +1,4 @@
-fn assert_eq(actual, expected, msg = nil)
-  if actual != expected
-    error("assert_eq failed")
+from lib.test import assert_eq
 
 coroutine = import coroutine
 

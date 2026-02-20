@@ -3,12 +3,12 @@
 
 #include "../vm.h"
 
-int vmHandleOpSubConst(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
-int vmHandleOpMulConst(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
-int vmHandleOpDivConst(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
-void vmHandleOpIAdd(VM* vm);
-void vmHandleOpISub(VM* vm);
-void vmHandleOpIMul(VM* vm);
-void vmHandleOpIDiv(VM* vm);
+int vm_handle_op_sub_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
+int vm_handle_op_mul_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
+int vm_handle_op_div_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
+void vm_handle_op_i_add(VM* vm);
+void vm_handle_op_i_sub(VM* vm);
+void vm_handle_op_i_mul(VM* vm);
+void vm_handle_op_i_div(VM* vm);
 
 #endif

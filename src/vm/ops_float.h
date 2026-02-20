@@ -3,10 +3,10 @@
 
 #include "../vm.h"
 
-void vmHandleOpFAdd(VM* vm);
-void vmHandleOpFSub(VM* vm);
-void vmHandleOpFMul(VM* vm);
-void vmHandleOpFDiv(VM* vm);
-void vmHandleOpFMod(VM* vm);
+void vm_handle_op_f_add(VM* vm);
+void vm_handle_op_f_sub(VM* vm);
+void vm_handle_op_f_mul(VM* vm);
+void vm_handle_op_f_div(VM* vm);
+void vm_handle_op_f_mod(VM* vm);
 
 #endif

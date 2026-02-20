@@ -3,6 +3,6 @@
 
 #include "../vm.h"
 
-int vmHandleOpImportStar(VM* vm);
+int vm_handle_op_import_star(VM* vm);
 
 #endif

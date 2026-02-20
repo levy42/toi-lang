@@ -9,8 +9,10 @@
 #include "../value.h"
 #include "../vm.h"
 
-static int time_seconds(VM* vm, int argCount, Value* args) {
+static int time_seconds(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(0);
+    (void)vm;
+    (void)args;
     #if defined(CLOCK_REALTIME)
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
@@ -20,13 +22,17 @@ static int time_seconds(VM* vm, int argCount, Value* args) {
     RETURN_NUMBER((double)time(NULL));
 }
 
-static int time_clock(VM* vm, int argCount, Value* args) {
+static int time_clock(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(0);
+    (void)vm;
+    (void)args;
     RETURN_NUMBER((double)clock() / CLOCKS_PER_SEC);
 }
 
-static int time_nanos(VM* vm, int argCount, Value* args) {
+static int time_nanos(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(0);
+    (void)vm;
+    (void)args;
     #if defined(CLOCK_REALTIME)
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
@@ -37,8 +43,10 @@ static int time_nanos(VM* vm, int argCount, Value* args) {
     RETURN_NUMBER((double)time(NULL) * 1e9);
 }
 
-static int time_micros(VM* vm, int argCount, Value* args) {
+static int time_micros(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(0);
+    (void)vm;
+    (void)args;
     #if defined(CLOCK_REALTIME)
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
@@ -49,12 +57,12 @@ static int time_micros(VM* vm, int argCount, Value* args) {
     RETURN_NUMBER((double)time(NULL) * 1e6);
 }
 
-static int time_sleep(VM* vm, int argCount, Value* args) {
+static int time_sleep(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_NUMBER(0);
     double seconds = GET_NUMBER(0);
     if (seconds < 0) {
-        vmRuntimeError(vm, "sleep() expects a non-negative number.");
+        vm_runtime_error(vm, "sleep() expects a non-negative number.");
         return 0;
     }
 
@@ -80,8 +88,8 @@ static int time_sleep(VM* vm, int argCount, Value* args) {
     RETURN_NIL;
 }
 
-void registerTime(VM* vm) {
-    const NativeReg timeFuncs[] = {
+void register_time(VM* vm) {
+    const NativeReg time_funcs[] = {
         {"time", time_seconds},
         {"seconds", time_seconds},
         {"micros", time_micros},
@@ -91,6 +99,6 @@ void registerTime(VM* vm) {
         {NULL, NULL}
     };
 
-    registerModule(vm, "time", timeFuncs);
-    pop(vm); // Pop timeModule
+    register_module(vm, "time", time_funcs);
+    pop(vm); // Pop time_module
 }

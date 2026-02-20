@@ -3,19 +3,19 @@
 #include <ctype.h>
 #include "lexer.h"
 
-void initLexer(Lexer* lexer, const char* source) {
+void init_lexer(Lexer* lexer, const char* source) {
     lexer->start = source;
     lexer->current = source;
-    lexer->sourceStart = source;
+    lexer->source_start = source;
     lexer->line = 1;
-    lexer->indentTop = 0;
-    lexer->indentStack[0] = 0; // Base level 0
-    lexer->pendingDedents = 0;
-    lexer->atStartOfLine = 1;
-    lexer->insideTable = 0;
+    lexer->indent_top = 0;
+    lexer->indent_stack[0] = 0; // Base level 0
+    lexer->pending_dedents = 0;
+    lexer->at_start_of_line = 1;
+    lexer->inside_table = 0;
 }
 
-static int isAtEnd(Lexer* lexer) {
+static int is_at_end(Lexer* lexer) {
     return *lexer->current == '\0';
 }
 
@@ -28,12 +28,12 @@ static char peek(Lexer* lexer) {
     return *lexer->current;
 }
 
-static char peekNext(Lexer* lexer) {
-    if (isAtEnd(lexer)) return '\0';
+static char peek_next(Lexer* lexer) {
+    if (is_at_end(lexer)) return '\0';
     return lexer->current[1];
 }
 
-static Token makeToken(Lexer* lexer, TokenType type) {
+static Token make_token(Lexer* lexer, TokenType type) {
     Token token;
     token.type = type;
     token.start = lexer->start;
@@ -42,7 +42,7 @@ static Token makeToken(Lexer* lexer, TokenType type) {
     return token;
 }
 
-static Token errorToken(Lexer* lexer, const char* message) {
+static Token error_token(Lexer* lexer, const char* message) {
     Token token;
     token.type = TOKEN_ERROR;
     token.start = message;
@@ -88,11 +88,12 @@ static Keyword keywords[] = {
     {"import",   6, TOKEN_IMPORT},
     {"from",     4, TOKEN_FROM},
     {"del",      3, TOKEN_DEL},
+    {"assert",   6, TOKEN_ASSERT},
     {"true",     4, TOKEN_TRUE},
     {NULL,       0, TOKEN_EOF} // Sentinel
 };
 
-static TokenType identifierType(Lexer* lexer) {
+static TokenType identifier_type(Lexer* lexer) {
     int length = (int)(lexer->current - lexer->start);
     for (int i = 0; keywords[i].name != NULL; i++) {
         if (length == keywords[i].length &&
@@ -105,62 +106,62 @@ static TokenType identifierType(Lexer* lexer) {
 
 static Token identifier(Lexer* lexer) {
     while (isalnum(peek(lexer)) || peek(lexer) == '_') advance(lexer);
-    return makeToken(lexer, identifierType(lexer));
+    return make_token(lexer, identifier_type(lexer));
 }
 
 static Token number(Lexer* lexer) {
-    int lastWasDigit = 1; // First digit already consumed by caller
+    int last_was_digit = 1; // First digit already consumed by caller
     while (1) {
         char c = peek(lexer);
         if (isdigit(c)) {
-            lastWasDigit = 1;
+            last_was_digit = 1;
             advance(lexer);
             continue;
         }
-        if (c == '_' && lastWasDigit && isdigit(peekNext(lexer))) {
-            lastWasDigit = 0;
+        if (c == '_' && last_was_digit && isdigit(peek_next(lexer))) {
+            last_was_digit = 0;
             advance(lexer);
             continue;
         }
         break;
     }
-    if (peek(lexer) == '.' && isdigit(peekNext(lexer))) {
+    if (peek(lexer) == '.' && isdigit(peek_next(lexer))) {
         advance(lexer);
-        lastWasDigit = 0;
+        last_was_digit = 0;
         while (1) {
             char c = peek(lexer);
             if (isdigit(c)) {
-                lastWasDigit = 1;
+                last_was_digit = 1;
                 advance(lexer);
                 continue;
             }
-            if (c == '_' && lastWasDigit && isdigit(peekNext(lexer))) {
-                lastWasDigit = 0;
+            if (c == '_' && last_was_digit && isdigit(peek_next(lexer))) {
+                last_was_digit = 0;
                 advance(lexer);
                 continue;
             }
             break;
         }
     }
-    return makeToken(lexer, TOKEN_NUMBER);
+    return make_token(lexer, TOKEN_NUMBER);
 }
 
 static Token string(Lexer* lexer, char quote) {
-    while (peek(lexer) != quote && !isAtEnd(lexer)) {
+    while (peek(lexer) != quote && !is_at_end(lexer)) {
         if (peek(lexer) == '\n') lexer->line++;
-        if (peek(lexer) == '\\' && peekNext(lexer) != '\0') {
+        if (peek(lexer) == '\\' && peek_next(lexer) != '\0') {
             advance(lexer); // Skip the backslash
             if (peek(lexer) == '\n') lexer->line++; // Handle escaped newline
         }
         advance(lexer);
     }
-    if (isAtEnd(lexer)) return errorToken(lexer, "Unterminated string.");
+    if (is_at_end(lexer)) return error_token(lexer, "Unterminated string.");
     advance(lexer);
-    return makeToken(lexer, TOKEN_STRING);
+    return make_token(lexer, TOKEN_STRING);
 }
 
 
-static Token multilineString(Lexer* lexer) {
+static Token multiline_string(Lexer* lexer) {
     // When called, lexer->start points at the first '['
     // lexer->current is past the first '[' (consumed by the case statement)
     // peek() has verified that the next char is also '['
@@ -170,31 +171,31 @@ static Token multilineString(Lexer* lexer) {
 
     // Scan content until we find ]]
     // Keep lexer->start pointing at the first '[' so the token includes [[...]]
-    while (!isAtEnd(lexer)) {
-        if (peek(lexer) == ']' && peekNext(lexer) == ']') {
+    while (!is_at_end(lexer)) {
+        if (peek(lexer) == ']' && peek_next(lexer) == ']') {
             // Found closing ]]
             // Skip ]] and create token
             advance(lexer); // Skip first ]
             advance(lexer); // Skip second ]
             // Token now includes [[...]] from start to current
-            return makeToken(lexer, TOKEN_STRING);
+            return make_token(lexer, TOKEN_STRING);
         }
         // Not at closing yet, keep scanning
         if (peek(lexer) == '\n') lexer->line++;
         advance(lexer);
     }
 
-    return errorToken(lexer, "Unterminated multiline string.");
+    return error_token(lexer, "Unterminated multiline string.");
 }
 
-Token scanToken(Lexer* lexer) {
-    if (lexer->pendingDedents > 0) {
-        lexer->pendingDedents--;
-        return makeToken(lexer, TOKEN_DEDENT);
+Token scan_token(Lexer* lexer) {
+    if (lexer->pending_dedents > 0) {
+        lexer->pending_dedents--;
+        return make_token(lexer, TOKEN_DEDENT);
     }
 
-    if (lexer->atStartOfLine && lexer->insideTable == 0) {
-        lexer->atStartOfLine = 0;
+    if (lexer->at_start_of_line && lexer->inside_table == 0) {
+        lexer->at_start_of_line = 0;
         int indent = 0;
         lexer->start = lexer->current;
         while (peek(lexer) == ' ' || peek(lexer) == '\t') {
@@ -202,42 +203,42 @@ Token scanToken(Lexer* lexer) {
             else indent += 4;
         }
 
-        if (peek(lexer) == '\n' || (peek(lexer) == '-' && peekNext(lexer) == '-')) {
-            lexer->atStartOfLine = 1;
+        if (peek(lexer) == '\n' || (peek(lexer) == '-' && peek_next(lexer) == '-')) {
+            lexer->at_start_of_line = 1;
             if (peek(lexer) == '\n') {
                 lexer->line++;
                 advance(lexer);
             } else {
-                while (peek(lexer) != '\n' && !isAtEnd(lexer)) advance(lexer);
+                while (peek(lexer) != '\n' && !is_at_end(lexer)) advance(lexer);
             }
-            return scanToken(lexer);
+            return scan_token(lexer);
         }
 
-        if (isAtEnd(lexer)) {
+        if (is_at_end(lexer)) {
              // End of file usually means dedent back to 0
              indent = 0;
         }
 
-        int currentIndent = lexer->indentStack[lexer->indentTop];
-        if (indent > currentIndent) {
-            lexer->indentTop++;
-            lexer->indentStack[lexer->indentTop] = indent;
-            return makeToken(lexer, TOKEN_INDENT);
-        } else if (indent < currentIndent) {
-            while (lexer->indentTop > 0 && lexer->indentStack[lexer->indentTop] > indent) {
-                lexer->indentTop--;
-                lexer->pendingDedents++;
+        int current_indent = lexer->indent_stack[lexer->indent_top];
+        if (indent > current_indent) {
+            lexer->indent_top++;
+            lexer->indent_stack[lexer->indent_top] = indent;
+            return make_token(lexer, TOKEN_INDENT);
+        } else if (indent < current_indent) {
+            while (lexer->indent_top > 0 && lexer->indent_stack[lexer->indent_top] > indent) {
+                lexer->indent_top--;
+                lexer->pending_dedents++;
             }
-            if (lexer->indentStack[lexer->indentTop] != indent) {
-                return errorToken(lexer, "Inconsistent indentation.");
+            if (lexer->indent_stack[lexer->indent_top] != indent) {
+                return error_token(lexer, "Inconsistent indentation.");
             }
-            if (lexer->pendingDedents > 0) {
-                lexer->pendingDedents--;
-                return makeToken(lexer, TOKEN_DEDENT);
+            if (lexer->pending_dedents > 0) {
+                lexer->pending_dedents--;
+                return make_token(lexer, TOKEN_DEDENT);
             }
         }
-    } else if (lexer->atStartOfLine) {
-        lexer->atStartOfLine = 0;
+    } else if (lexer->at_start_of_line) {
+        lexer->at_start_of_line = 0;
     }
 
     // Skip spaces, tabs, and comments on the current line
@@ -245,8 +246,8 @@ Token scanToken(Lexer* lexer) {
         char c = peek(lexer);
         if (c == ' ' || c == '\t' || c == '\r') {
             advance(lexer);
-        } else if (c == '-' && peekNext(lexer) == '-') {
-            while (peek(lexer) != '\n' && !isAtEnd(lexer)) advance(lexer);
+        } else if (c == '-' && peek_next(lexer) == '-') {
+            while (peek(lexer) != '\n' && !is_at_end(lexer)) advance(lexer);
         } else {
             break;
         }
@@ -255,91 +256,99 @@ Token scanToken(Lexer* lexer) {
     if (peek(lexer) == '\n') {
         lexer->line++;
         advance(lexer);
-        lexer->atStartOfLine = 1;
-        return scanToken(lexer);
+        lexer->at_start_of_line = 1;
+        return scan_token(lexer);
     }
 
     lexer->start = lexer->current;
 
-    if (isAtEnd(lexer)) {
-        if (lexer->indentTop > 0) {
-            lexer->pendingDedents = lexer->indentTop;
-            lexer->indentTop = 0;
-            return scanToken(lexer);
+    if (is_at_end(lexer)) {
+        if (lexer->indent_top > 0) {
+            lexer->pending_dedents = lexer->indent_top;
+            lexer->indent_top = 0;
+            return scan_token(lexer);
         }
-        return makeToken(lexer, TOKEN_EOF);
+        return make_token(lexer, TOKEN_EOF);
     }
 
     char c = advance(lexer);
     // Check for f-string: f"..." or f'...'
     if (c == 'f' && (peek(lexer) == '"' || peek(lexer) == '\'')) {
         char quote = advance(lexer); // consume opening quote
-        while (peek(lexer) != quote && !isAtEnd(lexer)) {
+        while (peek(lexer) != quote && !is_at_end(lexer)) {
             if (peek(lexer) == '\n') lexer->line++;
-            if (peek(lexer) == '\\' && peekNext(lexer) != '\0') {
+            if (peek(lexer) == '\\' && peek_next(lexer) != '\0') {
                 advance(lexer); // skip backslash
             }
             advance(lexer);
         }
-        if (isAtEnd(lexer)) return errorToken(lexer, "Unterminated f-string.");
+        if (is_at_end(lexer)) return error_token(lexer, "Unterminated f-string.");
         advance(lexer); // consume closing quote
-        return makeToken(lexer, TOKEN_FSTRING);
+        return make_token(lexer, TOKEN_FSTRING);
     }
     if (isalpha(c) || c == '_') return identifier(lexer);
     if (isdigit(c)) return number(lexer);
 
     switch (c) {
-        case '(': return makeToken(lexer, TOKEN_LEFT_PAREN);
-        case ')': return makeToken(lexer, TOKEN_RIGHT_PAREN);
+        case '(': return make_token(lexer, TOKEN_LEFT_PAREN);
+        case ')': return make_token(lexer, TOKEN_RIGHT_PAREN);
         case '{': 
-            lexer->insideTable++;
-            return makeToken(lexer, TOKEN_LEFT_BRACE);
+            lexer->inside_table++;
+            return make_token(lexer, TOKEN_LEFT_BRACE);
         case '}':
-            lexer->insideTable--;
-            return makeToken(lexer, TOKEN_RIGHT_BRACE);
+            lexer->inside_table--;
+            return make_token(lexer, TOKEN_RIGHT_BRACE);
         case '[':
             // Check for multiline string [[...]]
             if (peek(lexer) == '[') {
-                return multilineString(lexer);
+                return multiline_string(lexer);
             }
-            return makeToken(lexer, TOKEN_LEFT_BRACKET);
-        case ']': return makeToken(lexer, TOKEN_RIGHT_BRACKET);
-        case ';': return makeToken(lexer, TOKEN_SEMICOLON);
-        case ',': return makeToken(lexer, TOKEN_COMMA);
+            return make_token(lexer, TOKEN_LEFT_BRACKET);
+        case ']': return make_token(lexer, TOKEN_RIGHT_BRACKET);
+        case ';': return make_token(lexer, TOKEN_SEMICOLON);
+        case ',': return make_token(lexer, TOKEN_COMMA);
         case '.': 
-            if (peek(lexer) == '.') { advance(lexer); return makeToken(lexer, TOKEN_DOT_DOT); }
-            return makeToken(lexer, TOKEN_DOT);
-        case '-': return makeToken(lexer, TOKEN_MINUS);
-        case '+': return makeToken(lexer, TOKEN_PLUS);
+            if (peek(lexer) == '.') { advance(lexer); return make_token(lexer, TOKEN_DOT_DOT); }
+            return make_token(lexer, TOKEN_DOT);
+        case '-':
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_MINUS_EQUAL); }
+            return make_token(lexer, TOKEN_MINUS);
+        case '+':
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_PLUS_EQUAL); }
+            return make_token(lexer, TOKEN_PLUS);
         case '/':
-            if (peek(lexer) == '/') { advance(lexer); return makeToken(lexer, TOKEN_INT_DIV); }
-            return makeToken(lexer, TOKEN_SLASH);
+            if (peek(lexer) == '/') { advance(lexer); return make_token(lexer, TOKEN_INT_DIV); }
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_SLASH_EQUAL); }
+            return make_token(lexer, TOKEN_SLASH);
         case '*':
-            if (peek(lexer) == '*') { advance(lexer); return makeToken(lexer, TOKEN_POWER); }
-            return makeToken(lexer, TOKEN_STAR);
-        case '%': return makeToken(lexer, TOKEN_PERCENT);
-        case '#': return makeToken(lexer, TOKEN_HASH);
-        case '?': return makeToken(lexer, TOKEN_QUESTION);
-        case ':': return makeToken(lexer, TOKEN_COLON);
-        case '@': return makeToken(lexer, TOKEN_AT);
+            if (peek(lexer) == '*') { advance(lexer); return make_token(lexer, TOKEN_POWER); }
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_STAR_EQUAL); }
+            return make_token(lexer, TOKEN_STAR);
+        case '%':
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_PERCENT_EQUAL); }
+            return make_token(lexer, TOKEN_PERCENT);
+        case '#': return make_token(lexer, TOKEN_HASH);
+        case '?': return make_token(lexer, TOKEN_QUESTION);
+        case ':': return make_token(lexer, TOKEN_COLON);
+        case '@': return make_token(lexer, TOKEN_AT);
         case '=':
-            if (peek(lexer) == '=') { advance(lexer); return makeToken(lexer, TOKEN_EQUAL_EQUAL); }
-            return makeToken(lexer, TOKEN_EQUALS);
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_EQUAL_EQUAL); }
+            return make_token(lexer, TOKEN_EQUALS);
         case '!':
-            if (peek(lexer) == '=') { advance(lexer); return makeToken(lexer, TOKEN_BANG_EQUAL); }
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_BANG_EQUAL); }
             break;
         case '<':
-            if (peek(lexer) == '+') { advance(lexer); return makeToken(lexer, TOKEN_APPEND); }
-            if (peek(lexer) == '=') { advance(lexer); return makeToken(lexer, TOKEN_LESS_EQUAL); }
-            return makeToken(lexer, TOKEN_LESS);
+            if (peek(lexer) == '+') { advance(lexer); return make_token(lexer, TOKEN_APPEND); }
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_LESS_EQUAL); }
+            return make_token(lexer, TOKEN_LESS);
         case '>':
-            if (peek(lexer) == '=') { advance(lexer); return makeToken(lexer, TOKEN_GREATER_EQUAL); }
-            return makeToken(lexer, TOKEN_GREATER);
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_GREATER_EQUAL); }
+            return make_token(lexer, TOKEN_GREATER);
         case '"': return string(lexer, '"');
         case '\'': return string(lexer, '\'');
     }
 
     static char buffer[100];
     snprintf(buffer, sizeof(buffer), "Unexpected character: '%c' (ASCII %d).", c, c);
-    return errorToken(lexer, buffer);
+    return error_token(lexer, buffer);
 }

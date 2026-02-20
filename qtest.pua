@@ -1,0 +1,10 @@
+import time
+import os
+import string
+import test
+
+
+with test.timeit() as t
+  print("hello")
+  time.sleep(1)
+  print t._startime

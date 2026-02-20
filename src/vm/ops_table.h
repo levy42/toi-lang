@@ -3,9 +3,9 @@
 
 #include "../vm.h"
 
-int vmHandleOpAppend(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpGetTable(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpSetTable(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpDeleteTable(VM* vm);
+int vm_handle_op_append(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_set_table(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_delete_table(VM* vm);
 
 #endif

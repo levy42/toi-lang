@@ -16,9 +16,9 @@
 #include "../vm.h"
 
 // os.exit(code)
-static int os_exit(VM* vm, int argCount, Value* args) {
+static int os_exit(VM* vm, int arg_count, Value* args) {
     int code = 0;
-    if (argCount >= 1) {
+    if (arg_count >= 1) {
         ASSERT_NUMBER(0);
         code = (int)GET_NUMBER(0);
     }
@@ -27,10 +27,10 @@ static int os_exit(VM* vm, int argCount, Value* args) {
 }
 
 // os.getenv(name, fallback?)
-static int os_getenv(VM* vm, int argCount, Value* args) {
+static int os_getenv(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
-    if (argCount > 2) {
-        vmRuntimeError(vm, "Expected at most 2 arguments but got %d.", argCount);
+    if (arg_count > 2) {
+        vm_runtime_error(vm, "Expected at most 2 arguments but got %d.", arg_count);
         return 0;
     }
     ASSERT_STRING(0);
@@ -42,7 +42,7 @@ static int os_getenv(VM* vm, int argCount, Value* args) {
         RETURN_STRING(value, (int)strlen(value));
     }
 
-    if (argCount == 2) {
+    if (arg_count == 2) {
         RETURN_VAL(args[1]);
     }
 
@@ -50,7 +50,7 @@ static int os_getenv(VM* vm, int argCount, Value* args) {
 }
 
 // os.system(command)
-static int os_system(VM* vm, int argCount, Value* args) {
+static int os_system(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
     
@@ -61,7 +61,7 @@ static int os_system(VM* vm, int argCount, Value* args) {
 }
 
 // os.remove(path)
-static int os_remove(VM* vm, int argCount, Value* args) {
+static int os_remove(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
     
@@ -76,15 +76,15 @@ static int os_remove(VM* vm, int argCount, Value* args) {
 }
 
 // os.rename(old, new)
-static int os_rename(VM* vm, int argCount, Value* args) {
+static int os_rename(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_STRING(0);
     ASSERT_STRING(1);
     
-    const char* oldPath = GET_CSTRING(0);
-    const char* newPath = GET_CSTRING(1);
+    const char* old_path = GET_CSTRING(0);
+    const char* new_path = GET_CSTRING(1);
     
-    if (rename(oldPath, newPath) == 0) {
+    if (rename(old_path, new_path) == 0) {
         RETURN_TRUE;
     } else {
         push(vm, NIL_VAL);
@@ -94,13 +94,13 @@ static int os_rename(VM* vm, int argCount, Value* args) {
 }
 
 // os.clock() -> Same as time.clock, but standard in os lib in some langs
-static int os_clock(VM* vm, int argCount, Value* args) {
-    (void)argCount; (void)args;
+static int os_clock(VM* vm, int arg_count, Value* args) {
+    (void)arg_count; (void)args;
     RETURN_NUMBER((double)clock() / CLOCKS_PER_SEC);
 }
 
 // os.mkdir(path) -> true or nil, error
-static int os_mkdir(VM* vm, int argCount, Value* args) {
+static int os_mkdir(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -109,13 +109,13 @@ static int os_mkdir(VM* vm, int argCount, Value* args) {
         RETURN_TRUE;
     } else {
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copyString(strerror(errno), strlen(strerror(errno)))));
+        push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
         return 2;
     }
 }
 
 // os.rmdir(path) -> true or nil, error
-static int os_rmdir(VM* vm, int argCount, Value* args) {
+static int os_rmdir(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -124,13 +124,13 @@ static int os_rmdir(VM* vm, int argCount, Value* args) {
         RETURN_TRUE;
     } else {
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copyString(strerror(errno), strlen(strerror(errno)))));
+        push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
         return 2;
     }
 }
 
 // os.listdir(path) -> table of filenames
-static int os_listdir(VM* vm, int argCount, Value* args) {
+static int os_listdir(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_STRING(0);
 
@@ -138,11 +138,11 @@ static int os_listdir(VM* vm, int argCount, Value* args) {
     DIR* dir = opendir(path);
     if (!dir) {
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copyString(strerror(errno), strlen(strerror(errno)))));
+        push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
         return 2;
     }
 
-    ObjTable* result = newTable();
+    ObjTable* result = new_table();
     push(vm, OBJ_VAL(result)); // GC protection
 
     struct dirent* entry;
@@ -152,8 +152,8 @@ static int os_listdir(VM* vm, int argCount, Value* args) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        ObjString* name = copyString(entry->d_name, strlen(entry->d_name));
-        tableSetArray(&result->table, index++, OBJ_VAL(name));
+        ObjString* name = copy_string(entry->d_name, strlen(entry->d_name));
+        table_set_array(&result->table, index++, OBJ_VAL(name));
     }
     closedir(dir);
 
@@ -162,7 +162,7 @@ static int os_listdir(VM* vm, int argCount, Value* args) {
 }
 
 // os.isfile(path) -> boolean
-static int os_isfile(VM* vm, int argCount, Value* args) {
+static int os_isfile(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -175,7 +175,7 @@ static int os_isfile(VM* vm, int argCount, Value* args) {
 }
 
 // os.isdir(path) -> boolean
-static int os_isdir(VM* vm, int argCount, Value* args) {
+static int os_isdir(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -188,7 +188,7 @@ static int os_isdir(VM* vm, int argCount, Value* args) {
 }
 
 // os.exists(path) -> boolean
-static int os_exists(VM* vm, int argCount, Value* args) {
+static int os_exists(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -201,8 +201,8 @@ static int os_exists(VM* vm, int argCount, Value* args) {
 }
 
 // os.getcwd() -> string
-static int os_getcwd(VM* vm, int argCount, Value* args) {
-    (void)argCount; (void)args;
+static int os_getcwd(VM* vm, int arg_count, Value* args) {
+    (void)arg_count; (void)args;
 
     char buf[4096];
     if (getcwd(buf, sizeof(buf)) != NULL) {
@@ -212,7 +212,7 @@ static int os_getcwd(VM* vm, int argCount, Value* args) {
 }
 
 // os.chdir(path) -> true or nil, error
-static int os_chdir(VM* vm, int argCount, Value* args) {
+static int os_chdir(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -221,14 +221,14 @@ static int os_chdir(VM* vm, int argCount, Value* args) {
         RETURN_TRUE;
     } else {
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copyString(strerror(errno), strlen(strerror(errno)))));
+        push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
         return 2;
     }
 }
 
 // os.rss() -> resident set size in bytes (Linux), nil on unsupported platforms
-static int os_rss(VM* vm, int argCount, Value* args) {
-    (void)vm; (void)argCount; (void)args;
+static int os_rss(VM* vm, int arg_count, Value* args) {
+    (void)vm; (void)arg_count; (void)args;
 #if defined(__linux__)
     FILE* fp = fopen("/proc/self/statm", "r");
     if (!fp) {
@@ -255,8 +255,8 @@ static int os_rss(VM* vm, int argCount, Value* args) {
 }
 
 // os.trim() -> ask allocator to return free memory to OS when possible
-static int os_trim(VM* vm, int argCount, Value* args) {
-    (void)vm; (void)argCount; (void)args;
+static int os_trim(VM* vm, int arg_count, Value* args) {
+    (void)vm; (void)arg_count; (void)args;
 #if defined(__GLIBC__)
     int ok = malloc_trim(0);
     RETURN_BOOL(ok != 0);
@@ -265,8 +265,8 @@ static int os_trim(VM* vm, int argCount, Value* args) {
 #endif
 }
 
-void registerOS(VM* vm) {
-    const NativeReg osFuncs[] = {
+void register_os(VM* vm) {
+    const NativeReg os_funcs[] = {
         {"exit", os_exit},
         {"getenv", os_getenv},
         {"system", os_system},
@@ -286,19 +286,19 @@ void registerOS(VM* vm) {
         {NULL, NULL}
     };
 
-    registerModule(vm, "os", osFuncs);
-    // registerModule leaves module table on stack.
-    ObjTable* osModule = AS_TABLE(peek(vm, 0));
+    register_module(vm, "os", os_funcs);
+    // register_module leaves module table on stack.
+    ObjTable* os_module = AS_TABLE(peek(vm, 0));
 
-    ObjString* argvKey = copyString("argv", 4);
-    ObjString* argcKey = copyString("argc", 4);
-    ObjTable* argv = newTable();
-    for (int i = 0; i < vm->cliArgc; i++) {
-        const char* s = vm->cliArgv[i];
-        ObjString* arg = copyString(s, (int)strlen(s));
-        tableSetArray(&argv->table, i + 1, OBJ_VAL(arg));
+    ObjString* argv_key = copy_string("argv", 4);
+    ObjString* argc_key = copy_string("argc", 4);
+    ObjTable* argv = new_table();
+    for (int i = 0; i < vm->cli_argc; i++) {
+        const char* s = vm->cli_argv[i];
+        ObjString* arg = copy_string(s, (int)strlen(s));
+        table_set_array(&argv->table, i + 1, OBJ_VAL(arg));
     }
-    tableSet(&osModule->table, argvKey, OBJ_VAL(argv));
-    tableSet(&osModule->table, argcKey, NUMBER_VAL((double)vm->cliArgc));
+    table_set(&os_module->table, argv_key, OBJ_VAL(argv));
+    table_set(&os_module->table, argc_key, NUMBER_VAL((double)vm->cli_argc));
     pop(vm); // Pop os module
 }

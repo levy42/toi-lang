@@ -6,21 +6,21 @@
 
 ObjFunction* compile(const char* source);
 
-InterpretResult vmHandleOpImport(VM* vm, ObjString* moduleName, CallFrame** frame, uint8_t** ip) {
-    if (loadNativeModule(vm, moduleName->chars)) {
+InterpretResult vm_handle_op_import(VM* vm, ObjString* module_name, CallFrame** frame, uint8_t** ip) {
+    if (load_native_module(vm, module_name->chars)) {
         return INTERPRET_OK;
     }
 
-    char modulePath[256];
+    char module_path[256];
     int j = 0;
-    for (int i = 0; i < moduleName->length && j < 250; i++) {
-        if (moduleName->chars[i] == '.') {
-            modulePath[j++] = '/';
+    for (int i = 0; i < module_name->length && j < 250; i++) {
+        if (module_name->chars[i] == '.') {
+            module_path[j++] = '/';
         } else {
-            modulePath[j++] = moduleName->chars[i];
+            module_path[j++] = module_name->chars[i];
         }
     }
-    modulePath[j] = '\0';
+    module_path[j] = '\0';
 
     char filename[512];
     FILE* file = NULL;
@@ -32,50 +32,50 @@ InterpretResult vmHandleOpImport(VM* vm, ObjString* moduleName, CallFrame** fram
     };
 
     for (int ci = 0; ci < 4 && file == NULL; ci++) {
-        snprintf(filename, sizeof(filename), candidates[ci], modulePath);
+        snprintf(filename, sizeof(filename), candidates[ci], module_path);
         file = fopen(filename, "rb");
     }
 
     if (file == NULL) {
         printf("\033[31mCould not open module '%s'\033[0m (tried '%s.pua', '%s/__.pua', "
                "'lib/%s.pua', and 'lib/%s/__.pua').\n",
-               moduleName->chars, modulePath, modulePath, modulePath, modulePath);
+               module_name->chars, module_path, module_path, module_path, module_path);
         return INTERPRET_RUNTIME_ERROR;
     }
 
     fseek(file, 0L, SEEK_END);
-    size_t fileSize = ftell(file);
+    size_t file_size = ftell(file);
     rewind(file);
 
-    char* buffer = (char*)malloc(fileSize + 1);
+    char* buffer = (char*)malloc(file_size + 1);
     if (buffer == NULL) {
         fclose(file);
-        printf("Not enough memory to read module '%s'.\n", moduleName->chars);
+        printf("Not enough memory to read module '%s'.\n", module_name->chars);
         return INTERPRET_RUNTIME_ERROR;
     }
 
-    size_t bytesRead = fread(buffer, sizeof(char), fileSize, file);
-    buffer[bytesRead] = '\0';
+    size_t bytes_read = fread(buffer, sizeof(char), file_size, file);
+    buffer[bytes_read] = '\0';
     fclose(file);
 
-    ObjFunction* moduleFunction = compile(buffer);
+    ObjFunction* module_function = compile(buffer);
     free(buffer);
 
-    if (moduleFunction == NULL) {
-        printf("Failed to compile module '%s'.\n", moduleName->chars);
+    if (module_function == NULL) {
+        printf("Failed to compile module '%s'.\n", module_name->chars);
         return INTERPRET_COMPILE_ERROR;
     }
 
-    ObjClosure* moduleClosure = newClosure(moduleFunction);
-    push(vm, OBJ_VAL(moduleClosure));
+    ObjClosure* module_closure = new_closure(module_function);
+    push(vm, OBJ_VAL(module_closure));
 
     (*frame)->ip = *ip;
 
-    if (!call(vm, moduleClosure, 0)) {
+    if (!call(vm, module_closure, 0)) {
         return INTERPRET_RUNTIME_ERROR;
     }
 
-    *frame = &vm->currentThread->frames[vm->currentThread->frameCount - 1];
+    *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
     *ip = (*frame)->ip;
 
     return INTERPRET_OK;

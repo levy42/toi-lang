@@ -1,11 +1,9 @@
+from lib.test import assert_true
+
 template = import template
 time = import time
 global string = import string
 global table = import table
-
-fn assert_true(cond, msg = nil)
-  if not cond
-    error(msg or "assert_true failed")
 
 global name = "Ada"
 global items = {"x", "y", "z"}

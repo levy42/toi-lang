@@ -3,11 +3,11 @@
 
 #include "../vm.h"
 
-void vmHandleOpJump(uint8_t** ip);
-void vmHandleOpJumpIfFalse(VM* vm, uint8_t** ip);
-void vmHandleOpJumpIfTrue(VM* vm, uint8_t** ip);
-void vmHandleOpLoop(uint8_t** ip);
-int vmHandleOpForPrep(VM* vm, CallFrame* frame, uint8_t** ip);
-int vmHandleOpForLoop(VM* vm, CallFrame* frame, uint8_t** ip);
+void vm_handle_op_jump(uint8_t** ip);
+void vm_handle_op_jump_if_false(VM* vm, uint8_t** ip);
+void vm_handle_op_jump_if_true(VM* vm, uint8_t** ip);
+void vm_handle_op_loop(uint8_t** ip);
+int vm_handle_op_for_prep(VM* vm, CallFrame* frame, uint8_t** ip);
+int vm_handle_op_for_loop(VM* vm, CallFrame* frame, uint8_t** ip);
 
 #endif

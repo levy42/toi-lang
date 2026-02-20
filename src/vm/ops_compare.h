@@ -3,8 +3,8 @@
 
 #include "../vm.h"
 
-int vmHandleOpEqual(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpGreater(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpLess(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_equal(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_greater(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_less(VM* vm, CallFrame** frame, uint8_t** ip);
 
 #endif

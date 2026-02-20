@@ -1,10 +1,8 @@
+from lib.test import assert_true
+
 json = import json
 time = import time
 global string = import string
-
-fn assert_true(cond, msg = nil)
-  if not cond
-    error(msg or "assert_true failed")
 
 payload = {
   name = "Ada",

@@ -8,7 +8,7 @@
 #include "compiler.h"
 #include "repl.h"
 
-static int leadingIndentColumns(const char* s, size_t len) {
+static int leading_indent_columns(const char* s, size_t len) {
     int col = 0;
     for (size_t i = 0; i < len; i++) {
         if (s[i] == ' ') {
@@ -22,18 +22,18 @@ static int leadingIndentColumns(const char* s, size_t len) {
     return col;
 }
 
-static void appendBytes(char** out, size_t* len, size_t* cap, const char* bytes, size_t n) {
+static void append_bytes(char** out, size_t* len, size_t* cap, const char* bytes, size_t n) {
     if (*len + n + 1 > *cap) {
-        size_t newCap = *cap == 0 ? 256 : *cap;
-        while (*len + n + 1 > newCap) newCap *= 2;
-        char* grown = (char*)realloc(*out, newCap);
+        size_t new_cap = *cap == 0 ? 256 : *cap;
+        while (*len + n + 1 > new_cap) new_cap *= 2;
+        char* grown = (char*)realloc(*out, new_cap);
         if (grown == NULL) {
             fprintf(stderr, "Out of memory while formatting.\n");
             free(*out);
             exit(74);
         }
         *out = grown;
-        *cap = newCap;
+        *cap = new_cap;
     }
 
     memcpy(*out + *len, bytes, n);
@@ -41,96 +41,96 @@ static void appendBytes(char** out, size_t* len, size_t* cap, const char* bytes,
     (*out)[*len] = '\0';
 }
 
-static void appendIndent(char** out, size_t* len, size_t* cap, int indent) {
+static void append_indent(char** out, size_t* len, size_t* cap, int indent) {
     for (int i = 0; i < indent; i++) {
-        appendBytes(out, len, cap, "  ", 2);
+        append_bytes(out, len, cap, "  ", 2);
     }
 }
 
-static void updateMultilineStringState(const char* s, size_t len, int* inMultilineString) {
+static void update_multiline_string_state(const char* s, size_t len, int* in_multiline_string) {
     for (size_t i = 0; i + 1 < len; i++) {
-        if (!*inMultilineString && s[i] == '[' && s[i + 1] == '[') {
-            *inMultilineString = 1;
+        if (!*in_multiline_string && s[i] == '[' && s[i + 1] == '[') {
+            *in_multiline_string = 1;
             i++;
             continue;
         }
 
-        if (*inMultilineString && s[i] == ']' && s[i + 1] == ']') {
-            *inMultilineString = 0;
+        if (*in_multiline_string && s[i] == ']' && s[i + 1] == ']') {
+            *in_multiline_string = 0;
             i++;
         }
     }
 }
 
-static char* formatSource(const char* source) {
-    size_t inLen = strlen(source);
-    int hasTrailingNewline = inLen > 0 && source[inLen - 1] == '\n';
+static char* format_source(const char* source) {
+    size_t in_len = strlen(source);
+    int has_trailing_newline = in_len > 0 && source[in_len - 1] == '\n';
 
     char* out = NULL;
-    size_t outLen = 0;
-    size_t outCap = 0;
+    size_t out_len = 0;
+    size_t out_cap = 0;
 
-    int indentStack[512];
-    int indentTop = 0;
-    indentStack[0] = 0;
-    int inMultilineString = 0;
+    int indent_stack[512];
+    int indent_top = 0;
+    indent_stack[0] = 0;
+    int in_multiline_string = 0;
 
-    const char* lineStart = source;
+    const char* line_start = source;
     while (1) {
-        const char* lineEnd = strchr(lineStart, '\n');
-        size_t rawLen = lineEnd == NULL ? strlen(lineStart) : (size_t)(lineEnd - lineStart);
+        const char* line_end = strchr(line_start, '\n');
+        size_t raw_len = line_end == NULL ? strlen(line_start) : (size_t)(line_end - line_start);
 
         // Strip trailing carriage return.
-        while (rawLen > 0 && lineStart[rawLen - 1] == '\r') rawLen--;
+        while (raw_len > 0 && line_start[raw_len - 1] == '\r') raw_len--;
 
-        if (inMultilineString) {
-            appendBytes(&out, &outLen, &outCap, lineStart, rawLen);
-            appendBytes(&out, &outLen, &outCap, "\n", 1);
-            updateMultilineStringState(lineStart, rawLen, &inMultilineString);
+        if (in_multiline_string) {
+            append_bytes(&out, &out_len, &out_cap, line_start, raw_len);
+            append_bytes(&out, &out_len, &out_cap, "\n", 1);
+            update_multiline_string_state(line_start, raw_len, &in_multiline_string);
 
-            if (lineEnd == NULL) break;
-            lineStart = lineEnd + 1;
-            if (*lineStart == '\0') break;
+            if (line_end == NULL) break;
+            line_start = line_end + 1;
+            if (*line_start == '\0') break;
             continue;
         }
 
-        int col = leadingIndentColumns(lineStart, rawLen);
+        int col = leading_indent_columns(line_start, raw_len);
 
         // Trim leading whitespace for canonical formatting.
-        const char* stripped = lineStart;
-        size_t strippedLen = rawLen;
-        while (strippedLen > 0 && (*stripped == ' ' || *stripped == '\t')) {
+        const char* stripped = line_start;
+        size_t stripped_len = raw_len;
+        while (stripped_len > 0 && (*stripped == ' ' || *stripped == '\t')) {
             stripped++;
-            strippedLen--;
+            stripped_len--;
         }
 
-        if (strippedLen == 0) {
-            appendBytes(&out, &outLen, &outCap, "\n", 1);
+        if (stripped_len == 0) {
+            append_bytes(&out, &out_len, &out_cap, "\n", 1);
         } else {
-            if (col > indentStack[indentTop]) {
-                if (indentTop < (int)(sizeof(indentStack) / sizeof(indentStack[0])) - 1) {
-                    indentTop++;
-                    indentStack[indentTop] = col;
+            if (col > indent_stack[indent_top]) {
+                if (indent_top < (int)(sizeof(indent_stack) / sizeof(indent_stack[0])) - 1) {
+                    indent_top++;
+                    indent_stack[indent_top] = col;
                 }
-            } else if (col < indentStack[indentTop]) {
-                while (indentTop > 0 && col < indentStack[indentTop]) {
-                    indentTop--;
+            } else if (col < indent_stack[indent_top]) {
+                while (indent_top > 0 && col < indent_stack[indent_top]) {
+                    indent_top--;
                 }
             }
 
-            appendIndent(&out, &outLen, &outCap, indentTop);
-            appendBytes(&out, &outLen, &outCap, stripped, strippedLen);
-            appendBytes(&out, &outLen, &outCap, "\n", 1);
-            updateMultilineStringState(stripped, strippedLen, &inMultilineString);
+            append_indent(&out, &out_len, &out_cap, indent_top);
+            append_bytes(&out, &out_len, &out_cap, stripped, stripped_len);
+            append_bytes(&out, &out_len, &out_cap, "\n", 1);
+            update_multiline_string_state(stripped, stripped_len, &in_multiline_string);
         }
 
-        if (lineEnd == NULL) break;
-        lineStart = lineEnd + 1;
-        if (*lineStart == '\0') break;
+        if (line_end == NULL) break;
+        line_start = line_end + 1;
+        if (*line_start == '\0') break;
     }
 
-    if (!hasTrailingNewline && outLen > 0 && out[outLen - 1] == '\n') {
-        out[--outLen] = '\0';
+    if (!has_trailing_newline && out_len > 0 && out[out_len - 1] == '\n') {
+        out[--out_len] = '\0';
     }
 
     if (out == NULL) {
@@ -145,7 +145,7 @@ static char* formatSource(const char* source) {
     return out;
 }
 
-static char* readStream(FILE* file) {
+static char* read_stream(FILE* file) {
     size_t cap = 1024;
     size_t len = 0;
     char* buffer = (char*)malloc(cap);
@@ -184,7 +184,7 @@ static char* readStream(FILE* file) {
     return buffer;
 }
 
-static int writeFile(const char* path, const char* content) {
+static int write_file(const char* path, const char* content) {
     FILE* f = fopen(path, "wb");
     if (f == NULL) {
         fprintf(stderr, "Could not write file \"%s\".\n", path);
@@ -202,7 +202,7 @@ static int writeFile(const char* path, const char* content) {
     return 0;
 }
 
-static char* readFile(const char* path) {
+static char* read_file(const char* path) {
     FILE* file = fopen(path, "rb");
     if (file == NULL) {
         fprintf(stderr, "Could not open file \"%s\".\n", path);
@@ -210,55 +210,55 @@ static char* readFile(const char* path) {
     }
 
     fseek(file, 0L, SEEK_END);
-    size_t fileSize = ftell(file);
+    size_t file_size = ftell(file);
     rewind(file);
 
-    char* buffer = (char*)malloc(fileSize + 1);
+    char* buffer = (char*)malloc(file_size + 1);
     if (buffer == NULL) {
         fprintf(stderr, "Not enough memory to read \"%s\".\n", path);
         exit(74);
     }
 
-    size_t bytesRead = fread(buffer, sizeof(char), fileSize, file);
-    if (bytesRead < fileSize) {
+    size_t bytes_read = fread(buffer, sizeof(char), file_size, file);
+    if (bytes_read < file_size) {
         fprintf(stderr, "Could not read file \"%s\".\n", path);
         exit(74);
     }
 
-    buffer[bytesRead] = '\0';
+    buffer[bytes_read] = '\0';
 
     fclose(file);
     return buffer;
 }
 
-static int runFile(const char* path, int scriptArgc, char* scriptArgv[]) {
-    char* source = readFile(path);
+static int run_file(const char* path, int script_argc, char* script_argv[]) {
+    char* source = read_file(path);
     // printf("Source:\n%s\n---\n", source);
     
     VM vm;
-    initVM(&vm);
-    vm.cliArgc = scriptArgc;
-    vm.cliArgv = scriptArgv;
+    init_vm(&vm);
+    vm.cli_argc = script_argc;
+    vm.cli_argv = script_argv;
     
     ObjFunction* function = compile(source);
     if (function == NULL) {
-        freeVM(&vm);
+        free_vm(&vm);
         free(source);
         return 65;
     }
     
-    // disassembleChunk(&function->chunk, "script");
+    // disassemble_chunk(&function->chunk, "script");
     InterpretResult result = interpret(&vm, function);
     
     // Freeing function: Since we have GC, we should really let GC handle it, 
     // but we are tearing down VM anyway.
-    // freeObject((struct Obj*)function); // Not exposed?
-    // We can rely on freeVM (if it tracked objects) or just leak at exit.
+    // free_object((struct Obj*)function); // Not exposed?
+    // We can rely on free_vm (if it tracked objects) or just leak at exit.
     // For correctness with ASAN, we should free.
-    // But `freeObject` is static in object.c.
-    // We can use `freeVM` if we add `objects` list freeing there.
+    // But `free_object` is static in object.c.
+    // We can use `free_vm` if we add `objects` list freeing there.
     
-    freeVM(&vm); // Should free all objects eventually
+    free_vm(&vm); // Should free all objects eventually
     free(source);
 
     if (result == INTERPRET_COMPILE_ERROR) return 65;
@@ -268,19 +268,19 @@ static int runFile(const char* path, int scriptArgc, char* scriptArgv[]) {
 
 // REPL implementation moved to repl.c for better organization
 
-static int runFmt(int argc, char* argv[]) {
-    int writeInPlace = 0;
-    int checkOnly = 0;
+static int run_fmt(int argc, char* argv[]) {
+    int write_in_place = 0;
+    int check_only = 0;
     const char* path = NULL;
 
     for (int i = 0; i < argc; i++) {
         const char* arg = argv[i];
         if (strcmp(arg, "-w") == 0) {
-            writeInPlace = 1;
+            write_in_place = 1;
             continue;
         }
         if (strcmp(arg, "--check") == 0) {
-            checkOnly = 1;
+            check_only = 1;
             continue;
         }
         if (path == NULL) {
@@ -291,35 +291,35 @@ static int runFmt(int argc, char* argv[]) {
         return 64;
     }
 
-    if (writeInPlace && path == NULL) {
+    if (write_in_place && path == NULL) {
         fprintf(stderr, "Usage: pua fmt [-w|--check] [path|-]\n");
         return 64;
     }
 
-    if (writeInPlace && checkOnly) {
+    if (write_in_place && check_only) {
         fprintf(stderr, "Cannot use -w with --check.\n");
         return 64;
     }
 
-    if (writeInPlace && strcmp(path, "-") == 0) {
+    if (write_in_place && strcmp(path, "-") == 0) {
         fprintf(stderr, "Cannot use -w with stdin.\n");
         return 64;
     }
 
     char* input = NULL;
     if (path == NULL || strcmp(path, "-") == 0) {
-        input = readStream(stdin);
+        input = read_stream(stdin);
     } else {
-        input = readFile(path);
+        input = read_file(path);
     }
 
-    char* formatted = formatSource(input);
+    char* formatted = format_source(input);
 
     int rc = 0;
-    if (checkOnly) {
+    if (check_only) {
         rc = strcmp(input, formatted) == 0 ? 0 : 1;
-    } else if (writeInPlace) {
-        rc = writeFile(path, formatted);
+    } else if (write_in_place) {
+        rc = write_file(path, formatted);
     } else {
         fputs(formatted, stdout);
     }
@@ -331,11 +331,11 @@ static int runFmt(int argc, char* argv[]) {
 
 int main(int argc, char* argv[]) {
     if (argc == 1) {
-        startREPL();
+        start_repl();
     } else if (argc >= 2 && strcmp(argv[1], "fmt") == 0) {
-        return runFmt(argc - 2, argv + 2);
+        return run_fmt(argc - 2, argv + 2);
     } else if (argc >= 2) {
-        return runFile(argv[1], argc - 2, argv + 2);
+        return run_file(argv[1], argc - 2, argv + 2);
     } else {
         fprintf(stderr, "Usage: pua [path [args...]] | pua fmt [-w|--check] [path|-]\n");
         exit(64);

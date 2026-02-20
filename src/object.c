@@ -6,11 +6,11 @@
 #include "value.h"
 
 struct Obj* objects = NULL;
-size_t bytesAllocated = 0;
-size_t nextGC = 1024 * 1024; // 1MB initial threshold
+size_t bytes_allocated = 0;
+size_t next_gc = 1024 * 1024; // 1MB initial threshold
 
 // Simple FNV-1a hash function
-static uint32_t hashString(const char* key, int length) {
+static uint32_t hash_string(const char* key, int length) {
     uint32_t hash = 2166136261u;
     for (int i = 0; i < length; i++) {
         hash ^= (uint8_t)key[i];
@@ -19,113 +19,136 @@ static uint32_t hashString(const char* key, int length) {
     return hash;
 }
 
-static struct Obj* allocateObject(size_t size, ObjType type) {
+static struct Obj* allocate_object(size_t size, ObjType type) {
     struct Obj* object = (struct Obj*)malloc(size);
     object->type = type;
-    object->isMarked = 0;
+    object->is_marked = 0;
     object->next = objects;
     objects = object;
     
-    bytesAllocated += size;
+    bytes_allocated += size;
     return object;
 }
 
-static ObjString* allocateString(char* chars, int length, uint32_t hash) {
-    bytesAllocated += length + 1; // Track string content too
-    ObjString* string = (ObjString*)allocateObject(sizeof(ObjString), OBJ_STRING);
+static ObjString* allocate_string(char* chars, int length, uint32_t hash) {
+    bytes_allocated += length + 1; // Track string content too
+    ObjString* string = (ObjString*)allocate_object(sizeof(ObjString), OBJ_STRING);
     string->length = length;
     string->chars = chars;
     string->hash = hash;
     return string;
 }
 
-ObjString* copyString(const char* chars, int length) {
-    uint32_t hash = hashString(chars, length);
-    char* heapChars = (char*)malloc(length + 1);
-    memcpy(heapChars, chars, length);
-    heapChars[length] = '\0';
-    return allocateString(heapChars, length, hash);
+ObjString* copy_string(const char* chars, int length) {
+    uint32_t hash = hash_string(chars, length);
+    char* heap_chars = (char*)malloc(length + 1);
+    memcpy(heap_chars, chars, length);
+    heap_chars[length] = '\0';
+    return allocate_string(heap_chars, length, hash);
 }
 
-ObjString* takeString(char* chars, int length) {
-    uint32_t hash = hashString(chars, length);
-    return allocateString(chars, length, hash);
+ObjString* take_string(char* chars, int length) {
+    uint32_t hash = hash_string(chars, length);
+    return allocate_string(chars, length, hash);
 }
 
-ObjTable* newTable() {
-    ObjTable* table = (ObjTable*)allocateObject(sizeof(ObjTable), OBJ_TABLE);
-    initTable(&table->table);
+ObjTable* new_table() {
+    ObjTable* table = (ObjTable*)allocate_object(sizeof(ObjTable), OBJ_TABLE);
+    init_table(&table->table);
     table->metatable = NULL;
-    table->isModule = 0;
+    table->is_module = 0;
     return table;
 }
 
-ObjFunction* newFunction() {
-    ObjFunction* function = (ObjFunction*)allocateObject(sizeof(ObjFunction), OBJ_FUNCTION);
+ObjFunction* new_function() {
+    ObjFunction* function = (ObjFunction*)allocate_object(sizeof(ObjFunction), OBJ_FUNCTION);
     function->arity = 0;
-    function->upvalueCount = 0;
+    function->upvalue_count = 0;
     function->name = NULL;
     function->defaults = NULL;
-    function->defaultsCount = 0;
-    function->isVariadic = 0;
-    function->paramTypes = NULL;
-    function->paramTypesCount = 0;
-    function->paramNames = NULL;
-    function->paramNamesCount = 0;
-    function->isSelf = 0;
-    initChunk(&function->chunk);
+    function->defaults_count = 0;
+    function->is_variadic = 0;
+    function->param_types = NULL;
+    function->param_types_count = 0;
+    function->param_names = NULL;
+    function->param_names_count = 0;
+    function->is_self = 0;
+    function->is_generator = 0;
+    init_chunk(&function->chunk);
     return function;
 }
 
-ObjNative* newNative(NativeFn function, ObjString* name) {
-    ObjNative* native = (ObjNative*)allocateObject(sizeof(ObjNative), OBJ_NATIVE);
+ObjNative* new_native(NativeFn function, ObjString* name) {
+    ObjNative* native = (ObjNative*)allocate_object(sizeof(ObjNative), OBJ_NATIVE);
     native->function = function;
     native->name = name;
-    native->isSelf = 0;
+    native->is_self = 0;
     return native;
 }
 
-ObjUpvalue* newUpvalue(Value* slot) {
-    ObjUpvalue* upvalue = (ObjUpvalue*)allocateObject(sizeof(ObjUpvalue), OBJ_UPVALUE);
+ObjUpvalue* new_upvalue(Value* slot) {
+    ObjUpvalue* upvalue = (ObjUpvalue*)allocate_object(sizeof(ObjUpvalue), OBJ_UPVALUE);
     upvalue->location = slot;
     upvalue->closed = NIL_VAL;
     upvalue->next = NULL;
     return upvalue;
 }
 
-ObjClosure* newClosure(ObjFunction* function) {
+ObjClosure* new_closure(ObjFunction* function) {
     // Allocate upvalues array - will be filled in by VM/compiler
     ObjUpvalue** upvalues = (ObjUpvalue**)malloc(sizeof(ObjUpvalue*) * 256);
     for (int i = 0; i < 256; i++) {
         upvalues[i] = NULL;
     }
 
-    ObjClosure* closure = (ObjClosure*)allocateObject(sizeof(ObjClosure), OBJ_CLOSURE);
+    ObjClosure* closure = (ObjClosure*)allocate_object(sizeof(ObjClosure), OBJ_CLOSURE);
     closure->function = function;
     closure->upvalues = upvalues;
-    closure->upvalueCount = 0;  // Will be set by compiler
-    bytesAllocated += sizeof(ObjUpvalue*) * 256;
+    closure->upvalue_count = 0;  // Will be set by compiler
+    bytes_allocated += sizeof(ObjUpvalue*) * 256;
     return closure;
 }
 
-ObjThread* newThread() {
-    ObjThread* thread = (ObjThread*)allocateObject(sizeof(ObjThread), OBJ_THREAD);
-    thread->stackTop = thread->stack;
-    thread->frameCount = 0;
-    thread->openUpvalues = NULL;
+ObjThread* new_thread_with_caps(int stack_cap, int frame_cap, int handler_cap) {
+    if (stack_cap < 8) stack_cap = 8;
+    if (frame_cap < 4) frame_cap = 4;
+    if (handler_cap < 4) handler_cap = 4;
+
+    ObjThread* thread = (ObjThread*)allocate_object(sizeof(ObjThread), OBJ_THREAD);
+    thread->stack = (Value*)malloc(sizeof(Value) * (size_t)stack_cap);
+    thread->frames = (CallFrame*)malloc(sizeof(CallFrame) * (size_t)frame_cap);
+    thread->handlers = (ExceptionHandler*)malloc(sizeof(ExceptionHandler) * (size_t)handler_cap);
+    if (thread->stack == NULL || thread->frames == NULL || thread->handlers == NULL) {
+        fprintf(stderr, "Out of memory creating thread.\n");
+        exit(1);
+    }
+    thread->stack_capacity = stack_cap;
+    thread->frame_capacity = frame_cap;
+    thread->handler_capacity = handler_cap;
+    thread->stack_top = thread->stack;
+    thread->frame_count = 0;
+    thread->open_upvalues = NULL;
     thread->caller = NULL;
-    thread->handlers = (ExceptionHandler*)malloc(sizeof(ExceptionHandler) * 64);
-    thread->handlerCount = 0;
-    bytesAllocated += sizeof(ExceptionHandler) * 64;
+    thread->is_generator = 0;
+    thread->generator_mode = 0;
+    thread->generator_index = 0;
+    thread->handler_count = 0;
+    bytes_allocated += sizeof(Value) * (size_t)stack_cap;
+    bytes_allocated += sizeof(CallFrame) * (size_t)frame_cap;
+    bytes_allocated += sizeof(ExceptionHandler) * (size_t)handler_cap;
     return thread;
 }
 
-ObjUserdata* newUserdata(void* data) {
-    return newUserdataWithFinalizer(data, NULL);
+ObjThread* new_thread() {
+    return new_thread_with_caps(STACK_MAX, FRAMES_MAX, HANDLERS_MAX);
 }
 
-ObjUserdata* newUserdataWithFinalizer(void* data, UserdataFinalizer finalize) {
-    ObjUserdata* userdata = (ObjUserdata*)allocateObject(sizeof(ObjUserdata), OBJ_USERDATA);
+ObjUserdata* new_userdata(void* data) {
+    return new_userdata_with_finalizer(data, NULL);
+}
+
+ObjUserdata* new_userdata_with_finalizer(void* data, UserdataFinalizer finalize) {
+    ObjUserdata* userdata = (ObjUserdata*)allocate_object(sizeof(ObjUserdata), OBJ_USERDATA);
     userdata->data = data;
     userdata->finalize = finalize;
     userdata->metatable = NULL;
@@ -134,9 +157,9 @@ ObjUserdata* newUserdataWithFinalizer(void* data, UserdataFinalizer finalize) {
 
 
 
-ObjBoundMethod* newBoundMethod(Value receiver, struct Obj* method) {
+ObjBoundMethod* new_bound_method(Value receiver, struct Obj* method) {
 
-    ObjBoundMethod* bound = (ObjBoundMethod*)allocateObject(sizeof(ObjBoundMethod), OBJ_BOUND_METHOD);
+    ObjBoundMethod* bound = (ObjBoundMethod*)allocate_object(sizeof(ObjBoundMethod), OBJ_BOUND_METHOD);
 
     bound->receiver = receiver;
 
@@ -146,9 +169,9 @@ ObjBoundMethod* newBoundMethod(Value receiver, struct Obj* method) {
 
 }
 
-static void printValueRec(Value value, int depth);
+static void print_value_rec(Value value, int depth);
 
-static ObjString* metatableName(ObjTable* metatable) {
+static ObjString* metatable_name(ObjTable* metatable) {
     if (metatable == NULL) return NULL;
     for (int i = 0; i < metatable->table.capacity; i++) {
         Entry* entry = &metatable->table.entries[i];
@@ -162,7 +185,7 @@ static ObjString* metatableName(ObjTable* metatable) {
     return NULL;
 }
 
-static void printTable(ObjTable* table, int depth) {
+static void print_table(ObjTable* table, int depth) {
     if (depth > 5) {
         printf("...");
         return;
@@ -173,15 +196,15 @@ static void printTable(ObjTable* table, int depth) {
     
     // Array part
     if (table->table.array != NULL) {
-        int maxIndex = -1;
-        for (int i = 0; i < table->table.arrayCapacity; i++) {
+        int max_index = -1;
+        for (int i = 0; i < table->table.array_capacity; i++) {
             if (!IS_NIL(table->table.array[i])) {
-                maxIndex = i;
+                max_index = i;
             }
         }
-        for (int i = 0; i <= maxIndex; i++) {
+        for (int i = 0; i <= max_index; i++) {
             if (count > 0) printf(", ");
-            printValueRec(table->table.array[i], depth + 1);
+            print_value_rec(table->table.array[i], depth + 1);
             count++;
         }
     }
@@ -192,22 +215,22 @@ static void printTable(ObjTable* table, int depth) {
         if (entry->key != NULL && !IS_NIL(entry->value)) {
             if (count > 0) printf(", ");
             printf("%s: ", entry->key->chars);
-            printValueRec(entry->value, depth + 1);
+            print_value_rec(entry->value, depth + 1);
             count++;
         }
     }
     printf("}");
 }
 
-static void printValueRec(Value value, int depth) {
+static void print_value_rec(Value value, int depth) {
     if (IS_TABLE(value)) {
-        printTable(AS_TABLE(value), depth);
+        print_table(AS_TABLE(value), depth);
     } else {
-        printValue(value);
+        print_value(value);
     }
 }
 
-void printObject(Value value) {
+void print_object(Value value) {
 
     switch (OBJ_TYPE(value)) {
 
@@ -219,7 +242,7 @@ void printObject(Value value) {
 
         case OBJ_TABLE:
 
-            printTable(AS_TABLE(value), 0);
+            print_table(AS_TABLE(value), 0);
 
             break;
 
@@ -276,12 +299,12 @@ void printObject(Value value) {
         case OBJ_USERDATA:
             {
                 ObjUserdata* userdata = AS_USERDATA(value);
-                ObjString* typeName = metatableName(userdata->metatable);
-                if (typeName != NULL) {
+                ObjString* type_name = metatable_name(userdata->metatable);
+                if (type_name != NULL) {
                     if (userdata->data != NULL) {
-                        printf("<%s %p>", typeName->chars, userdata->data);
+                        printf("<%s %p>", type_name->chars, userdata->data);
                     } else {
-                        printf("<%s closed>", typeName->chars);
+                        printf("<%s closed>", type_name->chars);
                     }
                 } else if (userdata->data != NULL) {
                     printf("<userdata %p>", userdata->data);
@@ -304,100 +327,100 @@ void printObject(Value value) {
 
 
 
-static void markTable(Table* table);
+static void mark_table(Table* table);
 
-void markObject(struct Obj* object) {
+void mark_object(struct Obj* object) {
     if (object == NULL) return;
-    if (object->isMarked) return;
+    if (object->is_marked) return;
 
-    object->isMarked = 1;
+    object->is_marked = 1;
 
     if (object->type == OBJ_TABLE) {
         ObjTable* table = (ObjTable*)object;
-        markTable(&table->table);
+        mark_table(&table->table);
         if (table->metatable) {
-            markObject((struct Obj*)table->metatable);
+            mark_object((struct Obj*)table->metatable);
         }
     } else if (object->type == OBJ_FUNCTION) {
         ObjFunction* function = (ObjFunction*)object;
-        markObject((struct Obj*)function->name);
+        mark_object((struct Obj*)function->name);
         // Mark constants in chunk
         for (int i = 0; i < function->chunk.constants.count; i++) {
-            markValue(function->chunk.constants.values[i]);
+            mark_value(function->chunk.constants.values[i]);
         }
         // Mark default parameter values
-        for (int i = 0; i < function->defaultsCount; i++) {
-            markValue(function->defaults[i]);
+        for (int i = 0; i < function->defaults_count; i++) {
+            mark_value(function->defaults[i]);
         }
-        for (int i = 0; i < function->paramNamesCount; i++) {
-            markObject((struct Obj*)function->paramNames[i]);
+        for (int i = 0; i < function->param_names_count; i++) {
+            mark_object((struct Obj*)function->param_names[i]);
         }
     } else if (object->type == OBJ_NATIVE) {
         ObjNative* native = (ObjNative*)object;
         if (native->name != NULL) {
-            markObject((struct Obj*)native->name);
+            mark_object((struct Obj*)native->name);
         }
     } else if (object->type == OBJ_UPVALUE) {
         ObjUpvalue* upvalue = (ObjUpvalue*)object;
-        markValue(upvalue->closed);
+        mark_value(upvalue->closed);
     } else if (object->type == OBJ_CLOSURE) {
         ObjClosure* closure = (ObjClosure*)object;
-        markObject((struct Obj*)closure->function);
-        for (int i = 0; i < closure->upvalueCount; i++) {
-            markObject((struct Obj*)closure->upvalues[i]);
+        mark_object((struct Obj*)closure->function);
+        for (int i = 0; i < closure->upvalue_count; i++) {
+            mark_object((struct Obj*)closure->upvalues[i]);
         }
     } else if (object->type == OBJ_THREAD) {
         ObjThread* thread = (ObjThread*)object;
-        for (Value* slot = thread->stack; slot < thread->stackTop; slot++) {
-            markValue(*slot);
+        for (Value* slot = thread->stack; slot < thread->stack_top; slot++) {
+            mark_value(*slot);
         }
-        for (int i = 0; i < thread->frameCount; i++) {
-            markObject((struct Obj*)thread->frames[i].closure);
+        for (int i = 0; i < thread->frame_count; i++) {
+            mark_object((struct Obj*)thread->frames[i].closure);
         }
-        for (ObjUpvalue* upvalue = thread->openUpvalues; upvalue != NULL; upvalue = upvalue->next) {
-            markObject((struct Obj*)upvalue);
+        for (ObjUpvalue* upvalue = thread->open_upvalues; upvalue != NULL; upvalue = upvalue->next) {
+            mark_object((struct Obj*)upvalue);
         }
         if (thread->caller != NULL) {
-            markObject((struct Obj*)thread->caller);
+            mark_object((struct Obj*)thread->caller);
         }
     } else if (object->type == OBJ_USERDATA) {
         ObjUserdata* userdata = (ObjUserdata*)object;
         if (userdata->metatable) {
-            markObject((struct Obj*)userdata->metatable);
+            mark_object((struct Obj*)userdata->metatable);
         }
     } else if (object->type == OBJ_BOUND_METHOD) {
         ObjBoundMethod* bound = (ObjBoundMethod*)object;
-        markValue(bound->receiver);
-        markObject(bound->method);
+        mark_value(bound->receiver);
+        mark_object(bound->method);
     }
 }
 
-void markValue(Value value) {
-    if (IS_OBJ(value)) markObject(AS_OBJ(value));
+void mark_value(Value value) {
+    if (IS_OBJ(value)) mark_object(AS_OBJ(value));
 }
 
-static void markTable(Table* table) {
+static void mark_table(Table* table) {
     for (int i = 0; i < table->capacity; i++) {
         Entry* entry = &table->entries[i];
         if (entry->key != NULL) {
-            markObject((struct Obj*)entry->key);
-            markValue(entry->value);
+            mark_object((struct Obj*)entry->key);
+            mark_value(entry->value);
         }
     }
     // Mark array part
-    for (int i = 0; i < table->arrayCapacity; i++) {
+    for (int i = 0; i < table->array_capacity; i++) {
         if (!IS_NIL(table->array[i])) {
-            markValue(table->array[i]);
+            mark_value(table->array[i]);
         }
     }
 }
 
-void freeObject(struct Obj* object) {
+void free_object(struct Obj* object) {
     switch (object->type) {
         case OBJ_STRING: {
             ObjString* string = (ObjString*)object;
-            bytesAllocated -= string->length + 1;
-            bytesAllocated -= sizeof(ObjString);
+            bytes_allocated -= string->length + 1;
+            bytes_allocated -= sizeof(ObjString);
             free(string->chars);
             free(string);
             break;
@@ -406,51 +429,55 @@ void freeObject(struct Obj* object) {
             ObjTable* table = (ObjTable*)object;
             // Note: Table entries size is complex to track perfectly here, 
             // but we can estimate or just track the table struct.
-            bytesAllocated -= sizeof(ObjTable);
-            freeTable(&table->table);
+            bytes_allocated -= sizeof(ObjTable);
+            free_table(&table->table);
             free(table);
             break;
         }
         case OBJ_FUNCTION: {
             ObjFunction* function = (ObjFunction*)object;
-            freeChunk(&function->chunk);
+            free_chunk(&function->chunk);
             if (function->defaults != NULL) {
-                bytesAllocated -= sizeof(Value) * function->defaultsCount;
+                bytes_allocated -= sizeof(Value) * function->defaults_count;
                 free(function->defaults);
             }
-            if (function->paramTypes != NULL) {
-                bytesAllocated -= sizeof(uint8_t) * function->paramTypesCount;
-                free(function->paramTypes);
+            if (function->param_types != NULL) {
+                bytes_allocated -= sizeof(uint8_t) * function->param_types_count;
+                free(function->param_types);
             }
-            if (function->paramNames != NULL) {
-                free(function->paramNames);
+            if (function->param_names != NULL) {
+                free(function->param_names);
             }
-            bytesAllocated -= sizeof(ObjFunction);
+            bytes_allocated -= sizeof(ObjFunction);
             free(function);
             break;
         }
         case OBJ_NATIVE: {
-            bytesAllocated -= sizeof(ObjNative);
+            bytes_allocated -= sizeof(ObjNative);
             free(object);
             break;
         }
         case OBJ_UPVALUE: {
-            bytesAllocated -= sizeof(ObjUpvalue);
+            bytes_allocated -= sizeof(ObjUpvalue);
             free(object);
             break;
         }
         case OBJ_CLOSURE: {
             ObjClosure* closure = (ObjClosure*)object;
-            bytesAllocated -= sizeof(ObjUpvalue*) * 256;
-            bytesAllocated -= sizeof(ObjClosure);
+            bytes_allocated -= sizeof(ObjUpvalue*) * 256;
+            bytes_allocated -= sizeof(ObjClosure);
             free(closure->upvalues);
             free(closure);
             break;
         }
         case OBJ_THREAD: {
-            bytesAllocated -= sizeof(ObjThread);
-            bytesAllocated -= sizeof(ExceptionHandler) * 64;
             ObjThread* thread = (ObjThread*)object;
+            bytes_allocated -= sizeof(ObjThread);
+            bytes_allocated -= sizeof(Value) * (size_t)thread->stack_capacity;
+            bytes_allocated -= sizeof(CallFrame) * (size_t)thread->frame_capacity;
+            bytes_allocated -= sizeof(ExceptionHandler) * (size_t)thread->handler_capacity;
+            free(thread->stack);
+            free(thread->frames);
             free(thread->handlers);
             free(object);
             break;
@@ -461,12 +488,12 @@ void freeObject(struct Obj* object) {
                 userdata->finalize(userdata->data);
                 userdata->data = NULL;
             }
-            bytesAllocated -= sizeof(ObjUserdata);
+            bytes_allocated -= sizeof(ObjUserdata);
             free(object);
             break;
         }
         case OBJ_BOUND_METHOD: {
-            bytesAllocated -= sizeof(ObjBoundMethod);
+            bytes_allocated -= sizeof(ObjBoundMethod);
             free(object);
             break;
         }
@@ -474,13 +501,13 @@ void freeObject(struct Obj* object) {
 }
 
 
-void sweepObjects() {
+void sweep_objects() {
     struct Obj* previous = NULL;
     struct Obj* object = objects;
     
     while (object != NULL) {
-        if (object->isMarked) {
-            object->isMarked = 0; // Unmark for next cycle
+        if (object->is_marked) {
+            object->is_marked = 0; // Unmark for next cycle
             previous = object;
             object = object->next;
         } else {
@@ -491,11 +518,11 @@ void sweepObjects() {
             } else {
                 objects = object;
             }
-            freeObject(unreached);
+            free_object(unreached);
         }
     }
     
     // Adjust threshold: target 2x live memory
-    nextGC = bytesAllocated * 2;
-    if (nextGC < 1024 * 1024) nextGC = 1024 * 1024; 
+    next_gc = bytes_allocated * 2;
+    if (next_gc < 1024 * 1024) next_gc = 1024 * 1024; 
 }

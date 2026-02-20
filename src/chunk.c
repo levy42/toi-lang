@@ -2,25 +2,25 @@
 
 #include "chunk.h"
 
-void initChunk(Chunk* chunk) {
+void init_chunk(Chunk* chunk) {
     chunk->count = 0;
     chunk->capacity = 0;
     chunk->code = NULL;
     chunk->lines = NULL;
-    initValueArray(&chunk->constants);
+    init_value_array(&chunk->constants);
 }
 
-void freeChunk(Chunk* chunk) {
+void free_chunk(Chunk* chunk) {
     free(chunk->code);
     free(chunk->lines);
-    freeValueArray(&chunk->constants);
-    initChunk(chunk);
+    free_value_array(&chunk->constants);
+    init_chunk(chunk);
 }
 
-void writeChunk(Chunk* chunk, uint8_t byte, int line) {
+void write_chunk(Chunk* chunk, uint8_t byte, int line) {
     if (chunk->capacity < chunk->count + 1) {
-        int oldCapacity = chunk->capacity;
-        chunk->capacity = oldCapacity < 8 ? 8 : oldCapacity * 2;
+        int old_capacity = chunk->capacity;
+        chunk->capacity = old_capacity < 8 ? 8 : old_capacity * 2;
         chunk->code = (uint8_t*)realloc(chunk->code, sizeof(uint8_t) * chunk->capacity);
         chunk->lines = (int*)realloc(chunk->lines, sizeof(int) * chunk->capacity);
     }
@@ -30,7 +30,7 @@ void writeChunk(Chunk* chunk, uint8_t byte, int line) {
     chunk->count++;
 }
 
-int addConstant(Chunk* chunk, Value value) {
-    writeValueArray(&chunk->constants, value);
+int add_constant(Chunk* chunk, Value value) {
+    write_value_array(&chunk->constants, value);
     return chunk->constants.count - 1;
 }

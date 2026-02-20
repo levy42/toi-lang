@@ -1,12 +1,6 @@
+from lib.test import assert_eq, assert_true
+
 uuid = import uuid
-
-fn assert_true(cond, msg = nil)
-  if not cond
-    error(msg or "assert_true failed")
-
-fn assert_eq(actual, expected, msg = nil)
-  if actual != expected
-    error(msg or "assert_eq failed")
 
 fn is_alnum(c)
   return (c >= "A" and c <= "Z") or (c >= "a" and c <= "z") or (c >= "0" and c <= "9")

@@ -3,7 +3,7 @@
 
 #include "../vm.h"
 
-int vmHandleOpPower(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpIntDiv(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_power(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_int_div(VM* vm, CallFrame** frame, uint8_t** ip);
 
 #endif

@@ -1,60 +1,60 @@
 #include "ops_state.h"
 
-void vmHandleOpConstant(VM* vm, CallFrame* frame, uint8_t** ip) {
+void vm_handle_op_constant(VM* vm, CallFrame* frame, uint8_t** ip) {
     Value constant = frame->closure->function->chunk.constants.values[*(*ip)++];
     push(vm, constant);
-    maybeCollectGarbage(vm);
+    maybe_collect_garbage(vm);
 }
 
-int vmHandleOpGetGlobal(VM* vm, CallFrame* frame, uint8_t** ip) {
+int vm_handle_op_get_global(VM* vm, CallFrame* frame, uint8_t** ip) {
     ObjString* name = AS_STRING(frame->closure->function->chunk.constants.values[*(*ip)++]);
     Value value;
-    if (!tableGet(&vm->globals, name, &value)) {
-        vmRuntimeError(vm, "Undefined variable '%s'.", name->chars);
+    if (!table_get(&vm->globals, name, &value)) {
+        vm_runtime_error(vm, "Undefined variable '%s'.", name->chars);
         return 0;
     }
     push(vm, value);
     return 1;
 }
 
-void vmHandleOpDefineGlobal(VM* vm, CallFrame* frame, uint8_t** ip) {
+void vm_handle_op_define_global(VM* vm, CallFrame* frame, uint8_t** ip) {
     ObjString* name = AS_STRING(frame->closure->function->chunk.constants.values[*(*ip)++]);
-    tableSet(&vm->globals, name, peek(vm, 0));
+    table_set(&vm->globals, name, peek(vm, 0));
     pop(vm);
-    maybeCollectGarbage(vm);
+    maybe_collect_garbage(vm);
 }
 
-void vmHandleOpSetGlobal(VM* vm, CallFrame* frame, uint8_t** ip) {
+void vm_handle_op_set_global(VM* vm, CallFrame* frame, uint8_t** ip) {
     ObjString* name = AS_STRING(frame->closure->function->chunk.constants.values[*(*ip)++]);
-    tableSet(&vm->globals, name, peek(vm, 0));
-    maybeCollectGarbage(vm);
+    table_set(&vm->globals, name, peek(vm, 0));
+    maybe_collect_garbage(vm);
 }
 
-int vmHandleOpDeleteGlobal(VM* vm, CallFrame* frame, uint8_t** ip) {
+int vm_handle_op_delete_global(VM* vm, CallFrame* frame, uint8_t** ip) {
     ObjString* name = AS_STRING(frame->closure->function->chunk.constants.values[*(*ip)++]);
-    if (!tableDelete(&vm->globals, name)) {
-        vmRuntimeError(vm, "Undefined variable '%s'.", name->chars);
+    if (!table_delete(&vm->globals, name)) {
+        vm_runtime_error(vm, "Undefined variable '%s'.", name->chars);
         return 0;
     }
     return 1;
 }
 
-void vmHandleOpGetLocal(VM* vm, CallFrame* frame, uint8_t** ip) {
+void vm_handle_op_get_local(VM* vm, CallFrame* frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     push(vm, frame->slots[slot]);
 }
 
-void vmHandleOpSetLocal(VM* vm, CallFrame* frame, uint8_t** ip) {
+void vm_handle_op_set_local(VM* vm, CallFrame* frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     frame->slots[slot] = peek(vm, 0);
 }
 
-void vmHandleOpGetUpvalue(VM* vm, CallFrame* frame, uint8_t** ip) {
+void vm_handle_op_get_upvalue(VM* vm, CallFrame* frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     push(vm, *frame->closure->upvalues[slot]->location);
 }
 
-void vmHandleOpSetUpvalue(VM* vm, CallFrame* frame, uint8_t** ip) {
+void vm_handle_op_set_upvalue(VM* vm, CallFrame* frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     *frame->closure->upvalues[slot]->location = peek(vm, 0);
 }

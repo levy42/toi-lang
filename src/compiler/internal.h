@@ -23,13 +23,13 @@ typedef enum {
 typedef struct {
     Token name;
     int depth;
-    int isCaptured;
+    int is_captured;
     uint8_t type;
 } Local;
 
 typedef struct {
     uint8_t index;
-    int isLocal;
+    int is_local;
 } Upvalue;
 
 typedef enum {
@@ -39,89 +39,89 @@ typedef enum {
 
 typedef struct LoopContext {
     int start;
-    int scopeDepth;
-    int breakJumps[256];
-    int breakCount;
-    int continueJumps[256];
-    int continueCount;
-    int isForLoop;
-    int slotsToPop;
+    int scope_depth;
+    int break_jumps[256];
+    int break_count;
+    int continue_jumps[256];
+    int continue_count;
+    int is_for_loop;
+    int slots_to_pop;
     struct LoopContext* enclosing;
 } LoopContext;
 
 typedef struct Compiler {
     struct Compiler* enclosing;
     Local locals[UINT8_MAX + 1];
-    int localCount;
+    int local_count;
     Upvalue upvalues[UINT8_MAX + 1];
-    int upvalueCount;
-    int scopeDepth;
+    int upvalue_count;
+    int scope_depth;
     ObjFunction* function;
     FunctionType type;
-    LoopContext* loopContext;
+    LoopContext* loop_context;
 } Compiler;
 
 typedef struct {
     Token current;
     Token previous;
-    int hadError;
-    int panicMode;
+    int had_error;
+    int panic_mode;
 } Parser;
 
 typedef struct {
-    int flagsOffset;
-    int exceptOffset;
-    int finallyOffset;
+    int flags_offset;
+    int except_offset;
+    int finally_offset;
 } TryPatch;
 
 extern Parser parser;
 extern Compiler* current;
 extern Lexer lexer;
-extern int typeStackTop;
-extern int isREPLMode;
-extern int lastExprEndsWithCall;
-extern int lastExprWasRange;
-extern int inForRangeHeader;
-extern int inTableEntryExpression;
+extern int type_stack_top;
+extern int is_repl_mode;
+extern int last_expr_ends_with_call;
+extern int last_expr_was_range;
+extern int in_for_range_header;
+extern int in_table_entry_expression;
 
-void typePush(uint8_t type);
-Chunk* currentChunk(void);
+void type_push(uint8_t type);
+Chunk* current_chunk(void);
 void expression(void);
 void advance(void);
 void consume(TokenType type, const char* message);
 int match(TokenType type);
 int check(TokenType type);
-void emitByte(uint8_t byte);
-void emitConstant(Value value);
-void emitBytes(uint8_t byte1, uint8_t byte2);
-int emitJump(uint8_t instruction);
-TryPatch emitTry(uint8_t depth);
-void patchJump(int offset);
-void patchTry(int offset);
-void patchTryFinally(int offset);
-void emitLoop(int loopStart);
-uint8_t makeConstant(Value value);
-void beginScope(void);
-void endScope(void);
-int resolveLocal(Compiler* compiler, Token* name);
-int resolveUpvalue(Compiler* compiler, Token* name);
-void addLocal(Token name);
-void markInitialized(void);
-void markInitializedCount(int count);
-void declareVariable(void);
-uint8_t identifierConstant(Token* name);
-void namedVariable(Token name, int canAssign);
-void consumePropertyNameAfterDot(void);
-void variableDeclaration(void);
-void functionDeclaration(void);
-void globalFunctionDeclaration(void);
-void globalDeclaration(void);
-void decoratedFunctionDeclaration(void);
+void emit_byte(uint8_t byte);
+void emit_constant(Value value);
+void emit_bytes(uint8_t byte1, uint8_t byte2);
+int emit_jump(uint8_t instruction);
+TryPatch emit_try(uint8_t depth);
+void patch_jump(int offset);
+void patch_try(int offset);
+void patch_try_finally(int offset);
+void emit_loop(int loop_start);
+uint8_t make_constant(Value value);
+void begin_scope(void);
+void end_scope(void);
+int resolve_local(Compiler* compiler, Token* name);
+int resolve_upvalue(Compiler* compiler, Token* name);
+void add_local(Token name);
+void mark_initialized(void);
+void mark_initialized_count(int count);
+void declare_variable(void);
+uint8_t identifier_constant(Token* name);
+void named_variable(Token name, int can_assign);
+void consume_property_name_after_dot(void);
+void variable_declaration(void);
+void function_declaration(void);
+void global_function_declaration(void);
+void global_declaration(void);
+void decorated_function_declaration(void);
 void error(const char* message);
-void errorAtCurrent(const char* message);
-void emitReturn(void);
-void setLocalType(int localIndex, uint8_t type);
-void updateLocalType(int localIndex, uint8_t rhsType);
-int emitSimpleFstringExpr(const char* exprStart, int exprLen);
+void error_at_current(const char* message);
+void emit_return(void);
+void set_local_type(int local_index, uint8_t type);
+void update_local_type(int local_index, uint8_t rhs_type);
+int emit_simple_fstring_expr(const char* expr_start, int expr_len);
 
 #endif

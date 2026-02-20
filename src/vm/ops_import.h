@@ -3,6 +3,6 @@
 
 #include "../vm.h"
 
-InterpretResult vmHandleOpImport(VM* vm, ObjString* moduleName, CallFrame** frame, uint8_t** ip);
+InterpretResult vm_handle_op_import(VM* vm, ObjString* module_name, CallFrame** frame, uint8_t** ip);
 
 #endif

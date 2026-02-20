@@ -1,12 +1,6 @@
+from lib.test import assert_eq, assert_true
+
 os = import os
-
-fn assert_true(cond)
-  if not cond
-    error("assert_true failed")
-
-fn assert_eq(actual, expected)
-  if actual != expected
-    error("assert_eq failed")
 
 assert_true(type(os.argv) == "table")
 assert_true(type(os.argc) == "number")

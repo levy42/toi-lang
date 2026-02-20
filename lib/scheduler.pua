@@ -13,10 +13,10 @@ Scheduler.add = fn(f)
 Scheduler.run = fn()
   while #Scheduler.tasks > 0 or #Scheduler.waiting > 0
     now = time.clock()
-    
+
     still_waiting = {}
     wait_idx = 1
-    
+
     wi = 1
     wcount = #Scheduler.waiting
     while wi <= wcount
@@ -28,12 +28,12 @@ Scheduler.run = fn()
         still_waiting[wait_idx] = item
         wait_idx = wait_idx + 1
       wi = wi + 1
-    
+
     Scheduler.waiting = still_waiting
-    
+
     next_tasks = {}
     next_idx = 1
-    
+
     tasks_copy = Scheduler.tasks
     task_count = #tasks_copy
     task_idx = 1
@@ -44,15 +44,15 @@ Scheduler.run = fn()
         local status, cmd, arg = coroutine.resume(co)
 
         if coroutine.status(co) != "dead"
-           if cmd == "sleep"
-             wake = now + arg
-             item = {co, wake}
-             w_idx = #Scheduler.waiting + 1
-             Scheduler.waiting[w_idx] = item
-           else
-             next_tasks[next_idx] = co
-             next_idx = next_idx + 1
-    
+          if cmd == "sleep"
+            wake = now + arg
+            item = {co, wake}
+            w_idx = #Scheduler.waiting + 1
+            Scheduler.waiting[w_idx] = item
+          else
+            next_tasks[next_idx] = co
+            next_idx = next_idx + 1
+
     Scheduler.tasks = next_tasks
 
 return Scheduler

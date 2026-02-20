@@ -126,7 +126,7 @@ static int atom_from_value(VM* vm, Value v, const char* what, BTreeAtom* out) {
     if (IS_NUMBER(v)) {
         double n = AS_NUMBER(v);
         if (isnan(n)) {
-            vmRuntimeError(vm, "%s cannot be NaN.", what);
+            vm_runtime_error(vm, "%s cannot be NaN.", what);
             return 0;
         }
         out->type = BTREE_ATOM_NUMBER;
@@ -141,7 +141,7 @@ static int atom_from_value(VM* vm, Value v, const char* what, BTreeAtom* out) {
         if (out->string_len > 0) {
             out->string = (char*)malloc(out->string_len);
             if (out->string == NULL) {
-                vmRuntimeError(vm, "Out of memory while copying %s.", what);
+                vm_runtime_error(vm, "Out of memory while copying %s.", what);
                 atom_free(out);
                 return 0;
             }
@@ -150,7 +150,7 @@ static int atom_from_value(VM* vm, Value v, const char* what, BTreeAtom* out) {
         return 1;
     }
 
-    vmRuntimeError(vm, "%s must be string or number.", what);
+    vm_runtime_error(vm, "%s must be string or number.", what);
     return 0;
 }
 
@@ -177,9 +177,9 @@ static uint32_t atom_encoded_size(const BTreeAtom* atom) {
     return 1u + 4u + atom->string_len;
 }
 
-static int atom_encode(uint8_t* out, uint32_t outSize, uint32_t* used, const BTreeAtom* atom) {
+static int atom_encode(uint8_t* out, uint32_t out_size, uint32_t* used, const BTreeAtom* atom) {
     uint32_t need = atom_encoded_size(atom);
-    if (outSize < need) return 0;
+    if (out_size < need) return 0;
 
     out[0] = atom->type;
     if (atom->type == BTREE_ATOM_NUMBER) {
@@ -196,14 +196,14 @@ static int atom_encode(uint8_t* out, uint32_t outSize, uint32_t* used, const BTr
     return 1;
 }
 
-static int atom_decode(const uint8_t* in, uint32_t inSize, uint32_t* used, BTreeAtom* atom) {
+static int atom_decode(const uint8_t* in, uint32_t in_size, uint32_t* used, BTreeAtom* atom) {
     atom_init(atom);
-    if (inSize < 1) return 0;
+    if (in_size < 1) return 0;
 
     uint8_t type = in[0];
     atom->type = type;
     if (type == BTREE_ATOM_NUMBER) {
-        if (inSize < 9) return 0;
+        if (in_size < 9) return 0;
         union { double d; uint8_t b[8]; } u;
         memcpy(u.b, in + 1, 8);
         atom->number = u.d;
@@ -212,9 +212,9 @@ static int atom_decode(const uint8_t* in, uint32_t inSize, uint32_t* used, BTree
     }
 
     if (type == BTREE_ATOM_STRING) {
-        if (inSize < 5) return 0;
+        if (in_size < 5) return 0;
         uint32_t len = rd_u32(in + 1);
-        if (inSize < 5u + len) return 0;
+        if (in_size < 5u + len) return 0;
         atom->string_len = len;
         if (len > 0) {
             atom->string = (char*)malloc(len);
@@ -275,16 +275,16 @@ static int db_seek_page(FILE* fp, uint32_t page_id) {
 
 static int db_mem_ensure_pages(BTreeDb* db, uint32_t needed_pages) {
     if (db->mem_capacity_pages >= needed_pages) return 1;
-    uint32_t newCap = db->mem_capacity_pages == 0 ? 4u : db->mem_capacity_pages;
-    while (newCap < needed_pages) newCap *= 2u;
+    uint32_t new_cap = db->mem_capacity_pages == 0 ? 4u : db->mem_capacity_pages;
+    while (new_cap < needed_pages) new_cap *= 2u;
 
-    size_t bytes = (size_t)newCap * (size_t)BTREE_PAGE_SIZE;
+    size_t bytes = (size_t)new_cap * (size_t)BTREE_PAGE_SIZE;
     uint8_t* grown = (uint8_t*)realloc(db->mem_pages, bytes);
     if (grown == NULL) return 0;
-    size_t oldBytes = (size_t)db->mem_capacity_pages * (size_t)BTREE_PAGE_SIZE;
-    memset(grown + oldBytes, 0, bytes - oldBytes);
+    size_t old_bytes = (size_t)db->mem_capacity_pages * (size_t)BTREE_PAGE_SIZE;
+    memset(grown + old_bytes, 0, bytes - old_bytes);
     db->mem_pages = grown;
-    db->mem_capacity_pages = newCap;
+    db->mem_capacity_pages = new_cap;
     return 1;
 }
 
@@ -360,17 +360,17 @@ static int page_add_record(uint8_t* page, uint16_t index, const uint8_t* rec, ui
     if (index > n) return 0;
     if ((uint32_t)rec_size + BTREE_SLOT_SIZE > (uint32_t)(fe - fs)) return 0;
 
-    uint16_t newOff = (uint16_t)(fe - rec_size);
-    memcpy(page + newOff, rec, rec_size);
+    uint16_t new_off = (uint16_t)(fe - rec_size);
+    memcpy(page + new_off, rec, rec_size);
 
     for (uint16_t i = n; i > index; i--) {
         page_set_slot(page, i, page_slot(page, i - 1));
     }
-    page_set_slot(page, index, newOff);
+    page_set_slot(page, index, new_off);
 
     wr_u16(page + 2, (uint16_t)(n + 1));
     wr_u16(page + 4, (uint16_t)(fs + BTREE_SLOT_SIZE));
-    wr_u16(page + 6, newOff);
+    wr_u16(page + 6, new_off);
     return 1;
 }
 
@@ -592,7 +592,7 @@ static int leaf_find_slot(LeafEntry* entries, uint16_t nkeys, const BTreeAtom* k
     return lo;
 }
 
-static int internal_find_route(NodeData* node, const BTreeAtom* key, int* outSlot, uint32_t* outChild) {
+static int internal_find_route(NodeData* node, const BTreeAtom* key, int* out_slot, uint32_t* out_child) {
     uint32_t child = node->left_child;
     int slot = 0;
     while (slot < node->nkeys) {
@@ -601,85 +601,85 @@ static int internal_find_route(NodeData* node, const BTreeAtom* key, int* outSlo
         child = node->internal_entries[slot].child;
         slot++;
     }
-    *outChild = child;
-    *outSlot = slot;
+    *out_child = child;
+    *out_slot = slot;
     return 1;
 }
 
 static int insert_recursive(BTreeDb* db, uint32_t page_id, const BTreeAtom* key, const BTreeAtom* value,
-                            int* outSplit, Promote* outPromote);
+                            int* out_split, Promote* out_promote);
 static int leaf_build_with_insert(NodeData* node, int pos, const BTreeAtom* key, const BTreeAtom* value,
                                   LeafEntry** out_entries, uint16_t* out_count);
-static int internal_build_with_insert(NodeData* node, int insertPos, const Promote* promote,
+static int internal_build_with_insert(NodeData* node, int insert_pos, const Promote* promote,
                                       InternalEntry** out_entries, uint16_t* out_count);
 
 static int leaf_insert(BTreeDb* db, NodeData* node, const BTreeAtom* key, const BTreeAtom* value,
-                       int* outSplit, Promote* outPromote) {
+                       int* out_split, Promote* out_promote) {
     int found = 0;
     int pos = leaf_find_slot(node->leaf_entries, node->nkeys, key, &found);
 
     if (found) {
-        BTreeAtom newValue;
-        if (!atom_clone(&newValue, value)) return 0;
+        BTreeAtom new_value;
+        if (!atom_clone(&new_value, value)) return 0;
         atom_free(&node->leaf_entries[pos].value);
-        node->leaf_entries[pos].value = newValue;
+        node->leaf_entries[pos].value = new_value;
 
         if (!node_write_leaf(db, node->page_id, node->leaf_entries, node->nkeys)) return 0;
-        *outSplit = 0;
+        *out_split = 0;
         return 1;
     }
 
-    uint16_t newCount = 0;
+    uint16_t new_count = 0;
     LeafEntry* all = NULL;
-    if (!leaf_build_with_insert(node, pos, key, value, &all, &newCount)) return 0;
+    if (!leaf_build_with_insert(node, pos, key, value, &all, &new_count)) return 0;
 
-    if (node_fits_leaf(all, newCount)) {
-        int ok = node_write_leaf(db, node->page_id, all, newCount);
-        leaf_entries_free_array(all, newCount);
+    if (node_fits_leaf(all, new_count)) {
+        int ok = node_write_leaf(db, node->page_id, all, new_count);
+        leaf_entries_free_array(all, new_count);
         if (!ok) return 0;
-        *outSplit = 0;
+        *out_split = 0;
         return 1;
     }
 
-    uint16_t mid = (uint16_t)(newCount / 2);
-    if (mid == 0 || mid >= newCount) {
-        leaf_entries_free_array(all, newCount);
+    uint16_t mid = (uint16_t)(new_count / 2);
+    if (mid == 0 || mid >= new_count) {
+        leaf_entries_free_array(all, new_count);
         return 0;
     }
 
-    uint16_t leftCount = mid;
-    uint16_t rightCount = (uint16_t)(newCount - mid);
+    uint16_t left_count = mid;
+    uint16_t right_count = (uint16_t)(new_count - mid);
 
-    uint32_t rightPage = 0;
-    if (!db_alloc_page(db, &rightPage)) {
-        leaf_entries_free_array(all, newCount);
+    uint32_t right_page = 0;
+    if (!db_alloc_page(db, &right_page)) {
+        leaf_entries_free_array(all, new_count);
         return 0;
     }
 
-    int okLeft = node_write_leaf(db, node->page_id, all, leftCount);
-    int okRight = node_write_leaf(db, rightPage, all + mid, rightCount);
-    if (!okLeft || !okRight) {
-        leaf_entries_free_array(all, newCount);
+    int ok_left = node_write_leaf(db, node->page_id, all, left_count);
+    int ok_right = node_write_leaf(db, right_page, all + mid, right_count);
+    if (!ok_left || !ok_right) {
+        leaf_entries_free_array(all, new_count);
         return 0;
     }
 
-    atom_init(&outPromote->key);
-    if (!atom_clone(&outPromote->key, &all[mid].key)) {
-        leaf_entries_free_array(all, newCount);
+    atom_init(&out_promote->key);
+    if (!atom_clone(&out_promote->key, &all[mid].key)) {
+        leaf_entries_free_array(all, new_count);
         return 0;
     }
-    outPromote->right_page = rightPage;
+    out_promote->right_page = right_page;
 
-    leaf_entries_free_array(all, newCount);
+    leaf_entries_free_array(all, new_count);
 
-    *outSplit = 1;
+    *out_split = 1;
     return 1;
 }
 
 static int leaf_build_with_insert(NodeData* node, int pos, const BTreeAtom* key, const BTreeAtom* value,
                                   LeafEntry** out_entries, uint16_t* out_count) {
-    uint16_t newCount = (uint16_t)(node->nkeys + 1);
-    LeafEntry* all = (LeafEntry*)calloc(newCount, sizeof(LeafEntry));
+    uint16_t new_count = (uint16_t)(node->nkeys + 1);
+    LeafEntry* all = (LeafEntry*)calloc(new_count, sizeof(LeafEntry));
     if (all == NULL) return 0;
 
     uint16_t ai = 0;
@@ -687,107 +687,107 @@ static int leaf_build_with_insert(NodeData* node, int pos, const BTreeAtom* key,
         if ((int)i == pos) ai++;
         if (!atom_clone(&all[ai].key, &node->leaf_entries[i].key) ||
             !atom_clone(&all[ai].value, &node->leaf_entries[i].value)) {
-            leaf_entries_free_array(all, newCount);
+            leaf_entries_free_array(all, new_count);
             return 0;
         }
         ai++;
     }
 
     if (!atom_clone(&all[pos].key, key) || !atom_clone(&all[pos].value, value)) {
-        leaf_entries_free_array(all, newCount);
+        leaf_entries_free_array(all, new_count);
         return 0;
     }
 
     *out_entries = all;
-    *out_count = newCount;
+    *out_count = new_count;
     return 1;
 }
 
 static int internal_insert(BTreeDb* db, NodeData* node, const BTreeAtom* key, const BTreeAtom* value,
-                           int* outSplit, Promote* outPromote) {
-    uint32_t childPage = 0;
-    int insertPos = 0;
-    if (!internal_find_route(node, key, &insertPos, &childPage)) return 0;
+                           int* out_split, Promote* out_promote) {
+    uint32_t child_page = 0;
+    int insert_pos = 0;
+    if (!internal_find_route(node, key, &insert_pos, &child_page)) return 0;
 
-    Promote childPromote;
-    atom_init(&childPromote.key);
-    int childSplit = 0;
-    if (!insert_recursive(db, childPage, key, value, &childSplit, &childPromote)) {
-        atom_free(&childPromote.key);
+    Promote child_promote;
+    atom_init(&child_promote.key);
+    int child_split = 0;
+    if (!insert_recursive(db, child_page, key, value, &child_split, &child_promote)) {
+        atom_free(&child_promote.key);
         return 0;
     }
 
-    if (!childSplit) {
-        *outSplit = 0;
-        atom_free(&childPromote.key);
+    if (!child_split) {
+        *out_split = 0;
+        atom_free(&child_promote.key);
         return 1;
     }
 
-    uint16_t newCount = 0;
+    uint16_t new_count = 0;
     InternalEntry* all = NULL;
-    if (!internal_build_with_insert(node, insertPos, &childPromote, &all, &newCount)) {
-        atom_free(&childPromote.key);
+    if (!internal_build_with_insert(node, insert_pos, &child_promote, &all, &new_count)) {
+        atom_free(&child_promote.key);
         return 0;
     }
 
-    atom_free(&childPromote.key);
+    atom_free(&child_promote.key);
 
-    if (node_fits_internal(all, newCount)) {
-        int ok = node_write_internal(db, node->page_id, node->left_child, all, newCount);
-        internal_entries_free_array(all, newCount);
+    if (node_fits_internal(all, new_count)) {
+        int ok = node_write_internal(db, node->page_id, node->left_child, all, new_count);
+        internal_entries_free_array(all, new_count);
         if (!ok) return 0;
-        *outSplit = 0;
+        *out_split = 0;
         return 1;
     }
 
-    uint16_t mid = (uint16_t)(newCount / 2);
-    if (mid == 0 || mid >= newCount) {
-        internal_entries_free_array(all, newCount);
+    uint16_t mid = (uint16_t)(new_count / 2);
+    if (mid == 0 || mid >= new_count) {
+        internal_entries_free_array(all, new_count);
         return 0;
     }
 
-    uint32_t rightPage = 0;
-    if (!db_alloc_page(db, &rightPage)) {
-        internal_entries_free_array(all, newCount);
+    uint32_t right_page = 0;
+    if (!db_alloc_page(db, &right_page)) {
+        internal_entries_free_array(all, new_count);
         return 0;
     }
 
-    uint32_t rightLeftChild = all[mid].child;
-    uint16_t leftCount = mid;
-    uint16_t rightCount = (uint16_t)(newCount - mid - 1);
+    uint32_t right_left_child = all[mid].child;
+    uint16_t left_count = mid;
+    uint16_t right_count = (uint16_t)(new_count - mid - 1);
 
-    int okLeft = node_write_internal(db, node->page_id, node->left_child, all, leftCount);
-    int okRight = node_write_internal(db, rightPage, rightLeftChild, all + mid + 1, rightCount);
-    if (!okLeft || !okRight) {
-        internal_entries_free_array(all, newCount);
+    int ok_left = node_write_internal(db, node->page_id, node->left_child, all, left_count);
+    int ok_right = node_write_internal(db, right_page, right_left_child, all + mid + 1, right_count);
+    if (!ok_left || !ok_right) {
+        internal_entries_free_array(all, new_count);
         return 0;
     }
 
-    atom_init(&outPromote->key);
-    if (!atom_clone(&outPromote->key, &all[mid].key)) {
-        internal_entries_free_array(all, newCount);
+    atom_init(&out_promote->key);
+    if (!atom_clone(&out_promote->key, &all[mid].key)) {
+        internal_entries_free_array(all, new_count);
         return 0;
     }
-    outPromote->right_page = rightPage;
+    out_promote->right_page = right_page;
 
-    internal_entries_free_array(all, newCount);
+    internal_entries_free_array(all, new_count);
 
-    *outSplit = 1;
+    *out_split = 1;
     return 1;
 }
 
-static int internal_build_with_insert(NodeData* node, int insertPos, const Promote* promote,
+static int internal_build_with_insert(NodeData* node, int insert_pos, const Promote* promote,
                                       InternalEntry** out_entries, uint16_t* out_count) {
-    uint16_t newCount = (uint16_t)(node->nkeys + 1);
-    InternalEntry* all = (InternalEntry*)calloc(newCount, sizeof(InternalEntry));
+    uint16_t new_count = (uint16_t)(node->nkeys + 1);
+    InternalEntry* all = (InternalEntry*)calloc(new_count, sizeof(InternalEntry));
     if (all == NULL) return 0;
 
     int inserted = 0;
     uint16_t dst = 0;
     for (uint16_t i = 0; i < node->nkeys; i++) {
-        if (!inserted && insertPos == (int)i) {
+        if (!inserted && insert_pos == (int)i) {
             if (!atom_clone(&all[dst].key, &promote->key)) {
-                internal_entries_free_array(all, newCount);
+                internal_entries_free_array(all, new_count);
                 return 0;
             }
             all[dst].child = promote->right_page;
@@ -795,7 +795,7 @@ static int internal_build_with_insert(NodeData* node, int insertPos, const Promo
             inserted = 1;
         }
         if (!atom_clone(&all[dst].key, &node->internal_entries[i].key)) {
-            internal_entries_free_array(all, newCount);
+            internal_entries_free_array(all, new_count);
             return 0;
         }
         all[dst].child = node->internal_entries[i].child;
@@ -804,27 +804,27 @@ static int internal_build_with_insert(NodeData* node, int insertPos, const Promo
 
     if (!inserted) {
         if (!atom_clone(&all[dst].key, &promote->key)) {
-            internal_entries_free_array(all, newCount);
+            internal_entries_free_array(all, new_count);
             return 0;
         }
         all[dst].child = promote->right_page;
     }
 
     *out_entries = all;
-    *out_count = newCount;
+    *out_count = new_count;
     return 1;
 }
 
 static int insert_recursive(BTreeDb* db, uint32_t page_id, const BTreeAtom* key, const BTreeAtom* value,
-                            int* outSplit, Promote* outPromote) {
+                            int* out_split, Promote* out_promote) {
     NodeData node;
     if (!node_load(db, page_id, &node)) return 0;
 
     int ok = 0;
     if (node.type == BTREE_PAGE_TYPE_LEAF) {
-        ok = leaf_insert(db, &node, key, value, outSplit, outPromote);
+        ok = leaf_insert(db, &node, key, value, out_split, out_promote);
     } else {
-        ok = internal_insert(db, &node, key, value, outSplit, outPromote);
+        ok = internal_insert(db, &node, key, value, out_split, out_promote);
     }
 
     node_data_free(&node);
@@ -872,8 +872,8 @@ static int btree_put(BTreeDb* db, const BTreeAtom* key, const BTreeAtom* value) 
     }
 
     if (split) {
-        uint32_t newRootPage = 0;
-        if (!db_alloc_page(db, &newRootPage)) {
+        uint32_t new_root_page = 0;
+        if (!db_alloc_page(db, &new_root_page)) {
             atom_free(&promote.key);
             return 0;
         }
@@ -886,14 +886,14 @@ static int btree_put(BTreeDb* db, const BTreeAtom* key, const BTreeAtom* value) 
         }
         e.child = promote.right_page;
 
-        if (!node_write_internal(db, newRootPage, db->root_page, &e, 1)) {
+        if (!node_write_internal(db, new_root_page, db->root_page, &e, 1)) {
             internal_entry_free(&e);
             atom_free(&promote.key);
             return 0;
         }
         internal_entry_free(&e);
 
-        db->root_page = newRootPage;
+        db->root_page = new_root_page;
         if (!db_write_header(db)) {
             atom_free(&promote.key);
             return 0;
@@ -955,14 +955,14 @@ static void leaf_remove_at(NodeData* node, uint16_t idx) {
 
 static void internal_remove_slot(NodeData* node, int slot) {
     if (slot == 0) {
-        uint32_t newLeft = node->internal_entries[0].child;
+        uint32_t new_left = node->internal_entries[0].child;
         internal_entry_free(&node->internal_entries[0]);
         for (uint16_t i = 0; i + 1 < node->nkeys; i++) {
             node->internal_entries[i] = node->internal_entries[i + 1];
         }
         atom_init(&node->internal_entries[node->nkeys - 1].key);
         node->internal_entries[node->nkeys - 1].child = 0;
-        node->left_child = newLeft;
+        node->left_child = new_left;
         node->nkeys--;
         return;
     }
@@ -1146,8 +1146,8 @@ static int btree_delete(BTreeDb* db, const BTreeAtom* key, int* deleted) {
     return 1;
 }
 
-static int btree_open_file(const char* path, BTreeDb** outDb) {
-    *outDb = NULL;
+static int btree_open_file(const char* path, BTreeDb** out_db) {
+    *out_db = NULL;
     BTreeDb* db = (BTreeDb*)calloc(1, sizeof(BTreeDb));
     if (db == NULL) return 0;
 
@@ -1198,7 +1198,7 @@ static int btree_open_file(const char* path, BTreeDb** outDb) {
             return 0;
         }
 
-        *outDb = db;
+        *out_db = db;
         return 1;
     }
 
@@ -1234,12 +1234,12 @@ static int btree_open_file(const char* path, BTreeDb** outDb) {
         return 0;
     }
 
-    *outDb = db;
+    *out_db = db;
     return 1;
 }
 
-static int btree_open_memory(BTreeDb** outDb) {
-    *outDb = NULL;
+static int btree_open_memory(BTreeDb** out_db) {
+    *out_db = NULL;
     BTreeDb* db = (BTreeDb*)calloc(1, sizeof(BTreeDb));
     if (db == NULL) return 0;
 
@@ -1260,7 +1260,7 @@ static int btree_open_memory(BTreeDb** outDb) {
         return 0;
     }
 
-    *outDb = db;
+    *out_db = db;
     return 1;
 }
 
@@ -1300,7 +1300,7 @@ static int return_atom_value(VM* vm, BTreeAtom* value) {
         return 1;
     }
     if (value->type == BTREE_ATOM_STRING) {
-        ObjString* s = copyString(value->string != NULL ? value->string : "", (int)value->string_len);
+        ObjString* s = copy_string(value->string != NULL ? value->string : "", (int)value->string_len);
         atom_free(value);
         push(vm, OBJ_VAL(s));
         return 1;
@@ -1310,32 +1310,32 @@ static int return_atom_value(VM* vm, BTreeAtom* value) {
     return 1;
 }
 
-static int btree_open_native(VM* vm, int argCount, Value* args) {
+static int btree_open_native(VM* vm, int arg_count, Value* args) {
     BTreeDb* db = NULL;
-    if (argCount == 0) {
+    if (arg_count == 0) {
         if (!btree_open_memory(&db)) {
-            vmRuntimeError(vm, "cannot open in-memory btree");
+            vm_runtime_error(vm, "cannot open in-memory btree");
             return 0;
         }
-    } else if (argCount == 1) {
+    } else if (arg_count == 1) {
         ASSERT_STRING(0);
         if (!btree_open_file(GET_CSTRING(0), &db)) {
-            vmRuntimeError(vm, "cannot open btree");
+            vm_runtime_error(vm, "cannot open btree");
             return 0;
         }
     } else {
-        vmRuntimeError(vm, "btree.open() expects 0 or 1 argument.");
+        vm_runtime_error(vm, "btree.open() expects 0 or 1 argument.");
         return 0;
     }
 
-    ObjUserdata* udata = newUserdataWithFinalizer(db, btree_userdata_finalizer);
+    ObjUserdata* udata = new_userdata_with_finalizer(db, btree_userdata_finalizer);
 
     Value mod = NIL_VAL;
-    ObjString* modName = copyString("btree", 5);
-    if (tableGet(&vm->globals, modName, &mod) && IS_TABLE(mod)) {
+    ObjString* mod_name = copy_string("btree", 5);
+    if (table_get(&vm->globals, mod_name, &mod) && IS_TABLE(mod)) {
         Value mt = NIL_VAL;
-        ObjString* mtName = copyString("_db_mt", 6);
-        if (tableGet(&AS_TABLE(mod)->table, mtName, &mt) && IS_TABLE(mt)) {
+        ObjString* mt_name = copy_string("_db_mt", 6);
+        if (table_get(&AS_TABLE(mod)->table, mt_name, &mt) && IS_TABLE(mt)) {
             udata->metatable = AS_TABLE(mt);
         }
     }
@@ -1343,7 +1343,7 @@ static int btree_open_native(VM* vm, int argCount, Value* args) {
     RETURN_OBJ(udata);
 }
 
-static int btree_put_native(VM* vm, int argCount, Value* args) {
+static int btree_put_native(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(3);
     ASSERT_USERDATA(0);
 
@@ -1362,14 +1362,14 @@ static int btree_put_native(VM* vm, int argCount, Value* args) {
     atom_free(&value);
 
     if (!ok) {
-        vmRuntimeError(vm, "btree.put failed.");
+        vm_runtime_error(vm, "btree.put failed.");
         return 0;
     }
 
     RETURN_VAL(args[0]);
 }
 
-static int btree_get_native(VM* vm, int argCount, Value* args) {
+static int btree_get_native(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_USERDATA(0);
 
@@ -1385,13 +1385,13 @@ static int btree_get_native(VM* vm, int argCount, Value* args) {
 
     if (res == 2) RETURN_NIL;
     if (res == 0) {
-        vmRuntimeError(vm, "btree.get failed.");
+        vm_runtime_error(vm, "btree.get failed.");
         return 0;
     }
     return return_atom_value(vm, &value);
 }
 
-static int btree_delete_native(VM* vm, int argCount, Value* args) {
+static int btree_delete_native(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_USERDATA(0);
 
@@ -1405,13 +1405,13 @@ static int btree_delete_native(VM* vm, int argCount, Value* args) {
     int ok = btree_delete(db, &key, &deleted);
     atom_free(&key);
     if (!ok) {
-        vmRuntimeError(vm, "btree.delete failed.");
+        vm_runtime_error(vm, "btree.delete failed.");
         return 0;
     }
     RETURN_BOOL(deleted);
 }
 
-static int btree_close_native(VM* vm, int argCount, Value* args) {
+static int btree_close_native(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_USERDATA(0);
 
@@ -1423,7 +1423,7 @@ static int btree_close_native(VM* vm, int argCount, Value* args) {
     RETURN_TRUE;
 }
 
-static int btree_index_native(VM* vm, int argCount, Value* args) {
+static int btree_index_native(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_USERDATA(0);
     ASSERT_STRING(1);
@@ -1432,19 +1432,19 @@ static int btree_index_native(VM* vm, int argCount, Value* args) {
     if (!u->metatable) RETURN_NIL;
 
     Value result = NIL_VAL;
-    tableGet(&u->metatable->table, GET_STRING(1), &result);
+    table_get(&u->metatable->table, GET_STRING(1), &result);
     RETURN_VAL(result);
 }
 
-void registerBTree(VM* vm) {
+void register_btree(VM* vm) {
     const NativeReg funcs[] = {
         {"open", btree_open_native},
         {NULL, NULL}
     };
-    registerModule(vm, "btree", funcs);
+    register_module(vm, "btree", funcs);
 
     ObjTable* module = AS_TABLE(peek(vm, 0));
-    ObjTable* mt = newTable();
+    ObjTable* mt = new_table();
     push(vm, OBJ_VAL(mt));
 
     const NativeReg methods[] = {
@@ -1456,32 +1456,32 @@ void registerBTree(VM* vm) {
     };
 
     for (int i = 0; methods[i].name != NULL; i++) {
-        ObjString* name = copyString(methods[i].name, (int)strlen(methods[i].name));
+        ObjString* name = copy_string(methods[i].name, (int)strlen(methods[i].name));
         push(vm, OBJ_VAL(name));
-        ObjNative* fn = newNative(methods[i].function, name);
-        fn->isSelf = 1;
+        ObjNative* fn = new_native(methods[i].function, name);
+        fn->is_self = 1;
         push(vm, OBJ_VAL(fn));
-        tableSet(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+        table_set(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
         pop(vm);
         pop(vm);
     }
 
-    ObjString* idx = copyString("__index", 7);
+    ObjString* idx = copy_string("__index", 7);
     push(vm, OBJ_VAL(idx));
-    push(vm, OBJ_VAL(newNative(btree_index_native, idx)));
-    tableSet(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(new_native(btree_index_native, idx)));
+    table_set(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm);
     pop(vm);
 
-    push(vm, OBJ_VAL(copyString("__name", 6)));
-    push(vm, OBJ_VAL(copyString("btree.db", 8)));
-    tableSet(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("__name", 6)));
+    push(vm, OBJ_VAL(copy_string("btree.db", 8)));
+    table_set(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm);
     pop(vm);
 
-    push(vm, OBJ_VAL(copyString("_db_mt", 6)));
+    push(vm, OBJ_VAL(copy_string("_db_mt", 6)));
     push(vm, OBJ_VAL(mt));
-    tableSet(&module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    table_set(&module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm);
     pop(vm);
     pop(vm); // mt

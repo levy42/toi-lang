@@ -7,13 +7,13 @@
 #include "../value.h"
 #include "../vm.h"
 
-static int string_len(VM* vm, int argCount, Value* args) {
+static int string_len(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
     RETURN_NUMBER(GET_STRING(0)->length);
 }
 
-static int string_sub(VM* vm, int argCount, Value* args) {
+static int string_sub(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(2);
     ASSERT_STRING(0);
     ASSERT_NUMBER(1);
@@ -22,7 +22,7 @@ static int string_sub(VM* vm, int argCount, Value* args) {
     int start = (int)GET_NUMBER(1);
     int end = str->length;
     
-    if (argCount >= 3) { ASSERT_NUMBER(2); end = (int)GET_NUMBER(2); }
+    if (arg_count >= 3) { ASSERT_NUMBER(2); end = (int)GET_NUMBER(2); }
     
     // Adjust 1-based indexing to 0-based
     start--; 
@@ -44,10 +44,10 @@ static int string_sub(VM* vm, int argCount, Value* args) {
     memcpy(sub, str->chars + start, len);
     sub[len] = '\0';
     
-    RETURN_OBJ(takeString(sub, len));
+    RETURN_OBJ(take_string(sub, len));
 }
 
-static int string_lower(VM* vm, int argCount, Value* args) {
+static int string_lower(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -59,10 +59,10 @@ static int string_lower(VM* vm, int argCount, Value* args) {
     }
     buf[str->length] = '\0';
     
-    RETURN_OBJ(takeString(buf, str->length));
+    RETURN_OBJ(take_string(buf, str->length));
 }
 
-static int string_upper(VM* vm, int argCount, Value* args) {
+static int string_upper(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -74,11 +74,11 @@ static int string_upper(VM* vm, int argCount, Value* args) {
     }
     buf[str->length] = '\0';
     
-    RETURN_OBJ(takeString(buf, str->length));
+    RETURN_OBJ(take_string(buf, str->length));
 }
 
-static int string_char(VM* vm, int argCount, Value* args) {
-    int len = argCount;
+static int string_char(VM* vm, int arg_count, Value* args) {
+    int len = arg_count;
     char* buf = (char*)malloc(len + 1);
     
     for (int i = 0; i < len; i++) {
@@ -87,16 +87,16 @@ static int string_char(VM* vm, int argCount, Value* args) {
     }
     buf[len] = '\0';
     
-    RETURN_OBJ(takeString(buf, len));
+    RETURN_OBJ(take_string(buf, len));
 }
 
-static int string_byte(VM* vm, int argCount, Value* args) {
+static int string_byte(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_STRING(0);
 
     ObjString* str = GET_STRING(0);
     int index = 1;
-    if (argCount >= 2) { ASSERT_NUMBER(1); index = (int)GET_NUMBER(1); }
+    if (arg_count >= 2) { ASSERT_NUMBER(1); index = (int)GET_NUMBER(1); }
 
     index--; // 1-based
     if (index < 0 || index >= str->length) {
@@ -106,7 +106,7 @@ static int string_byte(VM* vm, int argCount, Value* args) {
     RETURN_NUMBER((double)(unsigned char)str->chars[index]);
 }
 
-static int string_find(VM* vm, int argCount, Value* args) {
+static int string_find(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(2);
     ASSERT_STRING(0);
     ASSERT_STRING(1);
@@ -114,7 +114,7 @@ static int string_find(VM* vm, int argCount, Value* args) {
     ObjString* str = GET_STRING(0);
     ObjString* pattern = GET_STRING(1);
     int start = 1;
-    if (argCount >= 3) { ASSERT_NUMBER(2); start = (int)GET_NUMBER(2); }
+    if (arg_count >= 3) { ASSERT_NUMBER(2); start = (int)GET_NUMBER(2); }
 
     start--; // 1-based to 0-based
     if (start < 0) start = 0;
@@ -129,7 +129,7 @@ static int string_find(VM* vm, int argCount, Value* args) {
     return 2;
 }
 
-static int string_trim(VM* vm, int argCount, Value* args) {
+static int string_trim(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -151,43 +151,43 @@ static int string_trim(VM* vm, int argCount, Value* args) {
         end--;
     }
 
-    int newLen = end - start;
-    if (newLen <= 0) {
+    int new_len = end - start;
+    if (new_len <= 0) {
         RETURN_STRING("", 0);
     }
 
-    char* buf = (char*)malloc(newLen + 1);
-    memcpy(buf, s + start, newLen);
-    buf[newLen] = '\0';
-    RETURN_OBJ(takeString(buf, newLen));
+    char* buf = (char*)malloc(new_len + 1);
+    memcpy(buf, s + start, new_len);
+    buf[new_len] = '\0';
+    RETURN_OBJ(take_string(buf, new_len));
 }
 
-static int string_split(VM* vm, int argCount, Value* args) {
+static int string_split(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_STRING(0);
 
     ObjString* str = GET_STRING(0);
     const char* sep = " ";
-    int sepLen = 1;
+    int sep_len = 1;
 
-    if (argCount >= 2) {
+    if (arg_count >= 2) {
         ASSERT_STRING(1);
         sep = GET_CSTRING(1);
-        sepLen = GET_STRING(1)->length;
+        sep_len = GET_STRING(1)->length;
     }
 
-    ObjTable* result = newTable();
+    ObjTable* result = new_table();
     push(vm, OBJ_VAL(result)); // Protect from GC
 
     int index = 1;
     const char* s = str->chars;
     const char* end = s + str->length;
 
-    if (sepLen == 0) {
+    if (sep_len == 0) {
         // Empty separator: split into characters
         for (int i = 0; i < str->length; i++) {
-            Value val = OBJ_VAL(copyString(s + i, 1));
-            tableSetArray(&result->table, index++, val);
+            Value val = OBJ_VAL(copy_string(s + i, 1));
+            table_set_array(&result->table, index++, val);
         }
     } else {
         while (s < end) {
@@ -195,15 +195,15 @@ static int string_split(VM* vm, int argCount, Value* args) {
             if (found == NULL) {
                 // No more separators, add rest of string
                 int len = (int)(end - s);
-                Value val = OBJ_VAL(copyString(s, len));
-                tableSetArray(&result->table, index++, val);
+                Value val = OBJ_VAL(copy_string(s, len));
+                table_set_array(&result->table, index++, val);
                 break;
             } else {
                 // Add substring before separator
                 int len = (int)(found - s);
-                Value val = OBJ_VAL(copyString(s, len));
-                tableSetArray(&result->table, index++, val);
-                s = found + sepLen;
+                Value val = OBJ_VAL(copy_string(s, len));
+                table_set_array(&result->table, index++, val);
+                s = found + sep_len;
             }
         }
     }
@@ -212,7 +212,7 @@ static int string_split(VM* vm, int argCount, Value* args) {
     RETURN_OBJ(result);
 }
 
-static int string_rep(VM* vm, int argCount, Value* args) {
+static int string_rep(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_STRING(0);
     ASSERT_NUMBER(1);
@@ -224,18 +224,18 @@ static int string_rep(VM* vm, int argCount, Value* args) {
         RETURN_STRING("", 0);
     }
 
-    int newLen = str->length * n;
-    char* buf = (char*)malloc(newLen + 1);
+    int new_len = str->length * n;
+    char* buf = (char*)malloc(new_len + 1);
 
     for (int i = 0; i < n; i++) {
         memcpy(buf + i * str->length, str->chars, str->length);
     }
-    buf[newLen] = '\0';
+    buf[new_len] = '\0';
 
-    RETURN_OBJ(takeString(buf, newLen));
+    RETURN_OBJ(take_string(buf, new_len));
 }
 
-static int string_reverse(VM* vm, int argCount, Value* args) {
+static int string_reverse(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -247,10 +247,10 @@ static int string_reverse(VM* vm, int argCount, Value* args) {
     }
     buf[str->length] = '\0';
 
-    RETURN_OBJ(takeString(buf, str->length));
+    RETURN_OBJ(take_string(buf, str->length));
 }
 
-static int string_join(VM* vm, int argCount, Value* args) {
+static int string_join(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_STRING(0);
     ASSERT_TABLE(1);
@@ -258,7 +258,7 @@ static int string_join(VM* vm, int argCount, Value* args) {
     ObjString* sep = GET_STRING(0);
     ObjTable* list = GET_TABLE(1);
 
-    int totalLen = 0;
+    int total_len = 0;
     int count = 0;
 
     // Iterate sequential integer keys starting from 1
@@ -266,28 +266,28 @@ static int string_join(VM* vm, int argCount, Value* args) {
     Value val;
 
     // We use a loop that continues as long as we find values at consecutive indices
-    // Or should we use table->arrayCapacity?
+    // Or should we use table->array_capacity?
     // Arrays in this language are 1-based.
     // Let's assume standard behavior: iterate 1..N until nil.
     
     // Note: iterating until nil might stop early for sparse arrays.
     // But join/split usually implies dense arrays.
-    // Alternatively, iterate arrayCapacity? No, array part might be sparse too or have holes.
+    // Alternatively, iterate array_capacity? No, array part might be sparse too or have holes.
     // Iterating until nil is safer for sequence.
     
     while (1) {
         // Try array optimization first
-        if (!tableGetArray(&list->table, i, &val)) {
+        if (!table_get_array(&list->table, i, &val)) {
             // Fallback to hash lookup (for numeric keys stored in hash part)
-            ObjString* key = numberKeyString((double)i);
-            if (!tableGet(&list->table, key, &val) || IS_NIL(val)) {
+            ObjString* key = number_key_string((double)i);
+            if (!table_get(&list->table, key, &val) || IS_NIL(val)) {
                 // End of sequence
                 break;
             }
         }
 
         if (IS_STRING(val)) {
-            totalLen += AS_STRING(val)->length;
+            total_len += AS_STRING(val)->length;
         } else if (IS_NUMBER(val)) {
             double num = AS_NUMBER(val);
             char numbuf[32];
@@ -297,9 +297,9 @@ static int string_join(VM* vm, int argCount, Value* args) {
             } else {
                 slen = snprintf(numbuf, sizeof(numbuf), "%g", num);
             }
-            totalLen += slen;
+            total_len += slen;
         } else {
-            vmRuntimeError(vm, "string.join: list contains non-string/number element");
+            vm_runtime_error(vm, "string.join: list contains non-string/number element");
             return 0;
         }
 
@@ -311,16 +311,16 @@ static int string_join(VM* vm, int argCount, Value* args) {
         RETURN_STRING("", 0);
     }
 
-    totalLen += sep->length * (count - 1);
-    char* buffer = (char*)malloc(totalLen + 1);
+    total_len += sep->length * (count - 1);
+    char* buffer = (char*)malloc(total_len + 1);
     int length = 0;
     int first = 1;
 
     i = 1;
     while (1) {
-        if (!tableGetArray(&list->table, i, &val)) {
-            ObjString* key = numberKeyString((double)i);
-            if (!tableGet(&list->table, key, &val) || IS_NIL(val)) {
+        if (!table_get_array(&list->table, i, &val)) {
+            ObjString* key = number_key_string((double)i);
+            if (!table_get(&list->table, key, &val) || IS_NIL(val)) {
                 break;
             }
         }
@@ -347,7 +347,7 @@ static int string_join(VM* vm, int argCount, Value* args) {
             s = numbuf;
         } else {
             free(buffer);
-            vmRuntimeError(vm, "string.join: list contains non-string/number element");
+            vm_runtime_error(vm, "string.join: list contains non-string/number element");
             return 0;
         }
 
@@ -359,13 +359,42 @@ static int string_join(VM* vm, int argCount, Value* args) {
     }
 
     buffer[length] = '\0';
-    ObjString* result = takeString(buffer, length);
+    ObjString* result = take_string(buffer, length);
     RETURN_OBJ(result);
 }
 
-// string.format(fmt, ...) - printf-style formatting
-static int string_format(VM* vm, int argCount, Value* args) {
+static int ensure_result_capacity(char** result, int* capacity, int needed) {
+    while (needed >= *capacity) {
+        int next = (*capacity) * 2;
+        char* grown = (char*)realloc(*result, (size_t)next);
+        if (!grown) return 0;
+        *result = grown;
+        *capacity = next;
+    }
+    return 1;
+}
 
+static int is_printf_flag_char(char c) {
+    return c == '-' || c == '+' || c == ' ' || c == '#' || c == '0';
+}
+
+static int is_supported_printf_conv(char c) {
+    switch (c) {
+        case 's':
+        case 'd': case 'i':
+        case 'u': case 'x': case 'X': case 'o':
+        case 'f': case 'F':
+        case 'g': case 'G':
+        case 'e': case 'E':
+        case 'c':
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+// string.format(fmt, ...) - printf-style formatting
+static int string_format(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_STRING(0);
 
@@ -373,146 +402,181 @@ static int string_format(VM* vm, int argCount, Value* args) {
     const char* f = fmt->chars;
     int flen = fmt->length;
 
-    // Allocate result buffer
     int capacity = flen * 2 + 128;
-    char* result = (char*)malloc(capacity);
+    char* result = (char*)malloc((size_t)capacity);
+    if (!result) {
+        vm_runtime_error(vm, "string.format: out of memory");
+        return 0;
+    }
     int rlen = 0;
-
-    int argIdx = 1;
+    int arg_idx = 1;
 
     for (int i = 0; i < flen; i++) {
-        if (f[i] == '%' && i + 1 < flen) {
-            char spec = f[i + 1];
-            i++;
-
-            if (spec == '%') {
-                // Literal %
-                if (rlen + 1 >= capacity) { capacity *= 2; result = realloc(result, capacity); }
-                result[rlen++] = '%';
-            } else if (spec == 's') {
-                // String
-                if (argIdx >= argCount) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: not enough arguments");
-                    return 0;
-                }
-                Value v = args[argIdx++];
-                const char* s;
-                int slen;
-                char numbuf[64];
-                if (IS_STRING(v)) {
-                    s = AS_STRING(v)->chars;
-                    slen = AS_STRING(v)->length;
-                } else if (IS_NUMBER(v)) {
-                    double num = AS_NUMBER(v);
-                    if (num == (int)num) {
-                        slen = snprintf(numbuf, sizeof(numbuf), "%d", (int)num);
-                    } else {
-                        slen = snprintf(numbuf, sizeof(numbuf), "%g", num);
-                    }
-                    s = numbuf;
-                } else if (IS_NIL(v)) {
-                    s = "nil"; slen = 3;
-                } else if (IS_BOOL(v)) {
-                    s = AS_BOOL(v) ? "true" : "false";
-                    slen = AS_BOOL(v) ? 4 : 5;
-                } else {
-                    s = "<value>"; slen = 7;
-                }
-                while (rlen + slen >= capacity) { capacity *= 2; result = realloc(result, capacity); }
-                memcpy(result + rlen, s, slen);
-                rlen += slen;
-            } else if (spec == 'd' || spec == 'i') {
-                // Integer
-                if (argIdx >= argCount) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: not enough arguments");
-                    return 0;
-                }
-                Value v = args[argIdx++];
-                if (!IS_NUMBER(v)) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: %%d expects number");
-                    return 0;
-                }
-                char buf[64];
-                int len = snprintf(buf, sizeof(buf), "%d", (int)AS_NUMBER(v));
-                while (rlen + len >= capacity) { capacity *= 2; result = realloc(result, capacity); }
-                memcpy(result + rlen, buf, len);
-                rlen += len;
-            } else if (spec == 'f') {
-                // Float
-                if (argIdx >= argCount) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: not enough arguments");
-                    return 0;
-                }
-                Value v = args[argIdx++];
-                if (!IS_NUMBER(v)) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: %%f expects number");
-                    return 0;
-                }
-                char buf[64];
-                int len = snprintf(buf, sizeof(buf), "%f", AS_NUMBER(v));
-                while (rlen + len >= capacity) { capacity *= 2; result = realloc(result, capacity); }
-                memcpy(result + rlen, buf, len);
-                rlen += len;
-            } else if (spec == 'g') {
-                // General float
-                if (argIdx >= argCount) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: not enough arguments");
-                    return 0;
-                }
-                Value v = args[argIdx++];
-                if (!IS_NUMBER(v)) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: %%g expects number");
-                    return 0;
-                }
-                char buf[64];
-                int len = snprintf(buf, sizeof(buf), "%g", AS_NUMBER(v));
-                while (rlen + len >= capacity) { capacity *= 2; result = realloc(result, capacity); }
-                memcpy(result + rlen, buf, len);
-                rlen += len;
-            } else if (spec == 'x') {
-                // Hex
-                if (argIdx >= argCount) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: not enough arguments");
-                    return 0;
-                }
-                Value v = args[argIdx++];
-                if (!IS_NUMBER(v)) {
-                    free(result);
-                    vmRuntimeError(vm, "string.format: %%x expects number");
-                    return 0;
-                }
-                char buf[64];
-                int len = snprintf(buf, sizeof(buf), "%x", (unsigned int)AS_NUMBER(v));
-                while (rlen + len >= capacity) { capacity *= 2; result = realloc(result, capacity); }
-                memcpy(result + rlen, buf, len);
-                rlen += len;
-            } else {
-                // Unknown specifier, output as-is
-                if (rlen + 2 >= capacity) { capacity *= 2; result = realloc(result, capacity); }
-                result[rlen++] = '%';
-                result[rlen++] = spec;
+        if (f[i] != '%') {
+            if (!ensure_result_capacity(&result, &capacity, rlen + 2)) {
+                free(result);
+                vm_runtime_error(vm, "string.format: out of memory");
+                return 0;
             }
-        } else {
-            if (rlen + 1 >= capacity) { capacity *= 2; result = realloc(result, capacity); }
             result[rlen++] = f[i];
+            continue;
         }
+
+        if (i + 1 >= flen) {
+            if (!ensure_result_capacity(&result, &capacity, rlen + 2)) {
+                free(result);
+                vm_runtime_error(vm, "string.format: out of memory");
+                return 0;
+            }
+            result[rlen++] = '%';
+            continue;
+        }
+
+        if (f[i + 1] == '%') {
+            if (!ensure_result_capacity(&result, &capacity, rlen + 2)) {
+                free(result);
+                vm_runtime_error(vm, "string.format: out of memory");
+                return 0;
+            }
+            result[rlen++] = '%';
+            i++;
+            continue;
+        }
+
+        int spec_start = i;
+        int j = i + 1;
+
+        while (j < flen && is_printf_flag_char(f[j])) j++;
+        while (j < flen && isdigit((unsigned char)f[j])) j++;
+        if (j < flen && f[j] == '.') {
+            j++;
+            while (j < flen && isdigit((unsigned char)f[j])) j++;
+        }
+
+        if (j < flen && (f[j] == 'h' || f[j] == 'l' || f[j] == 'L' || f[j] == 'z' || f[j] == 't' || f[j] == 'j')) {
+            free(result);
+            vm_runtime_error(vm, "string.format: length modifiers are not supported");
+            return 0;
+        }
+
+        if (j >= flen) {
+            free(result);
+            vm_runtime_error(vm, "string.format: incomplete format specifier");
+            return 0;
+        }
+
+        char conv = f[j];
+        if (!is_supported_printf_conv(conv)) {
+            free(result);
+            vm_runtime_error(vm, "string.format: unsupported format specifier");
+            return 0;
+        }
+
+        int spec_len = j - spec_start + 1;
+        if (spec_len <= 0 || spec_len >= 32) {
+            free(result);
+            vm_runtime_error(vm, "string.format: invalid format specifier");
+            return 0;
+        }
+
+        char spec[32];
+        memcpy(spec, f + spec_start, (size_t)spec_len);
+        spec[spec_len] = '\0';
+        i = j;
+
+        if (arg_idx >= arg_count) {
+            free(result);
+            vm_runtime_error(vm, "string.format: not enough arguments");
+            return 0;
+        }
+
+        Value v = args[arg_idx++];
+        int written = 0;
+
+        if (conv == 's') {
+            const char* s = NULL;
+            char numbuf[64];
+            if (IS_STRING(v)) {
+                s = AS_STRING(v)->chars;
+            } else if (IS_NUMBER(v)) {
+                double num = AS_NUMBER(v);
+                if (num == (int)num) {
+                    snprintf(numbuf, sizeof(numbuf), "%d", (int)num);
+                } else {
+                    snprintf(numbuf, sizeof(numbuf), "%g", num);
+                }
+                s = numbuf;
+            } else if (IS_NIL(v)) {
+                s = "nil";
+            } else if (IS_BOOL(v)) {
+                s = AS_BOOL(v) ? "true" : "false";
+            } else {
+                s = "<value>";
+            }
+            written = snprintf(NULL, 0, spec, s);
+            if (written < 0 || !ensure_result_capacity(&result, &capacity, rlen + written + 1)) {
+                free(result);
+                vm_runtime_error(vm, "string.format: out of memory");
+                return 0;
+            }
+            snprintf(result + rlen, (size_t)(capacity - rlen), spec, s);
+            rlen += written;
+            continue;
+        }
+
+        if (!IS_NUMBER(v)) {
+            free(result);
+            vm_runtime_error(vm, "string.format: numeric format expects number");
+            return 0;
+        }
+
+        if (conv == 'd' || conv == 'i') {
+            int n = (int)AS_NUMBER(v);
+            written = snprintf(NULL, 0, spec, n);
+            if (written < 0 || !ensure_result_capacity(&result, &capacity, rlen + written + 1)) {
+                free(result);
+                vm_runtime_error(vm, "string.format: out of memory");
+                return 0;
+            }
+            snprintf(result + rlen, (size_t)(capacity - rlen), spec, n);
+        } else if (conv == 'u' || conv == 'x' || conv == 'X' || conv == 'o') {
+            unsigned int n = (unsigned int)AS_NUMBER(v);
+            written = snprintf(NULL, 0, spec, n);
+            if (written < 0 || !ensure_result_capacity(&result, &capacity, rlen + written + 1)) {
+                free(result);
+                vm_runtime_error(vm, "string.format: out of memory");
+                return 0;
+            }
+            snprintf(result + rlen, (size_t)(capacity - rlen), spec, n);
+        } else if (conv == 'c') {
+            int n = (int)AS_NUMBER(v);
+            written = snprintf(NULL, 0, spec, n);
+            if (written < 0 || !ensure_result_capacity(&result, &capacity, rlen + written + 1)) {
+                free(result);
+                vm_runtime_error(vm, "string.format: out of memory");
+                return 0;
+            }
+            snprintf(result + rlen, (size_t)(capacity - rlen), spec, n);
+        } else {
+            double n = AS_NUMBER(v);
+            written = snprintf(NULL, 0, spec, n);
+            if (written < 0 || !ensure_result_capacity(&result, &capacity, rlen + written + 1)) {
+                free(result);
+                vm_runtime_error(vm, "string.format: out of memory");
+                return 0;
+            }
+            snprintf(result + rlen, (size_t)(capacity - rlen), spec, n);
+        }
+
+        rlen += written;
     }
 
     result[rlen] = '\0';
-    ObjString* str = takeString(result, rlen);
-    RETURN_OBJ(str);
+    RETURN_OBJ(take_string(result, rlen));
 }
 
-void registerString(VM* vm) {
-    const NativeReg stringFuncs[] = {
+void register_string(VM* vm) {
+    const NativeReg string_funcs[] = {
         {"len", string_len},
         {"sub", string_sub},
         {"lower", string_lower},
@@ -529,38 +593,38 @@ void registerString(VM* vm) {
         {"format", string_format},
         {NULL, NULL}
     };
-    registerModule(vm, "string", stringFuncs);
+    register_module(vm, "string", string_funcs);
 
-    ObjTable* stringModuleTable = AS_TABLE(peek(vm, 0));
-    for (int i = 0; stringFuncs[i].name != NULL; i++) {
-        ObjString* nameStr = copyString(stringFuncs[i].name, (int)strlen(stringFuncs[i].name));
+    ObjTable* string_module_table = AS_TABLE(peek(vm, 0));
+    for (int i = 0; string_funcs[i].name != NULL; i++) {
+        ObjString* name_str = copy_string(string_funcs[i].name, (int)strlen(string_funcs[i].name));
         Value method = NIL_VAL;
-        if (tableGet(&stringModuleTable->table, nameStr, &method) && IS_NATIVE(method)) {
-            AS_NATIVE_OBJ(method)->isSelf = 1;
+        if (table_get(&string_module_table->table, name_str, &method) && IS_NATIVE(method)) {
+            AS_NATIVE_OBJ(method)->is_self = 1;
         }
     }
     
     // Add __call metamethod to string module to act as str() constructor
-    Value stringModule = peek(vm, 0); // peek string module
-    ObjTable* mt = newTable();
+    Value string_module = peek(vm, 0); // peek string module
+    ObjTable* mt = new_table();
     push(vm, OBJ_VAL(mt)); // protect
     
-    ObjString* callStr = copyString("__call", 6);
-    push(vm, OBJ_VAL(callStr));
-    push(vm, OBJ_VAL(newNative(core_tostring, callStr)));
-    tableSet(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    ObjString* call_str = copy_string("__call", 6);
+    push(vm, OBJ_VAL(call_str));
+    push(vm, OBJ_VAL(new_native(core_tostring, call_str)));
+    table_set(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); // native
-    pop(vm); // callStr
+    pop(vm); // call_str
     
-    AS_TABLE(stringModule)->metatable = mt;
+    AS_TABLE(string_module)->metatable = mt;
     
     // Alias 'str' global to 'string' module so str(x) works via __call
-    ObjString* strName = copyString("str", 3);
-    push(vm, OBJ_VAL(strName));
-    push(vm, stringModule);
-    tableSet(&vm->globals, AS_STRING(peek(vm, 1)), peek(vm, 0));
-    pop(vm); // stringModule
-    pop(vm); // strName
+    ObjString* str_name = copy_string("str", 3);
+    push(vm, OBJ_VAL(str_name));
+    push(vm, string_module);
+    table_set(&vm->globals, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm); // string_module
+    pop(vm); // str_name
     
     pop(vm); // pop mt
     pop(vm); // Pop string module

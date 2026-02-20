@@ -5,7 +5,7 @@
 #include "../value.h"
 #include "../vm.h"
 
-static int valueEqualsForFind(Value a, Value b) {
+static int value_equals_for_find(Value a, Value b) {
     if (a.type != b.type) return 0;
     if (IS_NIL(a)) return 1;
     if (IS_NUMBER(a)) return AS_NUMBER(a) == AS_NUMBER(b);
@@ -21,9 +21,9 @@ static int valueEqualsForFind(Value a, Value b) {
     return 0;
 }
 
-static int callUnaryLookup(VM* vm, Value fn, Value arg, Value* out) {
+static int call_unary_lookup(VM* vm, Value fn, Value arg, Value* out) {
     if (IS_CLOSURE(fn)) {
-        int savedFrameCount = vm->currentThread->frameCount;
+        int saved_frame_count = vm->current_thread->frame_count;
 
         push(vm, fn);
         push(vm, arg);
@@ -32,7 +32,7 @@ static int callUnaryLookup(VM* vm, Value fn, Value arg, Value* out) {
             return 0;
         }
 
-        InterpretResult result = vmRun(vm, savedFrameCount);
+        InterpretResult result = vm_run(vm, saved_frame_count);
         if (result != INTERPRET_OK) {
             return 0;
         }
@@ -45,10 +45,10 @@ static int callUnaryLookup(VM* vm, Value fn, Value arg, Value* out) {
         push(vm, fn);
         push(vm, arg);
 
-        Value* callArgs = vm->currentThread->stackTop - 1;
-        vm->currentThread->stackTop -= 2;
+        Value* call_args = vm->current_thread->stack_top - 1;
+        vm->current_thread->stack_top -= 2;
 
-        if (!AS_NATIVE(fn)(vm, 1, callArgs)) {
+        if (!AS_NATIVE(fn)(vm, 1, call_args)) {
             return 0;
         }
 
@@ -56,12 +56,12 @@ static int callUnaryLookup(VM* vm, Value fn, Value arg, Value* out) {
         return 1;
     }
 
-    vmRuntimeError(vm, "table.find_index: lookup must be a function.");
+    vm_runtime_error(vm, "table.find_index: lookup must be a function.");
     return 0;
 }
 
 // table.remove(t, pos) - removes element at pos and shifts down
-static int table_remove(VM* vm, int argCount, Value* args) {
+static int table_remove(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_TABLE(0);
 
@@ -71,14 +71,14 @@ static int table_remove(VM* vm, int argCount, Value* args) {
     // Find array length
     for (int i = 1; ; i++) {
         Value val;
-        if (!tableGetArray(&table->table, i, &val) || IS_NIL(val)) {
+        if (!table_get_array(&table->table, i, &val) || IS_NIL(val)) {
             len = i - 1;
             break;
         }
     }
 
     int pos = len; // Default: remove last element
-    if (argCount >= 2) {
+    if (arg_count >= 2) {
         ASSERT_NUMBER(1);
         pos = (int)GET_NUMBER(1);
     }
@@ -89,48 +89,48 @@ static int table_remove(VM* vm, int argCount, Value* args) {
 
     // Get the value being removed (to return it)
     Value removed;
-    tableGetArray(&table->table, pos, &removed);
+    table_get_array(&table->table, pos, &removed);
 
     // Shift elements down
     for (int i = pos; i < len; i++) {
         Value val;
-        tableGetArray(&table->table, i + 1, &val);
-        tableSetArray(&table->table, i, val);
+        table_get_array(&table->table, i + 1, &val);
+        table_set_array(&table->table, i, val);
     }
 
     // Remove last element
-    tableSetArray(&table->table, len, NIL_VAL);
+    table_set_array(&table->table, len, NIL_VAL);
 
     RETURN_VAL(removed);
 }
 
 // table.push(t, value) - append value to array part
-static int table_push(VM* vm, int argCount, Value* args) {
+static int table_push(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_TABLE(0);
 
     ObjTable* table = GET_TABLE(0);
-    int index = table->table.arrayMax + 1;
+    int index = table->table.array_max + 1;
 
-    int rawIndex = index - 1;
-    if (rawIndex >= table->table.arrayCapacity) {
-        int newCapacity = table->table.arrayCapacity == 0 ? 8 : table->table.arrayCapacity * 2;
-        while (rawIndex >= newCapacity) newCapacity *= 2;
+    int raw_index = index - 1;
+    if (raw_index >= table->table.array_capacity) {
+        int new_capacity = table->table.array_capacity == 0 ? 8 : table->table.array_capacity * 2;
+        while (raw_index >= new_capacity) new_capacity *= 2;
 
-        table->table.array = (Value*)realloc(table->table.array, sizeof(Value) * newCapacity);
-        for (int i = table->table.arrayCapacity; i < newCapacity; i++) {
+        table->table.array = (Value*)realloc(table->table.array, sizeof(Value) * new_capacity);
+        for (int i = table->table.array_capacity; i < new_capacity; i++) {
             table->table.array[i] = NIL_VAL;
         }
-        table->table.arrayCapacity = newCapacity;
+        table->table.array_capacity = new_capacity;
     }
 
-    table->table.array[rawIndex] = args[1];
-    table->table.arrayMax = index;
+    table->table.array[raw_index] = args[1];
+    table->table.array_max = index;
     RETURN_NUMBER((double)index);
 }
 
 // table.reserve(t, n) - pre-allocate array capacity
-static int table_reserve(VM* vm, int argCount, Value* args) {
+static int table_reserve(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_TABLE(0);
     ASSERT_NUMBER(1);
@@ -138,51 +138,51 @@ static int table_reserve(VM* vm, int argCount, Value* args) {
     ObjTable* table = GET_TABLE(0);
     int n = (int)GET_NUMBER(1);
     if (n < 0) {
-        vmRuntimeError(vm, "table.reserve: n must be non-negative");
+        vm_runtime_error(vm, "table.reserve: n must be non-negative");
         return 0;
     }
-    if (n <= table->table.arrayCapacity) {
+    if (n <= table->table.array_capacity) {
         RETURN_VAL(args[0]);
     }
 
-    int newCapacity = table->table.arrayCapacity == 0 ? 8 : table->table.arrayCapacity;
-    while (newCapacity < n) newCapacity *= 2;
-    table->table.array = (Value*)realloc(table->table.array, sizeof(Value) * newCapacity);
-    for (int i = table->table.arrayCapacity; i < newCapacity; i++) {
+    int new_capacity = table->table.array_capacity == 0 ? 8 : table->table.array_capacity;
+    while (new_capacity < n) new_capacity *= 2;
+    table->table.array = (Value*)realloc(table->table.array, sizeof(Value) * new_capacity);
+    for (int i = table->table.array_capacity; i < new_capacity; i++) {
         table->table.array[i] = NIL_VAL;
     }
-    table->table.arrayCapacity = newCapacity;
+    table->table.array_capacity = new_capacity;
     RETURN_VAL(args[0]);
 }
 
 // table.concat(t, sep) - join array elements as string
-static int table_concat(VM* vm, int argCount, Value* args) {
+static int table_concat(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_TABLE(0);
 
     ObjTable* table = GET_TABLE(0);
     const char* sep = "";
-    int sepLen = 0;
+    int sep_len = 0;
 
-    if (argCount >= 2) {
+    if (arg_count >= 2) {
         ASSERT_STRING(1);
         sep = GET_CSTRING(1);
-        sepLen = GET_STRING(1)->length;
+        sep_len = GET_STRING(1)->length;
     }
 
     // First pass: calculate total length
-    int totalLen = 0;
+    int total_len = 0;
     int count = 0;
     for (int i = 1; ; i++) {
         Value val;
-        if (!tableGetArray(&table->table, i, &val) || IS_NIL(val)) {
+        if (!table_get_array(&table->table, i, &val) || IS_NIL(val)) {
             break;
         }
         if (!IS_STRING(val)) {
-            vmRuntimeError(vm, "table.concat: element %d is not a string", i);
+            vm_runtime_error(vm, "table.concat: element %d is not a string", i);
             return 0;
         }
-        totalLen += AS_STRING(val)->length;
+        total_len += AS_STRING(val)->length;
         count++;
     }
 
@@ -190,32 +190,32 @@ static int table_concat(VM* vm, int argCount, Value* args) {
         RETURN_STRING("", 0);
     }
 
-    totalLen += sepLen * (count - 1);
+    total_len += sep_len * (count - 1);
 
     // Second pass: build string
-    char* buf = (char*)malloc(totalLen + 1);
+    char* buf = (char*)malloc(total_len + 1);
     char* p = buf;
 
     for (int i = 1; i <= count; i++) {
         Value val;
-        tableGetArray(&table->table, i, &val);
+        table_get_array(&table->table, i, &val);
         ObjString* s = AS_STRING(val);
 
         memcpy(p, s->chars, s->length);
         p += s->length;
 
-        if (i < count && sepLen > 0) {
-            memcpy(p, sep, sepLen);
-            p += sepLen;
+        if (i < count && sep_len > 0) {
+            memcpy(p, sep, sep_len);
+            p += sep_len;
         }
     }
     *p = '\0';
 
-    RETURN_STRING(buf, totalLen);
+    RETURN_STRING(buf, total_len);
 }
 
 // Helper for qsort (default comparison)
-static int compareValues(const void* a, const void* b) {
+static int compare_values(const void* a, const void* b) {
     Value va = *(const Value*)a;
     Value vb = *(const Value*)b;
 
@@ -238,7 +238,7 @@ static int compareValues(const void* a, const void* b) {
 }
 
 // table.sort(t, cmp?) - sort array in place
-static int table_sort(VM* vm, int argCount, Value* args) {
+static int table_sort(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_TABLE(0);
 
@@ -248,7 +248,7 @@ static int table_sort(VM* vm, int argCount, Value* args) {
     int len = 0;
     for (int i = 1; ; i++) {
         Value val;
-        if (!tableGetArray(&table->table, i, &val) || IS_NIL(val)) {
+        if (!table_get_array(&table->table, i, &val) || IS_NIL(val)) {
             len = i - 1;
             break;
         }
@@ -261,15 +261,15 @@ static int table_sort(VM* vm, int argCount, Value* args) {
     // Copy to temp array
     Value* arr = (Value*)malloc(len * sizeof(Value));
     for (int i = 0; i < len; i++) {
-        tableGetArray(&table->table, i + 1, &arr[i]);
+        table_get_array(&table->table, i + 1, &arr[i]);
     }
 
     // Sort (using default comparison for now - custom comparator is complex)
-    qsort(arr, len, sizeof(Value), compareValues);
+    qsort(arr, len, sizeof(Value), compare_values);
 
     // Copy back
     for (int i = 0; i < len; i++) {
-        tableSetArray(&table->table, i + 1, arr[i]);
+        table_set_array(&table->table, i + 1, arr[i]);
     }
 
     free(arr);
@@ -277,7 +277,7 @@ static int table_sort(VM* vm, int argCount, Value* args) {
 }
 
 // table.insert(t, [pos,] value) - insert value at pos (default: end)
-static int table_insert(VM* vm, int argCount, Value* args) {
+static int table_insert(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(2);
     ASSERT_TABLE(0);
 
@@ -287,7 +287,7 @@ static int table_insert(VM* vm, int argCount, Value* args) {
     int len = 0;
     for (int i = 1; ; i++) {
         Value val;
-        if (!tableGetArray(&table->table, i, &val) || IS_NIL(val)) {
+        if (!table_get_array(&table->table, i, &val) || IS_NIL(val)) {
             len = i - 1;
             break;
         }
@@ -296,7 +296,7 @@ static int table_insert(VM* vm, int argCount, Value* args) {
     int pos;
     Value value;
 
-    if (argCount == 2) {
+    if (arg_count == 2) {
         // table.insert(t, value) - append
         pos = len + 1;
         value = args[1];
@@ -311,22 +311,22 @@ static int table_insert(VM* vm, int argCount, Value* args) {
         // Shift elements up
         for (int i = len; i >= pos; i--) {
             Value val;
-            tableGetArray(&table->table, i, &val);
-            tableSetArray(&table->table, i + 1, val);
+            table_get_array(&table->table, i, &val);
+            table_set_array(&table->table, i + 1, val);
         }
     }
 
-    tableSetArray(&table->table, pos, value);
+    table_set_array(&table->table, pos, value);
     RETURN_VAL(args[0]); // Return table for chaining
 }
 
 // table.keys(t) - return array of keys
-static int table_keys(VM* vm, int argCount, Value* args) {
+static int table_keys(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_TABLE(0);
 
     ObjTable* table = GET_TABLE(0);
-    ObjTable* result = newTable();
+    ObjTable* result = new_table();
     push(vm, OBJ_VAL(result)); // GC protection
 
     int index = 1;
@@ -335,27 +335,27 @@ static int table_keys(VM* vm, int argCount, Value* args) {
     for (int i = 0; i < table->table.capacity; i++) {
         Entry* entry = &table->table.entries[i];
         if (entry->key != NULL && !IS_NIL(entry->value)) {
-            tableSetArray(&result->table, index++, OBJ_VAL(entry->key));
+            table_set_array(&result->table, index++, OBJ_VAL(entry->key));
         }
     }
 
     // Array keys
     for (int i = 1; ; i++) {
         Value val;
-        if (!tableGetArray(&table->table, i, &val) || IS_NIL(val)) break;
-        tableSetArray(&result->table, index++, NUMBER_VAL(i));
+        if (!table_get_array(&table->table, i, &val) || IS_NIL(val)) break;
+        table_set_array(&result->table, index++, NUMBER_VAL(i));
     }
 
     return 1; // result already on stack
 }
 
 // table.values(t) - return array of values
-static int table_values(VM* vm, int argCount, Value* args) {
+static int table_values(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_TABLE(0);
 
     ObjTable* table = GET_TABLE(0);
-    ObjTable* result = newTable();
+    ObjTable* result = new_table();
     push(vm, OBJ_VAL(result)); // GC protection
 
     int index = 1;
@@ -364,15 +364,15 @@ static int table_values(VM* vm, int argCount, Value* args) {
     for (int i = 0; i < table->table.capacity; i++) {
         Entry* entry = &table->table.entries[i];
         if (entry->key != NULL && !IS_NIL(entry->value)) {
-            tableSetArray(&result->table, index++, entry->value);
+            table_set_array(&result->table, index++, entry->value);
         }
     }
 
     // Array values
     for (int i = 1; ; i++) {
         Value val;
-        if (!tableGetArray(&table->table, i, &val) || IS_NIL(val)) break;
-        tableSetArray(&result->table, index++, val);
+        if (!table_get_array(&table->table, i, &val) || IS_NIL(val)) break;
+        table_set_array(&result->table, index++, val);
     }
 
     return 1;
@@ -381,11 +381,11 @@ static int table_values(VM* vm, int argCount, Value* args) {
 // table.find_index(t, value[, start][, lookup]) - find first matching array value.
 // lookup(element) can be used to compare by derived key.
 // Returns 1-based index, or 0 if not found.
-static int table_find_index(VM* vm, int argCount, Value* args) {
+static int table_find_index(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(2);
     ASSERT_TABLE(0);
-    if (argCount > 4) {
-        vmRuntimeError(vm, "table.find_index: expected 2 to 4 arguments.");
+    if (arg_count > 4) {
+        vm_runtime_error(vm, "table.find_index: expected 2 to 4 arguments.");
         return 0;
     }
 
@@ -394,7 +394,7 @@ static int table_find_index(VM* vm, int argCount, Value* args) {
     int start = 1;
     Value lookup = NIL_VAL;
 
-    if (argCount >= 3) {
+    if (arg_count >= 3) {
         if (IS_NUMBER(args[2])) {
             start = (int)GET_NUMBER(2);
             if (start < 1) start = 1;
@@ -403,7 +403,7 @@ static int table_find_index(VM* vm, int argCount, Value* args) {
         }
     }
 
-    if (argCount >= 4) {
+    if (arg_count >= 4) {
         ASSERT_NUMBER(2);
         start = (int)GET_NUMBER(2);
         if (start < 1) start = 1;
@@ -412,16 +412,16 @@ static int table_find_index(VM* vm, int argCount, Value* args) {
 
     for (int i = start; ; i++) {
         Value val;
-        if (!tableGetArray(&table->table, i, &val) || IS_NIL(val)) break;
+        if (!table_get_array(&table->table, i, &val) || IS_NIL(val)) break;
 
         Value candidate = val;
         if (!IS_NIL(lookup)) {
-            if (!callUnaryLookup(vm, lookup, val, &candidate)) {
+            if (!call_unary_lookup(vm, lookup, val, &candidate)) {
                 return 0;
             }
         }
 
-        if (valueEqualsForFind(candidate, needle)) {
+        if (value_equals_for_find(candidate, needle)) {
             RETURN_NUMBER((double)i);
         }
     }
@@ -429,8 +429,8 @@ static int table_find_index(VM* vm, int argCount, Value* args) {
     RETURN_NUMBER(0);
 }
 
-void registerTable(VM* vm) {
-    const NativeReg tableFuncs[] = {
+void register_table(VM* vm) {
+    const NativeReg table_funcs[] = {
         {"remove", table_remove},
         {"push", table_push},
         {"reserve", table_reserve},
@@ -442,6 +442,6 @@ void registerTable(VM* vm) {
         {"find_index", table_find_index},
         {NULL, NULL}
     };
-    registerModule(vm, "table", tableFuncs);
+    register_module(vm, "table", table_funcs);
     pop(vm); // Pop table module
 }

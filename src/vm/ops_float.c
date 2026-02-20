@@ -2,31 +2,31 @@
 
 #include "ops_float.h"
 
-void vmHandleOpFAdd(VM* vm) {
+void vm_handle_op_f_add(VM* vm) {
     double b = AS_NUMBER(pop(vm));
     double a = AS_NUMBER(pop(vm));
     push(vm, NUMBER_VAL(a + b));
 }
 
-void vmHandleOpFSub(VM* vm) {
+void vm_handle_op_f_sub(VM* vm) {
     double b = AS_NUMBER(pop(vm));
     double a = AS_NUMBER(pop(vm));
     push(vm, NUMBER_VAL(a - b));
 }
 
-void vmHandleOpFMul(VM* vm) {
+void vm_handle_op_f_mul(VM* vm) {
     double b = AS_NUMBER(pop(vm));
     double a = AS_NUMBER(pop(vm));
     push(vm, NUMBER_VAL(a * b));
 }
 
-void vmHandleOpFDiv(VM* vm) {
+void vm_handle_op_f_div(VM* vm) {
     double b = AS_NUMBER(pop(vm));
     double a = AS_NUMBER(pop(vm));
     push(vm, NUMBER_VAL(a / b));
 }
 
-void vmHandleOpFMod(VM* vm) {
+void vm_handle_op_f_mod(VM* vm) {
     double b = AS_NUMBER(pop(vm));
     double a = AS_NUMBER(pop(vm));
     push(vm, NUMBER_VAL(fmod(a, b)));

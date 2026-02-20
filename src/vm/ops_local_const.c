@@ -11,24 +11,24 @@ static inline int to_int64_local(double x, int64_t* out) {
     return 1;
 }
 
-static int pushPendingSetLocalLocal(VM* vm, int frameIndex, int slot) {
-    if (vm->pendingSetLocalCount >= 8) {
-        vmRuntimeError(vm, "Pending set-local stack overflow.");
+static int push_pending_set_local_local(VM* vm, int frame_index, int slot) {
+    if (vm->pending_set_local_count >= 8) {
+        vm_runtime_error(vm, "Pending set-local stack overflow.");
         return 0;
     }
-    int idx = vm->pendingSetLocalCount++;
-    vm->pendingSetLocalFrames[idx] = frameIndex;
-    vm->pendingSetLocalSlots[idx] = slot;
+    int idx = vm->pending_set_local_count++;
+    vm->pending_set_local_frames[idx] = frame_index;
+    vm->pending_set_local_slots[idx] = slot;
     return 1;
 }
 
-int vmHandleOpIncLocal(VM* vm, CallFrame** frame, uint8_t** ip) {
+int vm_handle_op_inc_local(VM* vm, CallFrame** frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     uint8_t constant = *(*ip)++;
     Value v = (*frame)->slots[slot];
     Value c = (*frame)->closure->function->chunk.constants.values[constant];
     if (!IS_NUMBER(v) || !IS_NUMBER(c)) {
-        vmRuntimeError(vm, "Operands must be two numbers.");
+        vm_runtime_error(vm, "Operands must be two numbers.");
         return 0;
     }
     Value out = NUMBER_VAL(AS_NUMBER(v) + AS_NUMBER(c));
@@ -37,8 +37,8 @@ int vmHandleOpIncLocal(VM* vm, CallFrame** frame, uint8_t** ip) {
     return 1;
 }
 
-static int binaryLocalConst(
-    VM* vm, CallFrame** frame, uint8_t** ip, const char* mmName, uint8_t slot, uint8_t constant, int op) {
+static int binary_local_const(
+    VM* vm, CallFrame** frame, uint8_t** ip, const char* mm_name, uint8_t slot, uint8_t constant, int op) {
     Value a = (*frame)->slots[slot];
     Value b = (*frame)->closure->function->chunk.constants.values[constant];
     if (IS_NUMBER(a) && IS_NUMBER(b)) {
@@ -66,42 +66,42 @@ static int binaryLocalConst(
         return 1;
     }
 
-    Value method = getMetamethod(vm, a, mmName);
-    if (IS_NIL(method)) method = getMetamethod(vm, b, mmName);
+    Value method = get_metamethod(vm, a, mm_name);
+    if (IS_NIL(method)) method = get_metamethod(vm, b, mm_name);
     if (IS_NIL(method)) return 0;
     push(vm, method);
     push(vm, a);
     push(vm, b);
-    if (!pushPendingSetLocalLocal(vm, vm->currentThread->frameCount - 1, slot)) {
+    if (!push_pending_set_local_local(vm, vm->current_thread->frame_count - 1, slot)) {
         return 0;
     }
     (*frame)->ip = *ip;
     if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-    *frame = &vm->currentThread->frames[vm->currentThread->frameCount - 1];
+    *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
     *ip = (*frame)->ip;
     return 1;
 }
 
-int vmHandleOpSubLocalConst(VM* vm, CallFrame** frame, uint8_t** ip) {
+int vm_handle_op_sub_local_const(VM* vm, CallFrame** frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     uint8_t constant = *(*ip)++;
-    return binaryLocalConst(vm, frame, ip, "__sub", slot, constant, 0);
+    return binary_local_const(vm, frame, ip, "__sub", slot, constant, 0);
 }
 
-int vmHandleOpMulLocalConst(VM* vm, CallFrame** frame, uint8_t** ip) {
+int vm_handle_op_mul_local_const(VM* vm, CallFrame** frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     uint8_t constant = *(*ip)++;
-    return binaryLocalConst(vm, frame, ip, "__mul", slot, constant, 1);
+    return binary_local_const(vm, frame, ip, "__mul", slot, constant, 1);
 }
 
-int vmHandleOpDivLocalConst(VM* vm, CallFrame** frame, uint8_t** ip) {
+int vm_handle_op_div_local_const(VM* vm, CallFrame** frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     uint8_t constant = *(*ip)++;
-    return binaryLocalConst(vm, frame, ip, "__div", slot, constant, 2);
+    return binary_local_const(vm, frame, ip, "__div", slot, constant, 2);
 }
 
-int vmHandleOpModLocalConst(VM* vm, CallFrame** frame, uint8_t** ip) {
+int vm_handle_op_mod_local_const(VM* vm, CallFrame** frame, uint8_t** ip) {
     uint8_t slot = *(*ip)++;
     uint8_t constant = *(*ip)++;
-    return binaryLocalConst(vm, frame, ip, "__mod", slot, constant, 3);
+    return binary_local_const(vm, frame, ip, "__mod", slot, constant, 3);
 }

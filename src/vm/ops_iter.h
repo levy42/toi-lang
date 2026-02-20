@@ -3,9 +3,9 @@
 
 #include "../vm.h"
 
-int vmHandleOpIterPrep(VM* vm);
-int vmHandleOpIterPrepIPairs(VM* vm);
-int vmHandleOpRange(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpSlice(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_iter_prep(VM* vm);
+int vm_handle_op_iter_prep_i_pairs(VM* vm);
+int vm_handle_op_range(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_slice(VM* vm, CallFrame** frame, uint8_t** ip);
 
 #endif

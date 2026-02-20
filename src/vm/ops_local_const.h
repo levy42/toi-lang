@@ -3,10 +3,10 @@
 
 #include "../vm.h"
 
-int vmHandleOpIncLocal(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpSubLocalConst(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpMulLocalConst(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpDivLocalConst(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpModLocalConst(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_inc_local(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_sub_local_const(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_mul_local_const(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_div_local_const(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_mod_local_const(VM* vm, CallFrame** frame, uint8_t** ip);
 
 #endif

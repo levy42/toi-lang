@@ -8,22 +8,22 @@
 
 #define TABLE_MAX_LOAD 0.75
 
-void initTable(Table* table) {
+void init_table(Table* table) {
     table->count = 0;
     table->capacity = 0;
     table->entries = NULL;
     table->array = NULL;
-    table->arrayCapacity = 0;
-    table->arrayMax = 0;
+    table->array_capacity = 0;
+    table->array_max = 0;
 }
 
-void freeTable(Table* table) {
+void free_table(Table* table) {
     free(table->entries);
     free(table->array);
-    initTable(table);
+    init_table(table);
 }
 
-static Entry* findEntry(Entry* entries, int capacity, ObjString* key) {
+static Entry* find_entry(Entry* entries, int capacity, ObjString* key) {
     uint32_t index = key->hash % capacity;
     Entry* tombstone = NULL;
     for (;;) {
@@ -45,7 +45,7 @@ static Entry* findEntry(Entry* entries, int capacity, ObjString* key) {
     }
 }
 
-static void adjustCapacity(Table* table, int capacity) {
+static void adjust_capacity(Table* table, int capacity) {
     Entry* entries = (Entry*)malloc(sizeof(Entry) * capacity);
     for (int i = 0; i < capacity; i++) {
         entries[i].key = NULL;
@@ -58,7 +58,7 @@ static void adjustCapacity(Table* table, int capacity) {
         Entry* entry = &table->entries[i];
         if (entry->key == NULL) continue;
 
-        Entry* dest = findEntry(entries, capacity, entry->key);
+        Entry* dest = find_entry(entries, capacity, entry->key);
         dest->key = entry->key;
         dest->value = entry->value;
         table->count++;
@@ -69,36 +69,36 @@ static void adjustCapacity(Table* table, int capacity) {
     table->capacity = capacity;
 }
 
-int tableGet(Table* table, ObjString* key, Value* value) {
+int table_get(Table* table, ObjString* key, Value* value) {
     if (table->count == 0) return 0;
 
-    Entry* entry = findEntry(table->entries, table->capacity, key);
+    Entry* entry = find_entry(table->entries, table->capacity, key);
     if (entry->key == NULL) return 0;
 
     *value = entry->value;
     return 1;
 }
 
-int tableSet(Table* table, ObjString* key, Value value) {
+int table_set(Table* table, ObjString* key, Value value) {
     if (table->count + 1 > table->capacity * TABLE_MAX_LOAD) {
         int capacity = table->capacity < 8 ? 8 : table->capacity * 2;
-        adjustCapacity(table, capacity);
+        adjust_capacity(table, capacity);
     }
 
-    Entry* entry = findEntry(table->entries, table->capacity, key);
+    Entry* entry = find_entry(table->entries, table->capacity, key);
 
-    int isNewKey = entry->key == NULL;
-    if (isNewKey && IS_NIL(entry->value)) table->count++;
+    int is_new_key = entry->key == NULL;
+    if (is_new_key && IS_NIL(entry->value)) table->count++;
 
     entry->key = key;
     entry->value = value;
-    return isNewKey;
+    return is_new_key;
 }
 
-int tableDelete(Table* table, ObjString* key) {
+int table_delete(Table* table, ObjString* key) {
     if (table->count == 0) return 0;
 
-    Entry* entry = findEntry(table->entries, table->capacity, key);
+    Entry* entry = find_entry(table->entries, table->capacity, key);
     if (entry->key == NULL) return 0;
 
     // Place a tombstone.
@@ -107,64 +107,64 @@ int tableDelete(Table* table, ObjString* key) {
     return 1;
 }
 
-int tableGetArray(Table* table, int index, Value* value) {
+int table_get_array(Table* table, int index, Value* value) {
     // 1-based indexing for Lua compatibility
-    int rawIndex = index - 1;
-    if (rawIndex >= 0 && rawIndex < table->arrayCapacity) {
-        if (!IS_NIL(table->array[rawIndex])) {
-            *value = table->array[rawIndex];
+    int raw_index = index - 1;
+    if (raw_index >= 0 && raw_index < table->array_capacity) {
+        if (!IS_NIL(table->array[raw_index])) {
+            *value = table->array[raw_index];
             return 1;
         }
     }
     return 0;
 }
 
-int tableSetArray(Table* table, int index, Value value) {
+int table_set_array(Table* table, int index, Value value) {
     // 1-based indexing
-    int rawIndex = index - 1;
+    int raw_index = index - 1;
     
-    if (rawIndex < 0) return 0; // Negative indices use hash map
+    if (raw_index < 0) return 0; // Negative indices use hash map
 
     // Keep array dense-ish: only allow append or update within current capacity.
-    int maxIndex = table->arrayMax;
-    if (index > maxIndex + 1 && index > table->arrayCapacity) {
+    int max_index = table->array_max;
+    if (index > max_index + 1 && index > table->array_capacity) {
         return 0; // Too sparse, use hash map
     }
 
-    if (rawIndex >= table->arrayCapacity) {
-        int newCapacity = table->arrayCapacity == 0 ? 8 : table->arrayCapacity * 2;
-        while (rawIndex >= newCapacity) newCapacity *= 2;
-        table->array = (Value*)realloc(table->array, sizeof(Value) * newCapacity);
-        for (int i = table->arrayCapacity; i < newCapacity; i++) {
+    if (raw_index >= table->array_capacity) {
+        int new_capacity = table->array_capacity == 0 ? 8 : table->array_capacity * 2;
+        while (raw_index >= new_capacity) new_capacity *= 2;
+        table->array = (Value*)realloc(table->array, sizeof(Value) * new_capacity);
+        for (int i = table->array_capacity; i < new_capacity; i++) {
             table->array[i] = NIL_VAL;
         }
-        table->arrayCapacity = newCapacity;
+        table->array_capacity = new_capacity;
     }
 
-    table->array[rawIndex] = value;
+    table->array[raw_index] = value;
     if (!IS_NIL(value)) {
-        if (index > table->arrayMax) table->arrayMax = index;
-    } else if (index == table->arrayMax) {
-        int newMax = table->arrayMax - 1;
-        while (newMax >= 1 && newMax <= table->arrayCapacity &&
-               IS_NIL(table->array[newMax - 1])) {
-            newMax--;
+        if (index > table->array_max) table->array_max = index;
+    } else if (index == table->array_max) {
+        int new_max = table->array_max - 1;
+        while (new_max >= 1 && new_max <= table->array_capacity &&
+               IS_NIL(table->array[new_max - 1])) {
+            new_max--;
         }
-        table->arrayMax = newMax;
+        table->array_max = new_max;
     }
     return 1;
 }
 
-void tableAddAll(Table* from, Table* to) {
+void table_add_all(Table* from, Table* to) {
     for (int i = 0; i < from->capacity; i++) {
         Entry* entry = &from->entries[i];
         if (entry->key != NULL) {
-            tableSet(to, entry->key, entry->value);
+            table_set(to, entry->key, entry->value);
         }
     }
 }
 
-ObjString* tableFindString(Table* table, const char* chars, int length, uint32_t hash) {
+ObjString* table_find_string(Table* table, const char* chars, int length, uint32_t hash) {
     if (table->count == 0) return NULL;
 
     uint32_t index = hash % table->capacity;

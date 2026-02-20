@@ -14,24 +14,24 @@ static inline int to_int64_local(double x, int64_t* out) {
     return 1;
 }
 
-static int appendBytes(char** buffer, int* length, int* capacity, const char* src, int srcLen) {
-    if (srcLen <= 0) return 1;
-    if (*length + srcLen > *capacity) {
-        int newCapacity = *capacity < 8 ? 8 : *capacity * 2;
-        while (newCapacity < *length + srcLen) newCapacity *= 2;
-        char* newBuffer = (char*)realloc(*buffer, (size_t)newCapacity + 1);
-        if (newBuffer == NULL) return 0;
-        *buffer = newBuffer;
-        *capacity = newCapacity;
+static int append_bytes(char** buffer, int* length, int* capacity, const char* src, int src_len) {
+    if (src_len <= 0) return 1;
+    if (*length + src_len > *capacity) {
+        int new_capacity = *capacity < 8 ? 8 : *capacity * 2;
+        while (new_capacity < *length + src_len) new_capacity *= 2;
+        char* new_buffer = (char*)realloc(*buffer, (size_t)new_capacity + 1);
+        if (new_buffer == NULL) return 0;
+        *buffer = new_buffer;
+        *capacity = new_capacity;
     }
 
-    memcpy(*buffer + *length, src, (size_t)srcLen);
-    *length += srcLen;
+    memcpy(*buffer + *length, src, (size_t)src_len);
+    *length += src_len;
     (*buffer)[*length] = '\0';
     return 1;
 }
 
-static int appendNumber(char** buffer, int* length, int* capacity, double number) {
+static int append_number(char** buffer, int* length, int* capacity, double number) {
     int64_t i64;
     if (to_int64_local(number, &i64)) {
         char tmp[32];
@@ -45,18 +45,18 @@ static int appendNumber(char** buffer, int* length, int* capacity, double number
 
         char out[32];
         for (int j = 0; j < idx; j++) out[j] = tmp[idx - 1 - j];
-        return appendBytes(buffer, length, capacity, out, idx);
+        return append_bytes(buffer, length, capacity, out, idx);
     }
 
-    char numBuf[32];
-    int numLen = snprintf(numBuf, sizeof(numBuf), "%.14g", number);
-    if (numLen < 0) return 0;
-    return appendBytes(buffer, length, capacity, numBuf, numLen);
+    char num_buf[32];
+    int num_len = snprintf(num_buf, sizeof(num_buf), "%.14g", number);
+    if (num_len < 0) return 0;
+    return append_bytes(buffer, length, capacity, num_buf, num_len);
 }
 
-int vmBuildString(VM* vm, uint8_t partCount) {
-    if (partCount == 0) {
-        push(vm, OBJ_VAL(copyString("", 0)));
+int vm_build_string(VM* vm, uint8_t part_count) {
+    if (part_count == 0) {
+        push(vm, OBJ_VAL(copy_string("", 0)));
         return 1;
     }
 
@@ -64,22 +64,22 @@ int vmBuildString(VM* vm, uint8_t partCount) {
     int length = 0;
     int capacity = 0;
 
-    for (int i = partCount - 1; i >= 0; i--) {
+    for (int i = part_count - 1; i >= 0; i--) {
         Value part = peek(vm, i);
         if (IS_STRING(part)) {
             ObjString* s = AS_STRING(part);
-            if (!appendBytes(&buffer, &length, &capacity, s->chars, s->length)) {
+            if (!append_bytes(&buffer, &length, &capacity, s->chars, s->length)) {
                 free(buffer);
-                vmRuntimeError(vm, "Out of memory while building string.");
+                vm_runtime_error(vm, "Out of memory while building string.");
                 return 0;
             }
             continue;
         }
 
         if (IS_NUMBER(part)) {
-            if (!appendNumber(&buffer, &length, &capacity, AS_NUMBER(part))) {
+            if (!append_number(&buffer, &length, &capacity, AS_NUMBER(part))) {
                 free(buffer);
-                vmRuntimeError(vm, "Out of memory while building string.");
+                vm_runtime_error(vm, "Out of memory while building string.");
                 return 0;
             }
             continue;
@@ -87,19 +87,19 @@ int vmBuildString(VM* vm, uint8_t partCount) {
 
         if (IS_BOOL(part)) {
             const char* b = AS_BOOL(part) ? "true" : "false";
-            int bLen = AS_BOOL(part) ? 4 : 5;
-            if (!appendBytes(&buffer, &length, &capacity, b, bLen)) {
+            int b_len = AS_BOOL(part) ? 4 : 5;
+            if (!append_bytes(&buffer, &length, &capacity, b, b_len)) {
                 free(buffer);
-                vmRuntimeError(vm, "Out of memory while building string.");
+                vm_runtime_error(vm, "Out of memory while building string.");
                 return 0;
             }
             continue;
         }
 
         if (IS_NIL(part)) {
-            if (!appendBytes(&buffer, &length, &capacity, "nil", 3)) {
+            if (!append_bytes(&buffer, &length, &capacity, "nil", 3)) {
                 free(buffer);
-                vmRuntimeError(vm, "Out of memory while building string.");
+                vm_runtime_error(vm, "Out of memory while building string.");
                 return 0;
             }
             continue;
@@ -111,26 +111,26 @@ int vmBuildString(VM* vm, uint8_t partCount) {
             return 0;
         }
 
-        Value strVal = pop(vm);
-        if (!IS_STRING(strVal)) {
+        Value str_val = pop(vm);
+        if (!IS_STRING(str_val)) {
             free(buffer);
-            vmRuntimeError(vm, "str() must return a string.");
+            vm_runtime_error(vm, "str() must return a string.");
             return 0;
         }
-        ObjString* s = AS_STRING(strVal);
-        if (!appendBytes(&buffer, &length, &capacity, s->chars, s->length)) {
+        ObjString* s = AS_STRING(str_val);
+        if (!append_bytes(&buffer, &length, &capacity, s->chars, s->length)) {
             free(buffer);
-            vmRuntimeError(vm, "Out of memory while building string.");
+            vm_runtime_error(vm, "Out of memory while building string.");
             return 0;
         }
     }
 
-    for (int i = 0; i < partCount; i++) pop(vm);
+    for (int i = 0; i < part_count; i++) pop(vm);
 
     if (buffer == NULL) {
-        push(vm, OBJ_VAL(copyString("", 0)));
+        push(vm, OBJ_VAL(copy_string("", 0)));
     } else {
-        push(vm, OBJ_VAL(takeString(buffer, length)));
+        push(vm, OBJ_VAL(take_string(buffer, length)));
     }
     return 1;
 }

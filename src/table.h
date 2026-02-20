@@ -18,22 +18,22 @@ typedef struct {
     
     // Array optimization
     Value* array;
-    int arrayCapacity;
-    int arrayMax; // 1-based highest non-nil index in array
+    int array_capacity;
+    int array_max; // 1-based highest non-nil index in array
 } Table;
 
-void initTable(Table* table);
-void freeTable(Table* table);
-int tableGet(Table* table, struct ObjString* key, Value* value);
-int tableSet(Table* table, struct ObjString* key, Value value);
-int tableDelete(Table* table, struct ObjString* key);
-void tableAddAll(Table* from, Table* to);
-// ObjString* tableFindString(Table* table, const char* chars, int length, uint32_t hash); // Needs full definition?
+void init_table(Table* table);
+void free_table(Table* table);
+int table_get(Table* table, struct ObjString* key, Value* value);
+int table_set(Table* table, struct ObjString* key, Value value);
+int table_delete(Table* table, struct ObjString* key);
+void table_add_all(Table* from, Table* to);
+// ObjString* table_find_string(Table* table, const char* chars, int length, uint32_t hash); // Needs full definition?
 // No, returns pointer.
-struct ObjString* tableFindString(Table* table, const char* chars, int length, uint32_t hash);
+struct ObjString* table_find_string(Table* table, const char* chars, int length, uint32_t hash);
 
 // Array optimization helpers
-int tableGetArray(Table* table, int index, Value* value);
-int tableSetArray(Table* table, int index, Value value);
+int table_get_array(Table* table, int index, Value* value);
+int table_set_array(Table* table, int index, Value value);
 
 #endif

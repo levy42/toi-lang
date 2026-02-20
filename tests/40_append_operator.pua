@@ -1,12 +1,6 @@
+from lib.test import assert_eq, assert_true
+
 table = import table
-
-fn assert_true(cond, msg = nil)
-  if not cond
-    error(msg == nil ? "assert_true failed" : msg)
-
-fn assert_eq(actual, expected, msg = nil)
-  if actual != expected
-    error(msg == nil ? "assert_eq failed" : msg)
 
 t = {}
 i1 = t <+ 10

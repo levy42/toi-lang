@@ -1,6 +1,4 @@
-fn assert_true(cond, msg = nil)
-  if not cond
-    error("assert_true failed")
+from lib.test import assert_true
 
 fn alloc_round(count)
   for i in 1..count

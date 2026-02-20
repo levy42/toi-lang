@@ -6,7 +6,7 @@
 #include "value.h"
 #include "object.h"
 
-static int instrLength(Chunk* chunk, int offset) {
+static int instr_length(Chunk* chunk, int offset) {
     uint8_t op = chunk->code[offset];
     switch (op) {
         case OP_CONSTANT:
@@ -59,14 +59,14 @@ static int instrLength(Chunk* chunk, int offset) {
                 return 2;
             }
             ObjFunction* fn = AS_FUNCTION(val);
-            return 2 + fn->upvalueCount * 2;
+            return 2 + fn->upvalue_count * 2;
         }
         default:
             return 1;
     }
 }
 
-static void emitByte(uint8_t** code, int* count, int* capacity, int line, int** lines, uint8_t byte) {
+static void emit_byte(uint8_t** code, int* count, int* capacity, int line, int** lines, uint8_t byte) {
     if (*count + 1 > *capacity) {
         int old = *capacity;
         *capacity = old < 8 ? 8 : old * 2;
@@ -78,12 +78,12 @@ static void emitByte(uint8_t** code, int* count, int* capacity, int line, int** 
     (*count)++;
 }
 
-static void emitBytes(uint8_t** code, int* count, int* capacity, int line, int** lines, uint8_t a, uint8_t b) {
-    emitByte(code, count, capacity, line, lines, a);
-    emitByte(code, count, capacity, line, lines, b);
+static void emit_bytes(uint8_t** code, int* count, int* capacity, int line, int** lines, uint8_t a, uint8_t b) {
+    emit_byte(code, count, capacity, line, lines, a);
+    emit_byte(code, count, capacity, line, lines, b);
 }
 
-static int foldBinaryNumbers(Chunk* chunk, int offset, int* outConst) {
+static int fold_binary_numbers(Chunk* chunk, int offset, int* out_const) {
     uint8_t op = chunk->code[offset + 4];
     if (op != OP_ADD && op != OP_SUBTRACT && op != OP_MULTIPLY &&
         op != OP_DIVIDE && op != OP_POWER && op != OP_INT_DIV &&
@@ -111,29 +111,29 @@ static int foldBinaryNumbers(Chunk* chunk, int offset, int* outConst) {
         default: return 0;
     }
 
-    *outConst = addConstant(chunk, NUMBER_VAL(result));
+    *out_const = add_constant(chunk, NUMBER_VAL(result));
     return 1;
 }
 
-static int foldUnaryNumber(Chunk* chunk, int offset, int* outConst) {
+static int fold_unary_number(Chunk* chunk, int offset, int* out_const) {
     uint8_t op = chunk->code[offset + 2];
     if (op != OP_NEGATE) return 0;
     uint8_t c = chunk->code[offset + 1];
     Value v = chunk->constants.values[c];
     if (!IS_NUMBER(v)) return 0;
     double result = -AS_NUMBER(v);
-    *outConst = addConstant(chunk, NUMBER_VAL(result));
+    *out_const = add_constant(chunk, NUMBER_VAL(result));
     return 1;
 }
 
-static int isNumberConstant(Chunk* chunk, int constantIndex, double* outValue) {
-    Value v = chunk->constants.values[constantIndex];
+static int is_number_constant(Chunk* chunk, int constant_index, double* out_value) {
+    Value v = chunk->constants.values[constant_index];
     if (!IS_NUMBER(v)) return 0;
-    *outValue = AS_NUMBER(v);
+    *out_value = AS_NUMBER(v);
     return 1;
 }
 
-static int isSafeSingleProducer(uint8_t op) {
+static int is_safe_single_producer(uint8_t op) {
     switch (op) {
         case OP_CONSTANT:
         case OP_NIL:
@@ -149,84 +149,84 @@ static int isSafeSingleProducer(uint8_t op) {
     }
 }
 
-void optimizeChunk(Chunk* chunk) {
+void optimize_chunk(Chunk* chunk) {
     if (chunk->count == 0) return;
 
-    uint8_t* newCode = NULL;
-    int* newLines = NULL;
-    int newCount = 0;
-    int newCapacity = 0;
-    int oldCount = chunk->count;
+    uint8_t* new_code = NULL;
+    int* new_lines = NULL;
+    int new_count = 0;
+    int new_capacity = 0;
+    int old_count = chunk->count;
 
-    int* isJumpTarget = (int*)calloc(oldCount, sizeof(int));
-    for (int i = 0; i < oldCount; ) {
+    int* is_jump_target = (int*)calloc(old_count, sizeof(int));
+    for (int i = 0; i < old_count; ) {
         uint8_t op = chunk->code[i];
         if (op == OP_JUMP || op == OP_JUMP_IF_FALSE || op == OP_JUMP_IF_TRUE || op == OP_LOOP) {
             int sign = (op == OP_LOOP) ? -1 : 1;
             uint16_t jump = (uint16_t)(chunk->code[i + 1] << 8);
             jump |= chunk->code[i + 2];
             int target = i + 3 + sign * (int)jump;
-            if (target >= 0 && target < oldCount) {
-                isJumpTarget[target] = 1;
+            if (target >= 0 && target < old_count) {
+                is_jump_target[target] = 1;
             }
         } else if (op == OP_TRY) {
-            uint16_t exJump = (uint16_t)(chunk->code[i + 3] << 8);
-            exJump |= chunk->code[i + 4];
-            uint16_t finJump = (uint16_t)(chunk->code[i + 5] << 8);
-            finJump |= chunk->code[i + 6];
-            int exTarget = i + 7 + (int)exJump;
-            int finTarget = i + 7 + (int)finJump;
-            if (exJump && exTarget >= 0 && exTarget < oldCount) {
-                isJumpTarget[exTarget] = 1;
+            uint16_t ex_jump = (uint16_t)(chunk->code[i + 3] << 8);
+            ex_jump |= chunk->code[i + 4];
+            uint16_t fin_jump = (uint16_t)(chunk->code[i + 5] << 8);
+            fin_jump |= chunk->code[i + 6];
+            int ex_target = i + 7 + (int)ex_jump;
+            int fin_target = i + 7 + (int)fin_jump;
+            if (ex_jump && ex_target >= 0 && ex_target < old_count) {
+                is_jump_target[ex_target] = 1;
             }
-            if (finJump && finTarget >= 0 && finTarget < oldCount) {
-                isJumpTarget[finTarget] = 1;
+            if (fin_jump && fin_target >= 0 && fin_target < old_count) {
+                is_jump_target[fin_target] = 1;
             }
         } else if (op == OP_FOR_PREP || op == OP_FOR_LOOP) {
             uint16_t jump = (uint16_t)(chunk->code[i + 3] << 8);
             jump |= chunk->code[i + 4];
             int target = (op == OP_FOR_PREP) ? (i + 5 + (int)jump) : (i + 5 - (int)jump);
-            if (target >= 0 && target < oldCount) {
-                isJumpTarget[target] = 1;
+            if (target >= 0 && target < old_count) {
+                is_jump_target[target] = 1;
             }
         }
-        i += instrLength(chunk, i);
+        i += instr_length(chunk, i);
     }
 
-    int* oldToNew = (int*)malloc(sizeof(int) * oldCount);
-    for (int i = 0; i < oldCount; i++) oldToNew[i] = -1;
+    int* old_to_new = (int*)malloc(sizeof(int) * old_count);
+    for (int i = 0; i < old_count; i++) old_to_new[i] = -1;
 
     typedef struct {
-        int oldOffset;
-        int newOffset;
+        int old_offset;
+        int new_offset;
         int sign;
-        uint16_t oldJump;
-        int writeOffset;
+        uint16_t old_jump;
+        int write_offset;
     } JumpPatch;
 
     JumpPatch* patches = NULL;
-    int patchCount = 0;
-    int patchCapacity = 0;
+    int patch_count = 0;
+    int patch_capacity = 0;
 
-    for (int i = 0; i < oldCount; ) {
-        oldToNew[i] = newCount;
+    for (int i = 0; i < old_count; ) {
+        old_to_new[i] = new_count;
 
         // Drop redundant OP_ADJUST_STACK after simple expression results:
         //   <single-producer> OP_POP OP_ADJUST_STACK
         {
             uint8_t op = chunk->code[i];
-            if (isSafeSingleProducer(op)) {
-                int len1 = instrLength(chunk, i);
+            if (is_safe_single_producer(op)) {
+                int len1 = instr_length(chunk, i);
                 int next = i + len1;
-                if (next < oldCount && chunk->code[next] == OP_POP) {
+                if (next < old_count && chunk->code[next] == OP_POP) {
                     int next2 = next + 1;
-                    if (next2 < oldCount && chunk->code[next2] == OP_ADJUST_STACK) {
-                        if (!isJumpTarget[i] && !isJumpTarget[next] && !isJumpTarget[next2]) {
+                    if (next2 < old_count && chunk->code[next2] == OP_ADJUST_STACK) {
+                        if (!is_jump_target[i] && !is_jump_target[next] && !is_jump_target[next2]) {
                             int line = chunk->lines[i];
                             for (int j = 0; j < len1; j++) {
-                                emitByte(&newCode, &newCount, &newCapacity, line, &newLines, chunk->code[i + j]);
+                                emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, chunk->code[i + j]);
                             }
-                            emitByte(&newCode, &newCount, &newCapacity, line, &newLines, OP_POP);
+                            emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, OP_POP);
                             i = next2 + 2;
                             continue;
                         }
@@ -246,14 +246,14 @@ void optimizeChunk(Chunk* chunk) {
             if (op == OP_ADD || op == OP_SUBTRACT || op == OP_MULTIPLY || op == OP_DIVIDE) {
                 uint8_t c = chunk->code[i + 1];
                 double num;
-                if (isNumberConstant(chunk, c, &num)) {
+                if (is_number_constant(chunk, c, &num)) {
                     int drop = 0;
                     if ((op == OP_ADD || op == OP_SUBTRACT) && num == 0) {
                         drop = 1;
                     } else if ((op == OP_MULTIPLY || op == OP_DIVIDE) && num == 1) {
                         drop = 1;
                     }
-                    if (drop && !isJumpTarget[i] && !isJumpTarget[i + 2]) {
+                    if (drop && !is_jump_target[i] && !is_jump_target[i + 2]) {
                         i += 3;
                         continue;
                     }
@@ -262,22 +262,22 @@ void optimizeChunk(Chunk* chunk) {
         }
 
         // Local increment: GET_LOCAL s, CONST c, ADD, SET_LOCAL s
-        if (i + 6 < oldCount &&
+        if (i + 6 < old_count &&
             chunk->code[i] == OP_GET_LOCAL &&
             chunk->code[i + 2] == OP_CONSTANT &&
             chunk->code[i + 4] == OP_ADD &&
             chunk->code[i + 5] == OP_SET_LOCAL) {
-            uint8_t slotGet = chunk->code[i + 1];
+            uint8_t slot_get = chunk->code[i + 1];
             uint8_t constant = chunk->code[i + 3];
-            uint8_t slotSet = chunk->code[i + 6];
-            if (slotGet == slotSet) {
+            uint8_t slot_set = chunk->code[i + 6];
+            if (slot_get == slot_set) {
                 double num;
-                if (isNumberConstant(chunk, constant, &num)) {
-                    if (!isJumpTarget[i + 2] && !isJumpTarget[i + 4] && !isJumpTarget[i + 5]) {
+                if (is_number_constant(chunk, constant, &num)) {
+                    if (!is_jump_target[i + 2] && !is_jump_target[i + 4] && !is_jump_target[i + 5]) {
                         int line = chunk->lines[i];
-                        emitByte(&newCode, &newCount, &newCapacity, line, &newLines, OP_INC_LOCAL);
-                        emitByte(&newCode, &newCount, &newCapacity, line, &newLines, slotGet);
-                        emitByte(&newCode, &newCount, &newCapacity, line, &newLines, constant);
+                        emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, OP_INC_LOCAL);
+                        emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, slot_get);
+                        emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, constant);
                         i += 7;
                         continue;
                     }
@@ -286,29 +286,29 @@ void optimizeChunk(Chunk* chunk) {
         }
 
         // Local op with const: GET_LOCAL s, CONST c, OP, SET_LOCAL s
-        if (i + 6 < oldCount &&
+        if (i + 6 < old_count &&
             chunk->code[i] == OP_GET_LOCAL &&
             chunk->code[i + 2] == OP_CONSTANT &&
             chunk->code[i + 5] == OP_SET_LOCAL) {
             uint8_t op = chunk->code[i + 4];
             if (op == OP_SUBTRACT || op == OP_MULTIPLY || op == OP_DIVIDE || op == OP_MODULO) {
-                uint8_t slotGet = chunk->code[i + 1];
+                uint8_t slot_get = chunk->code[i + 1];
                 uint8_t constant = chunk->code[i + 3];
-                uint8_t slotSet = chunk->code[i + 6];
-                if (slotGet == slotSet &&
-                    !isJumpTarget[i + 2] && !isJumpTarget[i + 4] && !isJumpTarget[i + 5]) {
+                uint8_t slot_set = chunk->code[i + 6];
+                if (slot_get == slot_set &&
+                    !is_jump_target[i + 2] && !is_jump_target[i + 4] && !is_jump_target[i + 5]) {
                     int line = chunk->lines[i];
-                    uint8_t newOp = op;
+                    uint8_t new_op = op;
                     switch (op) {
-                        case OP_SUBTRACT: newOp = OP_SUB_LOCAL_CONST; break;
-                        case OP_MULTIPLY: newOp = OP_MUL_LOCAL_CONST; break;
-                        case OP_DIVIDE: newOp = OP_DIV_LOCAL_CONST; break;
-                        case OP_MODULO: newOp = OP_MOD_LOCAL_CONST; break;
+                        case OP_SUBTRACT: new_op = OP_SUB_LOCAL_CONST; break;
+                        case OP_MULTIPLY: new_op = OP_MUL_LOCAL_CONST; break;
+                        case OP_DIVIDE: new_op = OP_DIV_LOCAL_CONST; break;
+                        case OP_MODULO: new_op = OP_MOD_LOCAL_CONST; break;
                         default: break;
                     }
-                    emitByte(&newCode, &newCount, &newCapacity, line, &newLines, newOp);
-                    emitByte(&newCode, &newCount, &newCapacity, line, &newLines, slotGet);
-                    emitByte(&newCode, &newCount, &newCapacity, line, &newLines, constant);
+                    emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, new_op);
+                    emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, slot_get);
+                    emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, constant);
                     i += 7;
                     continue;
                 }
@@ -319,12 +319,12 @@ void optimizeChunk(Chunk* chunk) {
         if (i + 4 < chunk->count &&
             chunk->code[i] == OP_CONSTANT &&
             chunk->code[i + 2] == OP_CONSTANT) {
-            int newConst = -1;
-            if (foldBinaryNumbers(chunk, i, &newConst) &&
-                !isJumpTarget[i + 2] && !isJumpTarget[i + 4]) {
+            int new_const = -1;
+            if (fold_binary_numbers(chunk, i, &new_const) &&
+                !is_jump_target[i + 2] && !is_jump_target[i + 4]) {
                 int line = chunk->lines[i];
-                emitBytes(&newCode, &newCount, &newCapacity, line, &newLines,
-                          OP_CONSTANT, (uint8_t)newConst);
+                emit_bytes(&new_code, &new_count, &new_capacity, line, &new_lines,
+                          OP_CONSTANT, (uint8_t)new_const);
                 i += 5;
                 continue;
             }
@@ -333,11 +333,11 @@ void optimizeChunk(Chunk* chunk) {
         // Fold constant unary negate: CONST a, NEGATE
         if (i + 2 < chunk->count &&
             chunk->code[i] == OP_CONSTANT) {
-            int newConst = -1;
-            if (foldUnaryNumber(chunk, i, &newConst) && !isJumpTarget[i + 2]) {
+            int new_const = -1;
+            if (fold_unary_number(chunk, i, &new_const) && !is_jump_target[i + 2]) {
                 int line = chunk->lines[i];
-                emitBytes(&newCode, &newCount, &newCapacity, line, &newLines,
-                          OP_CONSTANT, (uint8_t)newConst);
+                emit_bytes(&new_code, &new_count, &new_capacity, line, &new_lines,
+                          OP_CONSTANT, (uint8_t)new_const);
                 i += 3;
                 continue;
             }
@@ -349,116 +349,116 @@ void optimizeChunk(Chunk* chunk) {
             uint8_t op = chunk->code[i + 2];
             if ((op == OP_ADD || op == OP_SUBTRACT || op == OP_MULTIPLY ||
                  op == OP_DIVIDE || op == OP_MODULO) &&
-                !isJumpTarget[i] && !isJumpTarget[i + 2]) {
+                !is_jump_target[i] && !is_jump_target[i + 2]) {
                 uint8_t constant = chunk->code[i + 1];
                 int line = chunk->lines[i];
-                uint8_t newOp = op;
+                uint8_t new_op = op;
                 switch (op) {
-                    case OP_ADD: newOp = OP_ADD_CONST; break;
-                    case OP_SUBTRACT: newOp = OP_SUB_CONST; break;
-                    case OP_MULTIPLY: newOp = OP_MUL_CONST; break;
-                    case OP_DIVIDE: newOp = OP_DIV_CONST; break;
-                    case OP_MODULO: newOp = OP_MOD_CONST; break;
+                    case OP_ADD: new_op = OP_ADD_CONST; break;
+                    case OP_SUBTRACT: new_op = OP_SUB_CONST; break;
+                    case OP_MULTIPLY: new_op = OP_MUL_CONST; break;
+                    case OP_DIVIDE: new_op = OP_DIV_CONST; break;
+                    case OP_MODULO: new_op = OP_MOD_CONST; break;
                     default: break;
                 }
-                emitBytes(&newCode, &newCount, &newCapacity, line, &newLines, newOp, constant);
+                emit_bytes(&new_code, &new_count, &new_capacity, line, &new_lines, new_op, constant);
                 i += 3;
                 continue;
             }
         }
 
         // Fuse OP_* + OP_SET_LOCAL -> OP_*_SET_LOCAL
-        if (i + 2 < oldCount &&
+        if (i + 2 < old_count &&
             (chunk->code[i] == OP_ADD || chunk->code[i] == OP_SUBTRACT ||
              chunk->code[i] == OP_MULTIPLY || chunk->code[i] == OP_DIVIDE ||
              chunk->code[i] == OP_MODULO) &&
             chunk->code[i + 1] == OP_SET_LOCAL &&
-            !isJumpTarget[i] && !isJumpTarget[i + 1]) {
+            !is_jump_target[i] && !is_jump_target[i + 1]) {
             int line = chunk->lines[i];
             uint8_t slot = chunk->code[i + 2];
-            uint8_t newOp = chunk->code[i];
+            uint8_t new_op = chunk->code[i];
             switch (chunk->code[i]) {
-                case OP_ADD: newOp = OP_ADD_SET_LOCAL; break;
-                case OP_SUBTRACT: newOp = OP_SUB_SET_LOCAL; break;
-                case OP_MULTIPLY: newOp = OP_MUL_SET_LOCAL; break;
-                case OP_DIVIDE: newOp = OP_DIV_SET_LOCAL; break;
-                case OP_MODULO: newOp = OP_MOD_SET_LOCAL; break;
+                case OP_ADD: new_op = OP_ADD_SET_LOCAL; break;
+                case OP_SUBTRACT: new_op = OP_SUB_SET_LOCAL; break;
+                case OP_MULTIPLY: new_op = OP_MUL_SET_LOCAL; break;
+                case OP_DIVIDE: new_op = OP_DIV_SET_LOCAL; break;
+                case OP_MODULO: new_op = OP_MOD_SET_LOCAL; break;
                 default: break;
             }
-            emitByte(&newCode, &newCount, &newCapacity, line, &newLines, newOp);
-            emitByte(&newCode, &newCount, &newCapacity, line, &newLines, slot);
+            emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, new_op);
+            emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, slot);
             i += 3;
             continue;
         }
 
-        int len = instrLength(chunk, i);
+        int len = instr_length(chunk, i);
         int line = chunk->lines[i];
         if (chunk->code[i] == OP_JUMP || chunk->code[i] == OP_JUMP_IF_FALSE ||
             chunk->code[i] == OP_JUMP_IF_TRUE || chunk->code[i] == OP_LOOP) {
-            if (patchCount + 1 > patchCapacity) {
-                patchCapacity = patchCapacity < 8 ? 8 : patchCapacity * 2;
-                patches = (JumpPatch*)realloc(patches, sizeof(JumpPatch) * patchCapacity);
+            if (patch_count + 1 > patch_capacity) {
+                patch_capacity = patch_capacity < 8 ? 8 : patch_capacity * 2;
+                patches = (JumpPatch*)realloc(patches, sizeof(JumpPatch) * patch_capacity);
             }
             int sign = (chunk->code[i] == OP_LOOP) ? -1 : 1;
             uint16_t jump = (uint16_t)(chunk->code[i + 1] << 8);
             jump |= chunk->code[i + 2];
-            patches[patchCount++] = (JumpPatch){i, newCount, sign, jump, 1};
+            patches[patch_count++] = (JumpPatch){i, new_count, sign, jump, 1};
         } else if (chunk->code[i] == OP_TRY) {
-            if (patchCount + 2 > patchCapacity) {
-                patchCapacity = patchCapacity < 8 ? 8 : patchCapacity * 2;
-                patches = (JumpPatch*)realloc(patches, sizeof(JumpPatch) * patchCapacity);
+            if (patch_count + 2 > patch_capacity) {
+                patch_capacity = patch_capacity < 8 ? 8 : patch_capacity * 2;
+                patches = (JumpPatch*)realloc(patches, sizeof(JumpPatch) * patch_capacity);
             }
-            uint16_t exJump = (uint16_t)(chunk->code[i + 3] << 8);
-            exJump |= chunk->code[i + 4];
-            uint16_t finJump = (uint16_t)(chunk->code[i + 5] << 8);
-            finJump |= chunk->code[i + 6];
-            patches[patchCount++] = (JumpPatch){i, newCount, 1, exJump, 3};
-            patches[patchCount++] = (JumpPatch){i, newCount, 1, finJump, 5};
+            uint16_t ex_jump = (uint16_t)(chunk->code[i + 3] << 8);
+            ex_jump |= chunk->code[i + 4];
+            uint16_t fin_jump = (uint16_t)(chunk->code[i + 5] << 8);
+            fin_jump |= chunk->code[i + 6];
+            patches[patch_count++] = (JumpPatch){i, new_count, 1, ex_jump, 3};
+            patches[patch_count++] = (JumpPatch){i, new_count, 1, fin_jump, 5};
         } else if (chunk->code[i] == OP_FOR_PREP || chunk->code[i] == OP_FOR_LOOP) {
-            if (patchCount + 1 > patchCapacity) {
-                patchCapacity = patchCapacity < 8 ? 8 : patchCapacity * 2;
-                patches = (JumpPatch*)realloc(patches, sizeof(JumpPatch) * patchCapacity);
+            if (patch_count + 1 > patch_capacity) {
+                patch_capacity = patch_capacity < 8 ? 8 : patch_capacity * 2;
+                patches = (JumpPatch*)realloc(patches, sizeof(JumpPatch) * patch_capacity);
             }
             int sign = (chunk->code[i] == OP_FOR_LOOP) ? -1 : 1;
             uint16_t jump = (uint16_t)(chunk->code[i + 3] << 8);
             jump |= chunk->code[i + 4];
-            patches[patchCount++] = (JumpPatch){i, newCount, sign, jump, 3};
+            patches[patch_count++] = (JumpPatch){i, new_count, sign, jump, 3};
         }
         for (int j = 0; j < len; j++) {
-            emitByte(&newCode, &newCount, &newCapacity, line, &newLines, chunk->code[i + j]);
+            emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, chunk->code[i + j]);
         }
         i += len;
     }
 
-    for (int i = 0; i < patchCount; i++) {
+    for (int i = 0; i < patch_count; i++) {
         JumpPatch p = patches[i];
-        int instrLen = instrLength(chunk, p.oldOffset);
-        int oldTarget = p.oldOffset + instrLen + p.sign * (int)p.oldJump;
-        if (oldTarget < 0 || oldTarget >= oldCount) continue;
-        int newTarget = oldToNew[oldTarget];
-        if (newTarget < 0) continue;
-        int newInstrLen = instrLength(chunk, p.oldOffset);
-        int newJump = p.sign * (newTarget - (p.newOffset + newInstrLen));
-        if (chunk->code[p.oldOffset] == OP_TRY) {
-            newCode[p.newOffset + p.writeOffset] = (uint8_t)((newJump >> 8) & 0xff);
-            newCode[p.newOffset + p.writeOffset + 1] = (uint8_t)(newJump & 0xff);
-        } else if (chunk->code[p.oldOffset] == OP_FOR_PREP || chunk->code[p.oldOffset] == OP_FOR_LOOP) {
-            newCode[p.newOffset + 3] = (uint8_t)((newJump >> 8) & 0xff);
-            newCode[p.newOffset + 4] = (uint8_t)(newJump & 0xff);
+        int instr_len = instr_length(chunk, p.old_offset);
+        int old_target = p.old_offset + instr_len + p.sign * (int)p.old_jump;
+        if (old_target < 0 || old_target >= old_count) continue;
+        int new_target = old_to_new[old_target];
+        if (new_target < 0) continue;
+        int new_instr_len = instr_length(chunk, p.old_offset);
+        int new_jump = p.sign * (new_target - (p.new_offset + new_instr_len));
+        if (chunk->code[p.old_offset] == OP_TRY) {
+            new_code[p.new_offset + p.write_offset] = (uint8_t)((new_jump >> 8) & 0xff);
+            new_code[p.new_offset + p.write_offset + 1] = (uint8_t)(new_jump & 0xff);
+        } else if (chunk->code[p.old_offset] == OP_FOR_PREP || chunk->code[p.old_offset] == OP_FOR_LOOP) {
+            new_code[p.new_offset + 3] = (uint8_t)((new_jump >> 8) & 0xff);
+            new_code[p.new_offset + 4] = (uint8_t)(new_jump & 0xff);
         } else {
-            newCode[p.newOffset + 1] = (uint8_t)((newJump >> 8) & 0xff);
-            newCode[p.newOffset + 2] = (uint8_t)(newJump & 0xff);
+            new_code[p.new_offset + 1] = (uint8_t)((new_jump >> 8) & 0xff);
+            new_code[p.new_offset + 2] = (uint8_t)(new_jump & 0xff);
         }
     }
 
-    free(oldToNew);
-    free(isJumpTarget);
+    free(old_to_new);
+    free(is_jump_target);
     free(patches);
 
     free(chunk->code);
     free(chunk->lines);
-    chunk->code = newCode;
-    chunk->lines = newLines;
-    chunk->count = newCount;
-    chunk->capacity = newCapacity;
+    chunk->code = new_code;
+    chunk->lines = new_lines;
+    chunk->count = new_count;
+    chunk->capacity = new_capacity;
 }

@@ -9,7 +9,7 @@
 #include "../vm.h"
 
 // HTTP status codes and reasons
-static const char* getStatusReason(int status) {
+static const char* get_status_reason(int status) {
     switch (status) {
         case 200: return "OK";
         case 201: return "Created";
@@ -30,7 +30,7 @@ static const char* getStatusReason(int status) {
 }
 
 // Parse HTTP request: http.parse(data) -> {method, path, version, headers, body}
-static int http_parse(VM* vm, int argCount, Value* args) {
+static int http_parse(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -39,8 +39,8 @@ static int http_parse(VM* vm, int argCount, Value* args) {
     int len = data->length;
 
     // Find end of request line
-    const char* lineEnd = strstr(src, "\r\n");
-    if (!lineEnd) {
+    const char* line_end = strstr(src, "\r\n");
+    if (!line_end) {
         RETURN_NIL;
     }
 
@@ -48,132 +48,132 @@ static int http_parse(VM* vm, int argCount, Value* args) {
     const char* p = src;
 
     // Method
-    const char* methodStart = p;
-    while (p < lineEnd && *p != ' ') p++;
-    if (p >= lineEnd) { RETURN_NIL; }
-    int methodLen = p - methodStart;
+    const char* method_start = p;
+    while (p < line_end && *p != ' ') p++;
+    if (p >= line_end) { RETURN_NIL; }
+    int method_len = p - method_start;
     p++; // skip space
 
     // Path
-    const char* pathStart = p;
-    while (p < lineEnd && *p != ' ' && *p != '?') p++;
-    int pathLen = p - pathStart;
+    const char* path_start = p;
+    while (p < line_end && *p != ' ' && *p != '?') p++;
+    int path_len = p - path_start;
 
     // Skip query string if present
-    const char* queryStart = NULL;
-    int queryLen = 0;
+    const char* query_start = NULL;
+    int query_len = 0;
     if (*p == '?') {
         p++; // skip '?'
-        queryStart = p;
-        while (p < lineEnd && *p != ' ') p++;
-        queryLen = p - queryStart;
+        query_start = p;
+        while (p < line_end && *p != ' ') p++;
+        query_len = p - query_start;
     }
 
-    if (p >= lineEnd) { RETURN_NIL; }
+    if (p >= line_end) { RETURN_NIL; }
     p++; // skip space
 
     // Version
-    const char* versionStart = p;
-    int versionLen = lineEnd - p;
+    const char* version_start = p;
+    int version_len = line_end - p;
 
     // Create result table
-    ObjTable* result = newTable();
+    ObjTable* result = new_table();
     push(vm, OBJ_VAL(result));
 
     // Set method
-    ObjString* methodKey = copyString("method", 6);
-    push(vm, OBJ_VAL(methodKey));
-    ObjString* methodVal = copyString(methodStart, methodLen);
-    push(vm, OBJ_VAL(methodVal));
-    tableSet(&result->table, methodKey, OBJ_VAL(methodVal));
+    ObjString* method_key = copy_string("method", 6);
+    push(vm, OBJ_VAL(method_key));
+    ObjString* method_val = copy_string(method_start, method_len);
+    push(vm, OBJ_VAL(method_val));
+    table_set(&result->table, method_key, OBJ_VAL(method_val));
     pop(vm); pop(vm);
 
     // Set path
-    ObjString* pathKey = copyString("path", 4);
-    push(vm, OBJ_VAL(pathKey));
-    ObjString* pathVal = copyString(pathStart, pathLen);
-    push(vm, OBJ_VAL(pathVal));
-    tableSet(&result->table, pathKey, OBJ_VAL(pathVal));
+    ObjString* path_key = copy_string("path", 4);
+    push(vm, OBJ_VAL(path_key));
+    ObjString* path_val = copy_string(path_start, path_len);
+    push(vm, OBJ_VAL(path_val));
+    table_set(&result->table, path_key, OBJ_VAL(path_val));
     pop(vm); pop(vm);
 
     // Set query (if present)
-    if (queryStart) {
-        ObjString* queryKey = copyString("query", 5);
-        push(vm, OBJ_VAL(queryKey));
-        ObjString* queryVal = copyString(queryStart, queryLen);
-        push(vm, OBJ_VAL(queryVal));
-        tableSet(&result->table, queryKey, OBJ_VAL(queryVal));
+    if (query_start) {
+        ObjString* query_key = copy_string("query", 5);
+        push(vm, OBJ_VAL(query_key));
+        ObjString* query_val = copy_string(query_start, query_len);
+        push(vm, OBJ_VAL(query_val));
+        table_set(&result->table, query_key, OBJ_VAL(query_val));
         pop(vm); pop(vm);
     }
 
     // Set version
-    ObjString* versionKey = copyString("version", 7);
-    push(vm, OBJ_VAL(versionKey));
-    ObjString* versionVal = copyString(versionStart, versionLen);
-    push(vm, OBJ_VAL(versionVal));
-    tableSet(&result->table, versionKey, OBJ_VAL(versionVal));
+    ObjString* version_key = copy_string("version", 7);
+    push(vm, OBJ_VAL(version_key));
+    ObjString* version_val = copy_string(version_start, version_len);
+    push(vm, OBJ_VAL(version_val));
+    table_set(&result->table, version_key, OBJ_VAL(version_val));
     pop(vm); pop(vm);
 
     // Parse headers
-    ObjTable* headers = newTable();
+    ObjTable* headers = new_table();
     push(vm, OBJ_VAL(headers));
 
-    p = lineEnd + 2; // Skip \r\n
+    p = line_end + 2; // Skip \r\n
     while (p < src + len) {
-        lineEnd = strstr(p, "\r\n");
-        if (!lineEnd) break;
+        line_end = strstr(p, "\r\n");
+        if (!line_end) break;
 
         // Empty line = end of headers
-        if (lineEnd == p) {
+        if (line_end == p) {
             p += 2;
             break;
         }
 
         // Find colon
         const char* colon = strchr(p, ':');
-        if (!colon || colon > lineEnd) {
-            p = lineEnd + 2;
+        if (!colon || colon > line_end) {
+            p = line_end + 2;
             continue;
         }
 
         // Header name (lowercase for consistency)
-        int nameLen = colon - p;
-        char* nameBuf = malloc(nameLen + 1);
-        for (int i = 0; i < nameLen; i++) {
-            nameBuf[i] = tolower((unsigned char)p[i]);
+        int name_len = colon - p;
+        char* name_buf = malloc(name_len + 1);
+        for (int i = 0; i < name_len; i++) {
+            name_buf[i] = tolower((unsigned char)p[i]);
         }
-        nameBuf[nameLen] = '\0';
+        name_buf[name_len] = '\0';
 
         // Header value (skip leading whitespace)
-        const char* valStart = colon + 1;
-        while (valStart < lineEnd && isspace((unsigned char)*valStart)) valStart++;
-        int valLen = lineEnd - valStart;
+        const char* val_start = colon + 1;
+        while (val_start < line_end && isspace((unsigned char)*val_start)) val_start++;
+        int val_len = line_end - val_start;
 
-        ObjString* hdrKey = copyString(nameBuf, nameLen);
-        push(vm, OBJ_VAL(hdrKey));
-        ObjString* hdrVal = copyString(valStart, valLen);
-        push(vm, OBJ_VAL(hdrVal));
-        tableSet(&headers->table, hdrKey, OBJ_VAL(hdrVal));
+        ObjString* hdr_key = copy_string(name_buf, name_len);
+        push(vm, OBJ_VAL(hdr_key));
+        ObjString* hdr_val = copy_string(val_start, val_len);
+        push(vm, OBJ_VAL(hdr_val));
+        table_set(&headers->table, hdr_key, OBJ_VAL(hdr_val));
         pop(vm); pop(vm);
 
-        free(nameBuf);
-        p = lineEnd + 2;
+        free(name_buf);
+        p = line_end + 2;
     }
 
-    ObjString* headersKey = copyString("headers", 7);
-    push(vm, OBJ_VAL(headersKey));
-    tableSet(&result->table, headersKey, OBJ_VAL(headers));
+    ObjString* headers_key = copy_string("headers", 7);
+    push(vm, OBJ_VAL(headers_key));
+    table_set(&result->table, headers_key, OBJ_VAL(headers));
     pop(vm);
     pop(vm); // headers table
 
     // Body is everything after headers
-    int bodyLen = (src + len) - p;
-    if (bodyLen > 0) {
-        ObjString* bodyKey = copyString("body", 4);
-        push(vm, OBJ_VAL(bodyKey));
-        ObjString* bodyVal = copyString(p, bodyLen);
-        push(vm, OBJ_VAL(bodyVal));
-        tableSet(&result->table, bodyKey, OBJ_VAL(bodyVal));
+    int body_len = (src + len) - p;
+    if (body_len > 0) {
+        ObjString* body_key = copy_string("body", 4);
+        push(vm, OBJ_VAL(body_key));
+        ObjString* body_val = copy_string(p, body_len);
+        push(vm, OBJ_VAL(body_val));
+        table_set(&result->table, body_key, OBJ_VAL(body_val));
         pop(vm); pop(vm);
     }
 
@@ -182,40 +182,40 @@ static int http_parse(VM* vm, int argCount, Value* args) {
 }
 
 // Format HTTP response: http.response(status, headers, body) -> string
-static int http_response(VM* vm, int argCount, Value* args) {
-    if (argCount < 1) {
+static int http_response(VM* vm, int arg_count, Value* args) {
+    if (arg_count < 1) {
         RETURN_NIL;
     }
     ASSERT_NUMBER(0);
 
     int status = (int)GET_NUMBER(0);
-    const char* reason = getStatusReason(status);
+    const char* reason = get_status_reason(status);
 
     // Build response
-    char statusLine[64];
-    snprintf(statusLine, sizeof(statusLine), "HTTP/1.1 %d %s\r\n", status, reason);
+    char status_line[64];
+    snprintf(status_line, sizeof(status_line), "HTTP/1.1 %d %s\r\n", status, reason);
 
     // Calculate total size
-    size_t totalLen = strlen(statusLine);
+    size_t total_len = strlen(status_line);
 
     // Headers
     ObjTable* headers = NULL;
-    if (argCount >= 2 && IS_TABLE(args[1])) {
+    if (arg_count >= 2 && IS_TABLE(args[1])) {
         headers = GET_TABLE(1);
     }
 
     // Body
     const char* body = "";
-    int bodyLen = 0;
-    if (argCount >= 3 && IS_STRING(args[2])) {
+    int body_len = 0;
+    if (arg_count >= 3 && IS_STRING(args[2])) {
         body = AS_CSTRING(args[2]);
-        bodyLen = AS_STRING(args[2])->length;
+        body_len = AS_STRING(args[2])->length;
     }
 
     // Build headers string
-    char* headersBuf = malloc(4096);
-    headersBuf[0] = '\0';
-    int headersLen = 0;
+    char* headers_buf = malloc(4096);
+    headers_buf[0] = '\0';
+    int headers_len = 0;
 
     if (headers) {
         for (int i = 0; i < headers->table.capacity; i++) {
@@ -224,7 +224,7 @@ static int http_response(VM* vm, int argCount, Value* args) {
                 const char* key = entry->key->chars;
                 if (IS_STRING(entry->value)) {
                     const char* val = AS_CSTRING(entry->value);
-                    headersLen += snprintf(headersBuf + headersLen, 4096 - headersLen,
+                    headers_len += snprintf(headers_buf + headers_len, 4096 - headers_len,
                         "%s: %s\r\n", key, val);
                 }
             }
@@ -232,45 +232,45 @@ static int http_response(VM* vm, int argCount, Value* args) {
     }
 
     // Add Content-Length if body present
-    char contentLength[64] = "";
-    if (bodyLen > 0) {
-        snprintf(contentLength, sizeof(contentLength), "Content-Length: %d\r\n", bodyLen);
+    char content_length[64] = "";
+    if (body_len > 0) {
+        snprintf(content_length, sizeof(content_length), "Content-Length: %d\r\n", body_len);
     }
 
-    totalLen += headersLen + strlen(contentLength) + 2 + bodyLen; // +2 for final \r\n
+    total_len += headers_len + strlen(content_length) + 2 + body_len; // +2 for final \r\n
 
-    char* response = malloc(totalLen + 1);
+    char* response = malloc(total_len + 1);
     char* p = response;
 
-    memcpy(p, statusLine, strlen(statusLine));
-    p += strlen(statusLine);
+    memcpy(p, status_line, strlen(status_line));
+    p += strlen(status_line);
 
-    memcpy(p, headersBuf, headersLen);
-    p += headersLen;
+    memcpy(p, headers_buf, headers_len);
+    p += headers_len;
 
-    memcpy(p, contentLength, strlen(contentLength));
-    p += strlen(contentLength);
+    memcpy(p, content_length, strlen(content_length));
+    p += strlen(content_length);
 
     memcpy(p, "\r\n", 2);
     p += 2;
 
-    if (bodyLen > 0) {
-        memcpy(p, body, bodyLen);
-        p += bodyLen;
+    if (body_len > 0) {
+        memcpy(p, body, body_len);
+        p += body_len;
     }
 
     *p = '\0';
 
-    ObjString* result = copyString(response, p - response);
+    ObjString* result = copy_string(response, p - response);
 
-    free(headersBuf);
+    free(headers_buf);
     free(response);
 
     RETURN_OBJ(result);
 }
 
 // URL decode: http.urldecode(str) -> str
-static int http_urldecode(VM* vm, int argCount, Value* args) {
+static int http_urldecode(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
@@ -292,18 +292,18 @@ static int http_urldecode(VM* vm, int argCount, Value* args) {
     }
     *out = '\0';
 
-    ObjString* result = copyString(output, out - output);
+    ObjString* result = copy_string(output, out - output);
     free(output);
     RETURN_OBJ(result);
 }
 
 // Parse query string: http.parsequery(str) -> table
-static int http_parsequery(VM* vm, int argCount, Value* args) {
+static int http_parsequery(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
 
     ObjString* input = GET_STRING(0);
-    ObjTable* result = newTable();
+    ObjTable* result = new_table();
     push(vm, OBJ_VAL(result));
 
     const char* p = input->chars;
@@ -311,28 +311,28 @@ static int http_parsequery(VM* vm, int argCount, Value* args) {
 
     while (p < end) {
         // Find key
-        const char* keyStart = p;
+        const char* key_start = p;
         while (p < end && *p != '=' && *p != '&') p++;
-        int keyLen = p - keyStart;
+        int key_len = p - key_start;
 
-        const char* valStart = p;
-        int valLen = 0;
+        const char* val_start = p;
+        int val_len = 0;
 
         if (p < end && *p == '=') {
             p++; // skip '='
-            valStart = p;
+            val_start = p;
             while (p < end && *p != '&') p++;
-            valLen = p - valStart;
+            val_len = p - val_start;
         }
 
         if (p < end && *p == '&') p++;
 
-        if (keyLen > 0) {
-            ObjString* key = copyString(keyStart, keyLen);
+        if (key_len > 0) {
+            ObjString* key = copy_string(key_start, key_len);
             push(vm, OBJ_VAL(key));
-            ObjString* val = copyString(valStart, valLen);
+            ObjString* val = copy_string(val_start, val_len);
             push(vm, OBJ_VAL(val));
-            tableSet(&result->table, key, OBJ_VAL(val));
+            table_set(&result->table, key, OBJ_VAL(val));
             pop(vm); pop(vm);
         }
     }
@@ -340,8 +340,8 @@ static int http_parsequery(VM* vm, int argCount, Value* args) {
     return 1;
 }
 
-void registerHTTP(VM* vm) {
-    const NativeReg httpFuncs[] = {
+void register_http(VM* vm) {
+    const NativeReg http_funcs[] = {
         {"parse", http_parse},
         {"response", http_response},
         {"urldecode", http_urldecode},
@@ -349,6 +349,6 @@ void registerHTTP(VM* vm) {
         {NULL, NULL}
     };
 
-    registerModule(vm, "http", httpFuncs);
+    register_module(vm, "http", http_funcs);
     pop(vm);
 }

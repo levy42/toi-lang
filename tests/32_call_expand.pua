@@ -1,10 +1,4 @@
-fn assert_true(cond, msg = nil)
-  if not cond
-    error("assert_true failed")
-
-fn assert_eq(actual, expected, msg = nil)
-  if actual != expected
-    error("assert_eq failed")
+from lib.test import assert_eq, assert_true
 
 fn add3(a, b, c)
   return a + b + c

@@ -49,8 +49,8 @@ static inline void id_init(void) {
 
 static inline void enc_base52_fixed(uint64_t v, char *out, int n) {
     for (int i = n - 1; i >= 0; --i) {
-        out[i] = ALPH[v % 52];
-        v /= 52;
+        out[i] = ALPH[v % 62];
+        v /= 62;
     }
 }
 
@@ -100,65 +100,65 @@ void id16(char out[17]) {
     out[16] = '\0';
 }
 
-static int uid(VM* vm, int argCount, Value* args)
+static int uid(VM* vm, int arg_count, Value* args)
 {
     (void)args;
     ASSERT_ARGC_EQ(0);
     char buf[17];
     id16(buf);
-    RETURN_OBJ(copyString(buf, 16));
+    RETURN_OBJ(copy_string(buf, 16));
 }
 
-static int secret(VM* vm, int argCount, Value* args)
+static int secret(VM* vm, int arg_count, Value* args)
 {
-    int outLen = 64;
-    if (argCount > 1) {
-        vmRuntimeError(vm, "uuid.secret([length]) expects 0 or 1 argument.");
+    int out_len = 64;
+    if (arg_count > 1) {
+        vm_runtime_error(vm, "uuid.secret([length]) expects 0 or 1 argument.");
         return 0;
     }
-    if (argCount == 1) {
+    if (arg_count == 1) {
         ASSERT_NUMBER(0);
         double d = GET_NUMBER(0);
         int n = (int)d;
         if ((double)n != d || n <= 0 || n > 4096) {
-            vmRuntimeError(vm, "uuid.secret(length) expects an integer in range 1..4096.");
+            vm_runtime_error(vm, "uuid.secret(length) expects an integer in range 1..4096.");
             return 0;
         }
-        outLen = n;
+        out_len = n;
     }
 
-    char* out = (char*)malloc((size_t)outLen + 1);
+    char* out = (char*)malloc((size_t)out_len + 1);
     if (out == NULL) {
-        vmRuntimeError(vm, "Out of memory in uuid.secret().");
+        vm_runtime_error(vm, "Out of memory in uuid.secret().");
         return 0;
     }
 
-    const int alphaLen = (int)(sizeof(ALPH) - 1);
-    const uint8_t rejectAbove = (uint8_t)(256 - (256 % alphaLen));
+    const int alpha_len = (int)(sizeof(ALPH) - 1);
+    const uint8_t reject_above = (uint8_t)(256 - (256 % alpha_len));
     int w = 0;
     uint8_t buf[64];
-    while (w < outLen) {
+    while (w < out_len) {
         if (!fill_secure_random(buf, sizeof(buf))) {
             free(out);
-            vmRuntimeError(vm, "Failed to read secure random bytes.");
+            vm_runtime_error(vm, "Failed to read secure random bytes.");
             return 0;
         }
-        for (size_t i = 0; i < sizeof(buf) && w < outLen; ++i) {
-            if (buf[i] >= rejectAbove) continue;
-            out[w++] = ALPH[buf[i] % alphaLen];
+        for (size_t i = 0; i < sizeof(buf) && w < out_len; ++i) {
+            if (buf[i] >= reject_above) continue;
+            out[w++] = ALPH[buf[i] % alpha_len];
         }
     }
-    out[outLen] = '\0';
-    RETURN_OBJ(takeString(out, outLen));
+    out[out_len] = '\0';
+    RETURN_OBJ(take_string(out, out_len));
 }
 
-void registerUuid(VM* vm) {
-    const NativeReg uuidFuncs[] = {
+void register_uuid(VM* vm) {
+    const NativeReg uuid_funcs[] = {
         {"uid", uid},
         {"secret", secret},
         {NULL, NULL}
     };
 
-    registerModule(vm, "uuid", uuidFuncs);
-    pop(vm); // Pop timeModule
+    register_module(vm, "uuid", uuid_funcs);
+    pop(vm); // Pop uuid module
 }

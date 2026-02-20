@@ -3,11 +3,11 @@
 
 #include "../vm.h"
 
-int vmHandleOpAddConst(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
-int vmHandleOpAdd(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpSubtract(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpMultiply(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpDivide(VM* vm, CallFrame** frame, uint8_t** ip);
-int vmHandleOpModulo(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_add_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
+int vm_handle_op_add(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_subtract(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_multiply(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_divide(VM* vm, CallFrame** frame, uint8_t** ip);
+int vm_handle_op_modulo(VM* vm, CallFrame** frame, uint8_t** ip);
 
 #endif

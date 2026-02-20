@@ -11,8 +11,8 @@
 
 // Global Interpreter Lock
 static pthread_mutex_t gil = PTHREAD_MUTEX_INITIALIZER;
-static int gilInitialized = 0;
-static int gilDisabled = 0;  // Set via MYLANG_NO_GIL env var
+static int gil_initialized = 0;
+static int gil_disabled = 0;  // Set via MYLANG_NO_GIL env var
 
 // Thread data structure
 typedef struct {
@@ -20,12 +20,12 @@ typedef struct {
     VM* vm;
     ObjClosure* closure;
     Value* args;
-    int argCount;
+    int arg_count;
     Value result;
-    int resultCount;
+    int result_count;
     int done;
     int error;
-    char errorMsg[256];
+    char error_msg[256];
 } ThreadData;
 
 // Mutex userdata
@@ -42,8 +42,8 @@ typedef struct ChannelNode {
 
 typedef struct {
     pthread_mutex_t mutex;
-    pthread_cond_t notEmpty;
-    pthread_cond_t notFull;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
     ChannelNode* head;
     ChannelNode* tail;
     int count;
@@ -51,86 +51,86 @@ typedef struct {
     int closed;
 } ChannelData;
 
-static void acquireGIL(void) {
-    if (!gilDisabled) {
+static void acquire_gil(void) {
+    if (!gil_disabled) {
         pthread_mutex_lock(&gil);
     }
 }
 
-static void releaseGIL(void) {
-    if (!gilDisabled) {
+static void release_gil(void) {
+    if (!gil_disabled) {
         pthread_mutex_unlock(&gil);
     }
 }
 
 // Thread entry point
-static void* threadRunner(void* arg) {
+static void* thread_runner(void* arg) {
     ThreadData* data = (ThreadData*)arg;
 
-    acquireGIL();
+    acquire_gil();
 
     // Save the main thread
-    ObjThread* mainThread = data->vm->currentThread;
+    ObjThread* main_thread = data->vm->current_thread;
 
     // Create a new thread like coroutine.create does
-    ObjThread* workerThread = newThread();
-    workerThread->vm = data->vm;
+    ObjThread* worker_thread = new_thread();
+    worker_thread->vm = data->vm;
 
     // Push closure onto the worker thread's stack
-    workerThread->stack[0] = OBJ_VAL(data->closure);
-    workerThread->stackTop = workerThread->stack + 1;
+    worker_thread->stack[0] = OBJ_VAL(data->closure);
+    worker_thread->stack_top = worker_thread->stack + 1;
 
     // Push arguments
-    for (int i = 0; i < data->argCount; i++) {
-        *workerThread->stackTop = data->args[i];
-        workerThread->stackTop++;
+    for (int i = 0; i < data->arg_count; i++) {
+        *worker_thread->stack_top = data->args[i];
+        worker_thread->stack_top++;
     }
 
     // Set up the call frame
-    CallFrame* frame = &workerThread->frames[0];
+    CallFrame* frame = &worker_thread->frames[0];
     frame->closure = data->closure;
     frame->ip = data->closure->function->chunk.code;
-    frame->slots = workerThread->stack;
-    workerThread->frameCount = 1;
+    frame->slots = worker_thread->stack;
+    worker_thread->frame_count = 1;
 
     // Switch to worker thread and run
-    data->vm->currentThread = workerThread;
+    data->vm->current_thread = worker_thread;
 
-    // Set REPL mode to keep result on stack after vmRun
-    int savedREPL = data->vm->isREPL;
-    data->vm->isREPL = 1;
+    // Set REPL mode to keep result on stack after vm_run
+    int saved_repl = data->vm->is_repl;
+    data->vm->is_repl = 1;
 
-    InterpretResult result = vmRun(data->vm, 0);
+    InterpretResult result = vm_run(data->vm, 0);
 
-    data->vm->isREPL = savedREPL;
+    data->vm->is_repl = saved_repl;
 
     if (result != INTERPRET_OK) {
         data->error = 1;
-        snprintf(data->errorMsg, sizeof(data->errorMsg), "Thread execution error");
+        snprintf(data->error_msg, sizeof(data->error_msg), "Thread execution error");
     } else {
-        // After vmRun completes, the result is on top of the stack
-        ObjThread* t = data->vm->currentThread;
-        if (t->stackTop > t->stack) {
-            data->result = t->stackTop[-1];
-            data->resultCount = 1;
+        // After vm_run completes, the result is on top of the stack
+        ObjThread* t = data->vm->current_thread;
+        if (t->stack_top > t->stack) {
+            data->result = t->stack_top[-1];
+            data->result_count = 1;
         } else {
             data->result = NIL_VAL;
-            data->resultCount = 0;
+            data->result_count = 0;
         }
     }
 
     // Restore main thread
-    data->vm->currentThread = mainThread;
+    data->vm->current_thread = main_thread;
     data->done = 1;
-    releaseGIL();
+    release_gil();
 
     return NULL;
 }
 
 // thread.spawn(fn, ...) - create and start a new thread
-static int thread_spawn(VM* vm, int argCount, Value* args) {
-    if (argCount < 1 || !IS_CLOSURE(args[0])) {
-        vmRuntimeError(vm, "thread.spawn requires a function as first argument");
+static int thread_spawn(VM* vm, int arg_count, Value* args) {
+    if (arg_count < 1 || !IS_CLOSURE(args[0])) {
+        vm_runtime_error(vm, "thread.spawn requires a function as first argument");
         return 0;
     }
 
@@ -141,48 +141,48 @@ static int thread_spawn(VM* vm, int argCount, Value* args) {
 
     data->vm = vm;
     data->closure = AS_CLOSURE(args[0]);
-    data->argCount = argCount - 1;
+    data->arg_count = arg_count - 1;
     data->args = NULL;
     data->result = NIL_VAL;
-    data->resultCount = 0;
+    data->result_count = 0;
     data->done = 0;
     data->error = 0;
-    data->errorMsg[0] = '\0';
+    data->error_msg[0] = '\0';
 
     // Copy arguments
-    if (data->argCount > 0) {
-        data->args = (Value*)malloc(sizeof(Value) * data->argCount);
-        for (int i = 0; i < data->argCount; i++) {
+    if (data->arg_count > 0) {
+        data->args = (Value*)malloc(sizeof(Value) * data->arg_count);
+        for (int i = 0; i < data->arg_count; i++) {
             data->args[i] = args[i + 1];
         }
     }
 
     // Release GIL before creating thread
-    releaseGIL();
+    release_gil();
 
     // Create the thread
-    int err = pthread_create(&data->pthread, NULL, threadRunner, data);
+    int thread_err = pthread_create(&data->pthread, NULL, thread_runner, data);
 
     // Reacquire GIL
-    acquireGIL();
+    acquire_gil();
 
-    if (err != 0) {
+    if (thread_err != 0) {
         free(data->args);
         free(data);
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copyString("Failed to create thread", 23)));
+        push(vm, OBJ_VAL(copy_string("Failed to create thread", 23)));
         return 2;
     }
 
-    ObjUserdata* udata = newUserdata(data);
+    ObjUserdata* udata = new_userdata(data);
 
     // Set metatable
-    Value threadVal;
-    ObjString* threadName = copyString("thread", 6);
-    if (tableGet(&vm->globals, threadName, &threadVal) && IS_TABLE(threadVal)) {
+    Value thread_val;
+    ObjString* thread_name = copy_string("thread", 6);
+    if (table_get(&vm->globals, thread_name, &thread_val) && IS_TABLE(thread_val)) {
         Value mt;
-        ObjString* mtName = copyString("_thread_mt", 10);
-        if (tableGet(&AS_TABLE(threadVal)->table, mtName, &mt) && IS_TABLE(mt)) {
+        ObjString* mt_name = copy_string("_thread_mt", 10);
+        if (table_get(&AS_TABLE(thread_val)->table, mt_name, &mt) && IS_TABLE(mt)) {
             udata->metatable = AS_TABLE(mt);
         }
     }
@@ -191,7 +191,7 @@ static int thread_spawn(VM* vm, int argCount, Value* args) {
 }
 
 // thread.join(t) - wait for thread to complete
-static int thread_join(VM* vm, int argCount, Value* args) {
+static int thread_join(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_USERDATA(0);
 
@@ -203,16 +203,16 @@ static int thread_join(VM* vm, int argCount, Value* args) {
     }
 
     // Release GIL while waiting
-    releaseGIL();
+    release_gil();
 
     pthread_join(data->pthread, NULL);
 
     // Reacquire GIL
-    acquireGIL();
+    acquire_gil();
 
     if (data->error) {
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copyString(data->errorMsg, strlen(data->errorMsg))));
+        push(vm, OBJ_VAL(copy_string(data->error_msg, strlen(data->error_msg))));
 
         // Cleanup
         if (data->args) free(data->args);
@@ -233,47 +233,47 @@ static int thread_join(VM* vm, int argCount, Value* args) {
 }
 
 // thread.yield() - release GIL momentarily to let other threads run
-static int thread_yield_native(VM* vm, int argCount, Value* args) {
-    (void)vm; (void)argCount; (void)args;
+static int thread_yield_native(VM* vm, int arg_count, Value* args) {
+    (void)vm; (void)arg_count; (void)args;
 
-    releaseGIL();
+    release_gil();
     sched_yield(); // Let other threads run
-    acquireGIL();
+    acquire_gil();
 
     RETURN_NIL;
 }
 
 // thread.sleep(seconds) - sleep and release GIL
-static int thread_sleep(VM* vm, int argCount, Value* args) {
+static int thread_sleep(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_NUMBER(0);
 
     double seconds = GET_NUMBER(0);
 
-    releaseGIL();
+    release_gil();
     usleep((unsigned int)(seconds * 1000000));
-    acquireGIL();
+    acquire_gil();
 
     RETURN_NIL;
 }
 
 // thread.mutex() - create a mutex
-static int thread_mutex(VM* vm, int argCount, Value* args) {
-    (void)argCount; (void)args;
+static int thread_mutex(VM* vm, int arg_count, Value* args) {
+    (void)arg_count; (void)args;
 
     MutexData* data = (MutexData*)malloc(sizeof(MutexData));
     pthread_mutex_init(&data->mutex, NULL);
     data->locked = 0;
 
-    ObjUserdata* udata = newUserdata(data);
+    ObjUserdata* udata = new_userdata(data);
 
     // Set metatable
-    Value threadVal;
-    ObjString* threadName = copyString("thread", 6);
-    if (tableGet(&vm->globals, threadName, &threadVal) && IS_TABLE(threadVal)) {
+    Value thread_val;
+    ObjString* thread_name = copy_string("thread", 6);
+    if (table_get(&vm->globals, thread_name, &thread_val) && IS_TABLE(thread_val)) {
         Value mt;
-        ObjString* mtName = copyString("_mutex_mt", 9);
-        if (tableGet(&AS_TABLE(threadVal)->table, mtName, &mt) && IS_TABLE(mt)) {
+        ObjString* mt_name = copy_string("_mutex_mt", 9);
+        if (table_get(&AS_TABLE(thread_val)->table, mt_name, &mt) && IS_TABLE(mt)) {
             udata->metatable = AS_TABLE(mt);
         }
     }
@@ -282,7 +282,7 @@ static int thread_mutex(VM* vm, int argCount, Value* args) {
 }
 
 // mutex:lock()
-static int mutex_lock(VM* vm, int argCount, Value* args) {
+static int mutex_lock(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_USERDATA(0);
 
@@ -290,16 +290,16 @@ static int mutex_lock(VM* vm, int argCount, Value* args) {
     if (!data) { RETURN_FALSE; }
 
     // Release GIL while waiting for mutex
-    releaseGIL();
+    release_gil();
     pthread_mutex_lock(&data->mutex);
-    acquireGIL();
+    acquire_gil();
 
     data->locked = 1;
     RETURN_TRUE;
 }
 
 // mutex:unlock()
-static int mutex_unlock(VM* vm, int argCount, Value* args) {
+static int mutex_unlock(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_USERDATA(0);
 
@@ -313,7 +313,7 @@ static int mutex_unlock(VM* vm, int argCount, Value* args) {
 }
 
 // mutex:trylock()
-static int mutex_trylock(VM* vm, int argCount, Value* args) {
+static int mutex_trylock(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_USERDATA(0);
 
@@ -328,31 +328,31 @@ static int mutex_trylock(VM* vm, int argCount, Value* args) {
 }
 
 // thread.channel(capacity?) - create a channel for thread communication
-static int thread_channel(VM* vm, int argCount, Value* args) {
+static int thread_channel(VM* vm, int arg_count, Value* args) {
     int capacity = 0; // unbounded by default
-    if (argCount >= 1 && IS_NUMBER(args[0])) {
+    if (arg_count >= 1 && IS_NUMBER(args[0])) {
         capacity = (int)AS_NUMBER(args[0]);
     }
 
     ChannelData* data = (ChannelData*)malloc(sizeof(ChannelData));
     pthread_mutex_init(&data->mutex, NULL);
-    pthread_cond_init(&data->notEmpty, NULL);
-    pthread_cond_init(&data->notFull, NULL);
+    pthread_cond_init(&data->not_empty, NULL);
+    pthread_cond_init(&data->not_full, NULL);
     data->head = NULL;
     data->tail = NULL;
     data->count = 0;
     data->capacity = capacity;
     data->closed = 0;
 
-    ObjUserdata* udata = newUserdata(data);
+    ObjUserdata* udata = new_userdata(data);
 
     // Set metatable
-    Value threadVal;
-    ObjString* threadName = copyString("thread", 6);
-    if (tableGet(&vm->globals, threadName, &threadVal) && IS_TABLE(threadVal)) {
+    Value thread_val;
+    ObjString* thread_name = copy_string("thread", 6);
+    if (table_get(&vm->globals, thread_name, &thread_val) && IS_TABLE(thread_val)) {
         Value mt;
-        ObjString* mtName = copyString("_channel_mt", 11);
-        if (tableGet(&AS_TABLE(threadVal)->table, mtName, &mt) && IS_TABLE(mt)) {
+        ObjString* mt_name = copy_string("_channel_mt", 11);
+        if (table_get(&AS_TABLE(thread_val)->table, mt_name, &mt) && IS_TABLE(mt)) {
             udata->metatable = AS_TABLE(mt);
         }
     }
@@ -361,7 +361,7 @@ static int thread_channel(VM* vm, int argCount, Value* args) {
 }
 
 // channel:send(value)
-static int channel_send(VM* vm, int argCount, Value* args) {
+static int channel_send(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(2);
     ASSERT_USERDATA(0);
 
@@ -371,17 +371,17 @@ static int channel_send(VM* vm, int argCount, Value* args) {
     Value value = args[1];
 
     // Release GIL, acquire channel mutex
-    releaseGIL();
+    release_gil();
     pthread_mutex_lock(&data->mutex);
 
     // Wait if channel is full (bounded)
     while (data->capacity > 0 && data->count >= data->capacity && !data->closed) {
-        pthread_cond_wait(&data->notFull, &data->mutex);
+        pthread_cond_wait(&data->not_full, &data->mutex);
     }
 
     if (data->closed) {
         pthread_mutex_unlock(&data->mutex);
-        acquireGIL();
+        acquire_gil();
         RETURN_FALSE;
     }
 
@@ -398,15 +398,15 @@ static int channel_send(VM* vm, int argCount, Value* args) {
     data->tail = node;
     data->count++;
 
-    pthread_cond_signal(&data->notEmpty);
+    pthread_cond_signal(&data->not_empty);
     pthread_mutex_unlock(&data->mutex);
 
-    acquireGIL();
+    acquire_gil();
     RETURN_TRUE;
 }
 
 // channel:recv()
-static int channel_recv(VM* vm, int argCount, Value* args) {
+static int channel_recv(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_USERDATA(0);
 
@@ -414,17 +414,17 @@ static int channel_recv(VM* vm, int argCount, Value* args) {
     if (!data) { RETURN_NIL; }
 
     // Release GIL, acquire channel mutex
-    releaseGIL();
+    release_gil();
     pthread_mutex_lock(&data->mutex);
 
     // Wait for data
     while (data->count == 0 && !data->closed) {
-        pthread_cond_wait(&data->notEmpty, &data->mutex);
+        pthread_cond_wait(&data->not_empty, &data->mutex);
     }
 
     if (data->count == 0 && data->closed) {
         pthread_mutex_unlock(&data->mutex);
-        acquireGIL();
+        acquire_gil();
         RETURN_NIL;
     }
 
@@ -436,15 +436,15 @@ static int channel_recv(VM* vm, int argCount, Value* args) {
     data->count--;
     free(node);
 
-    pthread_cond_signal(&data->notFull);
+    pthread_cond_signal(&data->not_full);
     pthread_mutex_unlock(&data->mutex);
 
-    acquireGIL();
+    acquire_gil();
     RETURN_VAL(value);
 }
 
 // channel:close()
-static int channel_close(VM* vm, int argCount, Value* args) {
+static int channel_close(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_USERDATA(0);
 
@@ -453,15 +453,15 @@ static int channel_close(VM* vm, int argCount, Value* args) {
 
     pthread_mutex_lock(&data->mutex);
     data->closed = 1;
-    pthread_cond_broadcast(&data->notEmpty);
-    pthread_cond_broadcast(&data->notFull);
+    pthread_cond_broadcast(&data->not_empty);
+    pthread_cond_broadcast(&data->not_full);
     pthread_mutex_unlock(&data->mutex);
 
     RETURN_TRUE;
 }
 
 // channel:tryrecv()
-static int channel_tryrecv(VM* vm, int argCount, Value* args) {
+static int channel_tryrecv(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_USERDATA(0);
 
@@ -488,7 +488,7 @@ static int channel_tryrecv(VM* vm, int argCount, Value* args) {
     data->count--;
     free(node);
 
-    pthread_cond_signal(&data->notFull);
+    pthread_cond_signal(&data->not_full);
     pthread_mutex_unlock(&data->mutex);
 
     push(vm, value);
@@ -496,21 +496,21 @@ static int channel_tryrecv(VM* vm, int argCount, Value* args) {
     return 2;
 }
 
-void registerThread(VM* vm) {
+void register_thread(VM* vm) {
     // Check for GIL disable option
-    if (!gilInitialized) {
-        gilInitialized = 1;
-        const char* noGil = getenv("MYLANG_NO_GIL");
-        if (noGil && (noGil[0] == '1' || noGil[0] == 'y' || noGil[0] == 'Y')) {
-            gilDisabled = 1;
+    if (!gil_initialized) {
+        gil_initialized = 1;
+        const char* no_gil = getenv("MYLANG_NO_GIL");
+        if (no_gil && (no_gil[0] == '1' || no_gil[0] == 'y' || no_gil[0] == 'Y')) {
+            gil_disabled = 1;
             fprintf(stderr, "WARNING: GIL disabled. VM is not thread-safe - expect crashes!\n");
             fprintf(stderr, "         Only safe for threads with completely isolated data.\n");
         } else {
-            acquireGIL();
+            acquire_gil();
         }
     }
 
-    const NativeReg threadFuncs[] = {
+    const NativeReg thread_funcs[] = {
         {"spawn", thread_spawn},
         {"join", thread_join},
         {"yield", thread_yield_native},
@@ -519,84 +519,84 @@ void registerThread(VM* vm) {
         {"channel", thread_channel},
         {NULL, NULL}
     };
-    registerModule(vm, "thread", threadFuncs);
-    ObjTable* threadModule = AS_TABLE(peek(vm, 0));
+    register_module(vm, "thread", thread_funcs);
+    ObjTable* thread_module = AS_TABLE(peek(vm, 0));
 
     // Thread handle metatable
-    ObjTable* threadMT = newTable();
-    push(vm, OBJ_VAL(threadMT));
+    ObjTable* thread_mt = new_table();
+    push(vm, OBJ_VAL(thread_mt));
 
-    const NativeReg threadMethods[] = {
+    const NativeReg thread_methods[] = {
         {"join", thread_join},
         {NULL, NULL}
     };
 
-    for (int i = 0; threadMethods[i].name != NULL; i++) {
-        ObjString* nameStr = copyString(threadMethods[i].name, (int)strlen(threadMethods[i].name));
-        push(vm, OBJ_VAL(nameStr));
-        push(vm, OBJ_VAL(newNative(threadMethods[i].function, nameStr)));
-        tableSet(&threadMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    for (int i = 0; thread_methods[i].name != NULL; i++) {
+        ObjString* name_str = copy_string(thread_methods[i].name, (int)strlen(thread_methods[i].name));
+        push(vm, OBJ_VAL(name_str));
+        push(vm, OBJ_VAL(new_native(thread_methods[i].function, name_str)));
+        table_set(&thread_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
         pop(vm);
         pop(vm);
     }
 
-    push(vm, OBJ_VAL(copyString("__index", 7)));
-    push(vm, OBJ_VAL(threadMT));
-    tableSet(&threadMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("__index", 7)));
+    push(vm, OBJ_VAL(thread_mt));
+    table_set(&thread_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 
-    push(vm, OBJ_VAL(copyString("__name", 6)));
-    push(vm, OBJ_VAL(copyString("thread.handle", 13)));
-    tableSet(&threadMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("__name", 6)));
+    push(vm, OBJ_VAL(copy_string("thread.handle", 13)));
+    table_set(&thread_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 
-    push(vm, OBJ_VAL(copyString("_thread_mt", 10)));
-    push(vm, OBJ_VAL(threadMT));
-    tableSet(&threadModule->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("_thread_mt", 10)));
+    push(vm, OBJ_VAL(thread_mt));
+    table_set(&thread_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
-    pop(vm); // threadMT
+    pop(vm); // thread_mt
 
     // Mutex metatable
-    ObjTable* mutexMT = newTable();
-    push(vm, OBJ_VAL(mutexMT));
+    ObjTable* mutex_mt = new_table();
+    push(vm, OBJ_VAL(mutex_mt));
 
-    const NativeReg mutexMethods[] = {
+    const NativeReg mutex_methods[] = {
         {"lock", mutex_lock},
         {"unlock", mutex_unlock},
         {"trylock", mutex_trylock},
         {NULL, NULL}
     };
 
-    for (int i = 0; mutexMethods[i].name != NULL; i++) {
-        ObjString* nameStr = copyString(mutexMethods[i].name, (int)strlen(mutexMethods[i].name));
-        push(vm, OBJ_VAL(nameStr));
-        push(vm, OBJ_VAL(newNative(mutexMethods[i].function, nameStr)));
-        tableSet(&mutexMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    for (int i = 0; mutex_methods[i].name != NULL; i++) {
+        ObjString* name_str = copy_string(mutex_methods[i].name, (int)strlen(mutex_methods[i].name));
+        push(vm, OBJ_VAL(name_str));
+        push(vm, OBJ_VAL(new_native(mutex_methods[i].function, name_str)));
+        table_set(&mutex_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
         pop(vm);
         pop(vm);
     }
 
-    push(vm, OBJ_VAL(copyString("__index", 7)));
-    push(vm, OBJ_VAL(mutexMT));
-    tableSet(&mutexMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("__index", 7)));
+    push(vm, OBJ_VAL(mutex_mt));
+    table_set(&mutex_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 
-    push(vm, OBJ_VAL(copyString("__name", 6)));
-    push(vm, OBJ_VAL(copyString("thread.mutex", 12)));
-    tableSet(&mutexMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("__name", 6)));
+    push(vm, OBJ_VAL(copy_string("thread.mutex", 12)));
+    table_set(&mutex_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 
-    push(vm, OBJ_VAL(copyString("_mutex_mt", 9)));
-    push(vm, OBJ_VAL(mutexMT));
-    tableSet(&threadModule->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("_mutex_mt", 9)));
+    push(vm, OBJ_VAL(mutex_mt));
+    table_set(&thread_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
-    pop(vm); // mutexMT
+    pop(vm); // mutex_mt
 
     // Channel metatable
-    ObjTable* channelMT = newTable();
-    push(vm, OBJ_VAL(channelMT));
+    ObjTable* channel_mt = new_table();
+    push(vm, OBJ_VAL(channel_mt));
 
-    const NativeReg channelMethods[] = {
+    const NativeReg channel_methods[] = {
         {"send", channel_send},
         {"recv", channel_recv},
         {"tryrecv", channel_tryrecv},
@@ -604,30 +604,30 @@ void registerThread(VM* vm) {
         {NULL, NULL}
     };
 
-    for (int i = 0; channelMethods[i].name != NULL; i++) {
-        ObjString* nameStr = copyString(channelMethods[i].name, (int)strlen(channelMethods[i].name));
-        push(vm, OBJ_VAL(nameStr));
-        push(vm, OBJ_VAL(newNative(channelMethods[i].function, nameStr)));
-        tableSet(&channelMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    for (int i = 0; channel_methods[i].name != NULL; i++) {
+        ObjString* name_str = copy_string(channel_methods[i].name, (int)strlen(channel_methods[i].name));
+        push(vm, OBJ_VAL(name_str));
+        push(vm, OBJ_VAL(new_native(channel_methods[i].function, name_str)));
+        table_set(&channel_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
         pop(vm);
         pop(vm);
     }
 
-    push(vm, OBJ_VAL(copyString("__index", 7)));
-    push(vm, OBJ_VAL(channelMT));
-    tableSet(&channelMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("__index", 7)));
+    push(vm, OBJ_VAL(channel_mt));
+    table_set(&channel_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 
-    push(vm, OBJ_VAL(copyString("__name", 6)));
-    push(vm, OBJ_VAL(copyString("thread.channel", 14)));
-    tableSet(&channelMT->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("__name", 6)));
+    push(vm, OBJ_VAL(copy_string("thread.channel", 14)));
+    table_set(&channel_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
 
-    push(vm, OBJ_VAL(copyString("_channel_mt", 11)));
-    push(vm, OBJ_VAL(channelMT));
-    tableSet(&threadModule->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    push(vm, OBJ_VAL(copy_string("_channel_mt", 11)));
+    push(vm, OBJ_VAL(channel_mt));
+    table_set(&thread_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); pop(vm);
-    pop(vm); // channelMT
+    pop(vm); // channel_mt
 
-    pop(vm); // threadModule
+    pop(vm); // thread_module
 }

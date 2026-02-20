@@ -1,0 +1,14 @@
+fn assert_eq(actual, expected)
+  if actual != expected
+    error(f"expected={expected} actual={actual}")
+
+x = 3.14159
+assert_eq(f"{x|.2f}", "3.14")
+assert_eq(f"{255|08x}", "000000ff")
+assert_eq(f"{255|%08x}", "000000ff")
+assert_eq(f"{5|d}", "5")
+
+string = import string
+assert_eq(string.format("%.3f", x), "3.142")
+
+print "fstring format ok"

@@ -3,7 +3,7 @@
 
 #include "../vm.h"
 
-void vmHandleOpIMod(VM* vm);
-int vmHandleOpModConst(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
+void vm_handle_op_i_mod(VM* vm);
+int vm_handle_op_mod_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b);
 
 #endif
