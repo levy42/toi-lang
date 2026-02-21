@@ -1,0 +1,80 @@
+types = import lib.types
+
+default_primary_key = "id"
+
+fn ensure_record_model(model)
+  if type(model) != "table" or type(model.schema) != "table"
+    error("records: expected a types.Record model")
+  return model
+
+fn normalize_index(entry)
+  if type(entry) == "string"
+    return {name = entry, field = entry, unique = false}
+
+  if type(entry) != "table"
+    error("records: index must be string or table")
+
+  field = entry.field
+  if field == nil
+    field = entry.name
+  if type(field) != "string"
+    error("records: index field must be string")
+
+  name = entry.name
+  if type(name) != "string"
+    name = field
+
+  return {
+    name = name,
+    field = field,
+    unique = entry.unique == true
+  }
+
+fn index(field, opts = nil)
+  idx = {field = field}
+  if type(opts) == "table"
+    for k, v in opts
+      idx[k] = v
+  return normalize_index(idx)
+
+fn configure(model, name, opts = nil)
+  ensure_record_model(model)
+
+  if type(name) != "string" or #name == 0
+    error("records.configure: name must be non-empty string")
+
+  primary_key = default_primary_key
+  if type(opts) == "table" and opts.primary_key != nil
+    if type(opts.primary_key) != "string"
+      error("records.configure: primary_key must be string")
+    primary_key = opts.primary_key
+
+  indexes = {}
+  if type(opts) == "table" and opts.indexes != nil
+    for idx in opts.indexes
+      indexes[#indexes + 1] = normalize_index(idx)
+
+  model.__name = name
+  model.__primary_key = primary_key
+  model.__indexes = indexes
+  return model
+
+-- Backward-compatible helper.
+fn define(model, opts = nil)
+  table_name = nil
+  if type(opts) == "table" and type(opts.name) == "string"
+    table_name = opts.name
+  elif type(model.__name) == "string"
+    table_name = model.__name
+
+  if table_name == nil
+    error("records.define: provide opts.name or configure model.__name first")
+
+  return configure(model, table_name, opts)
+
+return {
+  configure = configure,
+  define = define,
+  index = index,
+  Record = types.Record
+}

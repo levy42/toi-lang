@@ -40,6 +40,21 @@ assert_eq(db.get(80), 800)
 assert_eq(db.get(600), 6000)
 assert_true(db.get("missing") == nil)
 
+
+-- inclusive range query on numeric keys
+num_rows = db.range(80, 84)
+assert_eq(#num_rows, 5)
+assert_eq(num_rows[1].key, 80)
+assert_eq(num_rows[1].value, 800)
+assert_eq(num_rows[5].key, 84)
+assert_eq(num_rows[5].value, 840)
+
+-- range query with open bounds
+prefix_rows = db.range("name", nil)
+assert_true(#prefix_rows >= 1)
+assert_eq(prefix_rows[1].key, "name")
+assert_eq(prefix_rows[1].value, "pua2")
+
 assert_true(db.delete("name"))
 assert_true(db.get("name") == nil)
 db.put("name", "pua3")

@@ -1,0 +1,250 @@
+btree = import btree
+binary = import binary
+string = import string
+
+SEP = string.char(31)
+HI = string.char(255)
+
+fn encode_key_part(value, what)
+  t = type(value)
+  if t == "number"
+    return "n:" + str(value)
+  if t == "string"
+    return "s:" + value
+  error("db: " + what + " must be number or string")
+
+fn secondary_key(index_value, primary_value)
+  return encode_key_part(index_value, "index key") + SEP + encode_key_part(primary_value, "primary key")
+
+fn secondary_min(index_value)
+  return encode_key_part(index_value, "index key") + SEP
+
+fn secondary_max(index_value)
+  return encode_key_part(index_value, "index key") + SEP + HI
+
+fn open(base_path)
+  if type(base_path) != "string" or #base_path == 0
+    error("db.open: base_path must be non-empty string")
+
+  db = {
+    base_path = base_path,
+    tables = {},
+    closed = false
+  }
+
+  fn ensure_open(self)
+    if self.closed
+      error("db: database is closed")
+
+  fn decode_record(blob)
+    if blob == nil return nil
+    return binary.unpack(blob)
+
+  fn encode_record(row)
+    return binary.pack(row)
+
+  fn sanitize_row(row)
+    out = {}
+    for k, v in row
+      private = type(k) == "string" and #k >= 2 and string.sub(k, 1, 2) == "__"
+      if not private
+        out[k] = v
+    return out
+
+  fn ensure_schema(schema)
+    if type(schema) != "table" or type(schema.schema) != "table"
+      error("db.create_table: expected Record schema table")
+    if type(schema.__name) != "string" or #schema.__name == 0
+      error("db.create_table: schema must define __name")
+    if schema.__indexes == nil
+      schema.__indexes = {}
+    if type(schema.__indexes) != "table"
+      error("db.create_table: schema.__indexes must be table")
+
+    primary_key = schema.__primary_key
+    if primary_key == nil
+      primary_key = "id"
+    if type(primary_key) != "string"
+      error("db.create_table: schema.__primary_key must be string")
+    if schema.schema[primary_key] == nil
+      error("db.create_table: primary key '" + primary_key + "' missing in schema '" + schema.__name + "'")
+
+    return {
+      name = schema.__name,
+      model = schema,
+      primary_key = primary_key,
+      indexes = schema.__indexes
+    }
+
+  fn save_secondary_indexes(table_state, row)
+    pk_value = row[table_state.primary_key]
+
+    for index_name, idx_state in table_state.indexes
+      idx_value = row[idx_state.spec.field]
+      if idx_value != nil
+        k = secondary_key(idx_value, pk_value)
+        idx_state.tree.put(k, pk_value)
+
+  fn remove_secondary_indexes(table_state, row)
+    pk_value = row[table_state.primary_key]
+
+    for index_name, idx_state in table_state.indexes
+      idx_value = row[idx_state.spec.field]
+      if idx_value != nil
+        k = secondary_key(idx_value, pk_value)
+        idx_state.tree.delete(k)
+
+  fn make_table_proxy(self, table_state)
+    proxy = {
+      name = table_state.name,
+      schema = table_state.model
+    }
+
+    proxy.put = fn(row)
+      ensure_open(self)
+      checked = table_state.model.check(row)
+      clean = sanitize_row(checked)
+
+      pk_field = table_state.primary_key
+      pk_value = clean[pk_field]
+      if pk_value == nil
+        error("db.put: missing primary key field '" + pk_field + "'")
+      encode_key_part(pk_value, "primary key")
+
+      old_blob = table_state.primary.get(pk_value)
+      if old_blob != nil
+        old_row = decode_record(old_blob)
+        remove_secondary_indexes(table_state, old_row)
+
+      table_state.primary.put(pk_value, encode_record(clean))
+      save_secondary_indexes(table_state, clean)
+      return clean
+
+    proxy.get = fn(primary_key)
+      ensure_open(self)
+      encode_key_part(primary_key, "primary key")
+      blob = table_state.primary.get(primary_key)
+      return decode_record(blob)
+
+    proxy.delete = fn(primary_key)
+      ensure_open(self)
+      encode_key_part(primary_key, "primary key")
+
+      old_blob = table_state.primary.get(primary_key)
+      if old_blob == nil
+        return false
+
+      old_row = decode_record(old_blob)
+      remove_secondary_indexes(table_state, old_row)
+      table_state.primary.delete(primary_key)
+      return true
+
+    proxy.find_by = fn(index_name, index_value)
+      ensure_open(self)
+      idx_state = table_state.indexes[index_name]
+      if idx_state == nil
+        error("db.find_by: unknown index '" + str(index_name) + "' on table '" + table_state.name + "'")
+
+      rows = idx_state.tree.range(secondary_min(index_value), secondary_max(index_value))
+      out = {}
+      for entry in rows
+        pk = entry.value
+        blob = table_state.primary.get(pk)
+        if blob != nil
+          out[#out + 1] = decode_record(blob)
+      return out
+
+    return proxy
+
+  db.create_table = fn(self, schema)
+    ensure_open(self)
+
+    normalized = ensure_schema(schema)
+    table_name = normalized.name
+
+    existing = self.tables[table_name]
+    if existing != nil
+      return existing.proxy
+
+    primary_path = self.base_path + "_" + table_name + ".db"
+    table_state = {
+      name = table_name,
+      model = normalized.model,
+      primary_key = normalized.primary_key,
+      primary = btree.open(primary_path),
+      indexes = {}
+    }
+
+    for idx in normalized.indexes
+      if type(idx.field) != "string"
+        error("db.create_table: index field must be string on table '" + table_name + "'")
+      if normalized.model.schema[idx.field] == nil
+        error("db.create_table: index field '" + idx.field + "' missing in schema for table '" + table_name + "'")
+
+      idx_name = idx.name == nil ? idx.field : idx.name
+      idx_path = self.base_path + "_" + table_name + "__idx_" + idx_name + ".db"
+      table_state.indexes[idx_name] = {
+        spec = idx,
+        tree = btree.open(idx_path)
+      }
+
+    proxy = make_table_proxy(self, table_state)
+    table_state.proxy = proxy
+
+    self.tables[table_name] = table_state
+    self[table_name] = proxy
+    return proxy
+
+  db.add = fn(self, record)
+    ensure_open(self)
+    if type(record) != "table"
+      error("db.add: record must be table")
+
+    schema = record.__model
+    if schema == nil
+      error("db.add: record must have __model (types.Record instance)")
+    if type(schema.__name) != "string" or #schema.__name == 0
+      error("db.add: record model must define __name")
+
+    proxy = self.create_table(schema)
+    return proxy.put(record)
+
+  -- Backward-compatible API
+  db.put = fn(self, table_name, row)
+    proxy = self.tables[table_name]
+    if proxy == nil
+      error("db.put: unknown table '" + str(table_name) + "'")
+    return proxy.proxy.put(row)
+
+  db.get = fn(self, table_name, primary_key)
+    state = self.tables[table_name]
+    if state == nil
+      error("db.get: unknown table '" + str(table_name) + "'")
+    return state.proxy.get(primary_key)
+
+  db.delete = fn(self, table_name, primary_key)
+    state = self.tables[table_name]
+    if state == nil
+      error("db.delete: unknown table '" + str(table_name) + "'")
+    return state.proxy.delete(primary_key)
+
+  db.find_by_index = fn(self, table_name, index_name, index_value)
+    state = self.tables[table_name]
+    if state == nil
+      error("db.find_by_index: unknown table '" + str(table_name) + "'")
+    return state.proxy.find_by(index_name, index_value)
+
+  db.close = fn(self)
+    if self.closed return true
+    for table_name, table_state in self.tables
+      table_state.primary.close()
+      for idx_name, idx_state in table_state.indexes
+        idx_state.tree.close()
+    self.closed = true
+    return true
+
+  return db
+
+return {
+  open = open
+}
