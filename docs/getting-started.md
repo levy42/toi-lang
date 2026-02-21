@@ -16,6 +16,8 @@ make wasm-release
 ```
 
 Default `make wasm` uses `zig cc` (recommended).
+If `zig` is unavailable, the Makefile falls back to `clang-20`/`clang` when distro `wasi-libc`
+headers and libs are present (e.g. `/usr/include/wasm32-wasi`, `/usr/lib/wasm32-wasi`).
 Use `make wasm-release` for a smaller production-oriented `pua.wasm`.
 
 If you prefer `clang` + explicit WASI sysroot, pass both:

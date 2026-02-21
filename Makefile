@@ -14,6 +14,21 @@ ifneq ($(strip $(WASM_SYSROOT)),)
 WASM_CFLAGS_BASE += --sysroot=$(WASM_SYSROOT)
 WASM_LDFLAGS_BASE += --sysroot=$(WASM_SYSROOT)
 endif
+
+# Fallback for environments without zig: use clang + distro wasi-libc layout.
+ifeq ($(strip $(WASM_CC)),zig cc)
+ifeq ($(strip $(wildcard /usr/local/bin/zig /usr/bin/zig)),)
+ifneq ($(wildcard /usr/include/wasm32-wasi/stdio.h),)
+ifneq ($(wildcard /usr/bin/clang-20),)
+WASM_CC := clang-20
+else
+WASM_CC := clang
+endif
+WASM_CFLAGS_BASE += -I/usr/include/wasm32-wasi
+WASM_LDFLAGS_BASE += -L/usr/lib/wasm32-wasi
+endif
+endif
+endif
 UNAME_S := $(shell uname -s)
 TIMEOUT := $(shell command -v gtimeout >/dev/null 2>&1 && echo gtimeout || echo timeout)
 

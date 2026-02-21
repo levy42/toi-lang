@@ -58,8 +58,13 @@ assert_true(i4 != nil)
 st = cli.status("loading")
 assert_true(st.line != nil)
 assert_true(st.line() has "loading")
+assert_true(st.auto == true)
 st.start()
-st.tick()
+if st.auto_handle == nil
+  st.tick()
+else
+  thread = import thread
+  thread.sleep(0.03)
 st.tick("phase2")
 assert_true(st.line() has "phase2")
 st.stop("done", true)
@@ -73,6 +78,8 @@ else
   st.stop("auto fallback", true)
 
 pb = cli.progress(10, {width = 10, prefix = "build"})
+assert_true(pb.auto == true)
+pb.start()
 line0 = pb.line()
 assert_true(line0 has "0%")
 assert_true(line0 has "(0/10)")
