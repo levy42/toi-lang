@@ -35,7 +35,8 @@ CLI application framework:
 - `printc(text)` ANSI-color helper
 - `status(msg, [opts])` spinner-style status line helper
 - `progress(total, [opts])` single-line progress bar helper
-  - status supports manual `tick()` and optional auto mode via `start_auto([interval])` when `thread` is available.
+  - status and progress auto-spawn background updates by default when `thread` is available.
+  - status still supports manual `tick()` and explicit `start_auto([interval])`/`stop(...)` control.
   - both expose context-manager hooks `__enter/__exit` for `with` blocks.
 
 ## `lib.scheduler`

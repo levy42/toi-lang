@@ -5,7 +5,9 @@
 #include <time.h>
 #include <signal.h>
 #include <math.h>
+#ifndef PUA_WASM
 #include <pthread.h>
+#endif
 
 #include "common.h"
 #include "table.h"
@@ -269,6 +271,7 @@ static int handle_exception(VM* vm, CallFrame** frame, uint8_t** ip) {
 
 static volatile sig_atomic_t interrupt_requested = 0;
 
+#ifndef PUA_WASM
 static pthread_key_t current_thread_key;
 static pthread_once_t current_thread_key_once = PTHREAD_ONCE_INIT;
 
@@ -305,6 +308,19 @@ void vm_enable_thread_tls(VM* vm) {
     pthread_once(&current_thread_key_once, make_current_thread_key);
     pthread_setspecific(current_thread_key, vm->current_thread);
 }
+#else
+ObjThread* vm_current_thread(VM* vm) {
+    return vm->current_thread;
+}
+
+void vm_set_current_thread(VM* vm, ObjThread* thread) {
+    vm->current_thread = thread;
+}
+
+void vm_enable_thread_tls(VM* vm) {
+    (void)vm;
+}
+#endif
 
 void vm_request_interrupt(void) {
     interrupt_requested = 1;

@@ -127,6 +127,43 @@ fn _pad_right(text, target)
   if #text >= target return text
   return text + _repeat_char(" ", target - #text)
 
+fn _auto_loop(step, obj, stop_ch, interval)
+  while true
+    local item, ok = stop_ch.tryrecv(stop_ch)
+    if ok
+      return true
+    step(obj)
+    thread.sleep(interval)
+
+fn _auto_start(obj, step, interval, fallback = nil)
+  obj.active = true
+  if thread == nil
+    if fallback != nil
+      fallback(obj)
+    return false
+  if obj.auto_handle != nil
+    return true
+
+  if interval == nil or interval <= 0
+    interval = 0.08
+  obj.auto_stop = thread.channel(1)
+  local h, err = thread.spawn(_auto_loop, step, obj, obj.auto_stop, interval)
+  if h == nil
+    obj.auto_stop = nil
+    if fallback != nil
+      fallback(obj)
+    return false
+  obj.auto_handle = h
+  return true
+
+fn _auto_stop(obj)
+  if obj.auto_handle != nil and obj.auto_stop != nil
+    obj.auto_stop.send(obj.auto_stop, true)
+    thread.join(obj.auto_handle)
+    obj.auto_handle = nil
+    obj.auto_stop = nil
+  obj.active = false
+
 fn coerce_arg(raw, p)
   t = p.type
   if t == nil or t == "any"
@@ -295,19 +332,14 @@ fn status_new(msg = "working", opts = nil)
     last_len = 0,
     auto_handle = nil,
     auto_stop = nil,
-    auto = opts.auto == nil ? false : bool(opts.auto),
+    auto = opts.auto == nil ? true : bool(opts.auto),
     interval = opts.interval == nil ? 0.08 : opts.interval
   }
   setmetatable(s, Status)
   return s
 
-fn _status_auto_loop(st, stop_ch, interval)
-  while true
-    local item, ok = stop_ch.tryrecv(stop_ch)
-    if ok
-      return true
-    st.tick()
-    thread.sleep(interval)
+fn _status_auto_step(st)
+  st.tick()
 
 Status.line = fn(self)
   frame = self.frames[self.frame_index]
@@ -318,33 +350,19 @@ Status.line = fn(self)
 Status.start = fn(self, msg = nil)
   if msg != nil
     self.message = msg
+  if self.auto
+    self.start_auto(self.interval)
+    return self
   self.active = true
   return self
 
 Status.start_auto = fn(self, interval = 0.08, msg = nil)
   if msg != nil
     self.message = msg
-  self.active = true
-  if thread == nil
-    return false
-  if self.auto_handle != nil
-    return true
-
-  if interval == nil or interval <= 0
-    interval = 0.08
-  self.auto_stop = thread.channel(1)
-  local h, err = thread.spawn(_status_auto_loop, self, self.auto_stop, interval)
-  if h == nil
-    self.auto_stop = nil
-    return false
-  self.auto_handle = h
-  return true
+  return _auto_start(self, _status_auto_step, interval)
 
 Status.__enter = fn(self)
-  if self.auto
-    self.start_auto(self.interval)
-  else
-    self.start()
+  self.start()
   return self
 
 Status.tick = fn(self, msg = nil)
@@ -365,18 +383,13 @@ Status.tick = fn(self, msg = nil)
   return self
 
 Status.stop = fn(self, msg = nil, ok = true)
-  if self.auto_handle != nil and self.auto_stop != nil
-    self.auto_stop.send(self.auto_stop, true)
-    thread.join(self.auto_handle)
-    self.auto_handle = nil
-    self.auto_stop = nil
+  _auto_stop(self)
   if msg != nil
     self.message = msg
   final = ok ? "[green]ok[/] " : "[red]x[/] "
   formatted = _format(final + self.message)
   out = "\r" + _pad_right(formatted, self.last_len) + "\n"
   _term_write(out)
-  self.active = false
   self.last_len = 0
   return self
 
@@ -388,6 +401,12 @@ Status.__exit = fn(self, ex)
 
 Progress = {}
 Progress.__index = Progress
+
+fn _progress_auto_step(pb)
+  pb.render()
+
+fn _progress_render(pb)
+  pb.render()
 
 fn progress_new(total = 100, opts = nil)
   if type(opts) != "table"
@@ -405,7 +424,12 @@ fn progress_new(total = 100, opts = nil)
     complete = opts.complete == nil ? "=" : str(opts.complete),
     incomplete = opts.incomplete == nil ? "-" : str(opts.incomplete),
     show_counts = opts.show_counts == nil ? true : bool(opts.show_counts),
-    last_len = 0
+    last_len = 0,
+    active = false,
+    auto_handle = nil,
+    auto_stop = nil,
+    auto = opts.auto == nil ? true : bool(opts.auto),
+    interval = opts.interval == nil ? 0.08 : opts.interval
   }
   if p.width < 5
     p.width = 5
@@ -443,6 +467,21 @@ Progress.line = fn(self)
 
   return left + "[" + bar + "] " + str(pct) + "%" + counts + right
 
+Progress.start = fn(self)
+  if self.auto
+    self.start_auto(self.interval)
+    return self
+  self.active = true
+  self.render()
+  return self
+
+Progress.start_auto = fn(self, interval = 0.08)
+  return _auto_start(self, _progress_auto_step, interval, _progress_render)
+
+Progress.stop = fn(self)
+  _auto_stop(self)
+  return self
+
 Progress.render = fn(self)
   formatted = _format(self.line())
   out = "\r" + _pad_right(formatted, self.last_len)
@@ -465,12 +504,13 @@ Progress.finish = fn(self, suffix = nil)
   if suffix != nil
     self.suffix = str(suffix)
   self.render()
+  self.stop()
   _term_write("\n")
   self.last_len = 0
   return self
 
 Progress.__enter = fn(self)
-  self.render()
+  self.start()
   return self
 
 Progress.__exit = fn(self, ex)
