@@ -1,0 +1,68 @@
+from lib.test import assert_eq, assert_true
+
+os = import os
+types = import lib.types
+records = import lib.records
+db_mod = import lib.db
+
+base = "tests/tmp_db"
+os.remove(base + "_users.db")
+os.remove(base + "_users__idx_email.db")
+os.remove(base + "_users__idx_team.db")
+
+User = records.configure(types.Record {
+  id = types.Integer,
+  name = types.String,
+  email = types.String,
+  team = types.String
+}, "users", {
+  primary_key = "id",
+  indexes = {"email", "team"}
+})
+
+db = db_mod.open(base)
+users = db.create_table(User)
+
+u1 = User {id = 1, name = "Ana", email = "ana@example.com", team = "red"}
+u2 = User {id = 2, name = "Bob", email = "bob@example.com", team = "red"}
+
+db.add(u1)
+db.add(u2)
+
+row1 = db.users.get(1)
+assert_eq(row1.name, "Ana")
+assert_eq(row1.email, "ana@example.com")
+
+by_email = db.users.find_by("email", "ana@example.com")
+assert_eq(#by_email, 1)
+assert_eq(by_email[1].id, 1)
+
+by_team = users.find_by("team", "red")
+assert_eq(#by_team, 2)
+
+-- upsert should refresh secondary indexes
+users.put(User {id = 1, name = "Ana", email = "ana@example.com", team = "blue"})
+assert_eq(#db.users.find_by("team", "red"), 1)
+assert_eq(#db.users.find_by("team", "blue"), 1)
+
+assert_true(db.users.delete(2))
+assert_true(db.users.get(2) == nil)
+assert_eq(#db.users.find_by("team", "red"), 0)
+
+db.close()
+
+-- reopen and verify persistence + proxy recreation
+reopen = db_mod.open(base)
+reopen.create_table(User)
+
+u1b = reopen.users.get(1)
+assert_eq(u1b.team, "blue")
+assert_eq(#reopen.users.find_by("email", "ana@example.com"), 1)
+assert_eq(#reopen.users.find_by("team", "red"), 0)
+reopen.close()
+
+os.remove(base + "_users.db")
+os.remove(base + "_users__idx_email.db")
+os.remove(base + "_users__idx_team.db")
+
+print "db ok"

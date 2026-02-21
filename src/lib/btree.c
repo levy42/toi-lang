@@ -1310,6 +1310,79 @@ static int return_atom_value(VM* vm, BTreeAtom* value) {
     return 1;
 }
 
+static int atom_to_value(const BTreeAtom* atom, Value* out) {
+    if (atom->type == BTREE_ATOM_NUMBER) {
+        *out = NUMBER_VAL(atom->number);
+        return 1;
+    }
+
+    if (atom->type == BTREE_ATOM_STRING) {
+        ObjString* s = copy_string(atom->string != NULL ? atom->string : "", (int)atom->string_len);
+        *out = OBJ_VAL(s);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int btree_collect_range(VM* vm, BTreeDb* db, uint32_t page_id,
+                               const BTreeAtom* min, const BTreeAtom* max,
+                               ObjTable* out, int* index) {
+    NodeData node;
+    if (!node_load(db, page_id, &node)) return 0;
+
+    if (node.type == BTREE_PAGE_TYPE_LEAF) {
+        for (uint16_t i = 0; i < node.nkeys; i++) {
+            LeafEntry* entry = &node.leaf_entries[i];
+
+            if (min != NULL && atom_compare(&entry->key, min) < 0) continue;
+            if (max != NULL && atom_compare(&entry->key, max) > 0) break;
+
+            ObjTable* row = new_table();
+            push(vm, OBJ_VAL(row));
+
+            Value key_val;
+            if (!atom_to_value(&entry->key, &key_val)) {
+                pop(vm);
+                node_data_free(&node);
+                return 0;
+            }
+
+            Value value_val;
+            if (!atom_to_value(&entry->value, &value_val)) {
+                pop(vm);
+                node_data_free(&node);
+                return 0;
+            }
+
+            table_set(&row->table, copy_string("key", 3), key_val);
+            table_set(&row->table, copy_string("value", 5), value_val);
+            table_set_array(&out->table, *index, OBJ_VAL(row));
+            (*index)++;
+
+            pop(vm);
+        }
+
+        node_data_free(&node);
+        return 1;
+    }
+
+    if (!btree_collect_range(vm, db, node.left_child, min, max, out, index)) {
+        node_data_free(&node);
+        return 0;
+    }
+
+    for (uint16_t i = 0; i < node.nkeys; i++) {
+        if (!btree_collect_range(vm, db, node.internal_entries[i].child, min, max, out, index)) {
+            node_data_free(&node);
+            return 0;
+        }
+    }
+
+    node_data_free(&node);
+    return 1;
+}
+
 static int btree_open_native(VM* vm, int arg_count, Value* args) {
     BTreeDb* db = NULL;
     if (arg_count == 0) {
@@ -1423,6 +1496,63 @@ static int btree_close_native(VM* vm, int arg_count, Value* args) {
     RETURN_TRUE;
 }
 
+static int btree_range_native(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    if (arg_count > 3) {
+        vm_runtime_error(vm, "btree.range() expects at most 2 arguments.");
+        return 0;
+    }
+    ASSERT_USERDATA(0);
+
+    BTreeDb* db = get_open_db_or_nil(args);
+    if (db == NULL) RETURN_NIL;
+
+    BTreeAtom min_key, max_key;
+    BTreeAtom* min = NULL;
+    BTreeAtom* max = NULL;
+    atom_init(&min_key);
+    atom_init(&max_key);
+
+    if (arg_count >= 2 && !IS_NIL(args[1])) {
+        if (!parse_key_arg(vm, args, 1, &min_key)) {
+            atom_free(&min_key);
+            atom_free(&max_key);
+            return 0;
+        }
+        min = &min_key;
+    }
+
+    if (arg_count >= 3 && !IS_NIL(args[2])) {
+        if (!parse_key_arg(vm, args, 2, &max_key)) {
+            atom_free(&min_key);
+            atom_free(&max_key);
+            return 0;
+        }
+        max = &max_key;
+    }
+
+    ObjTable* out = new_table();
+    push(vm, OBJ_VAL(out));
+
+    if (min != NULL && max != NULL && atom_compare(min, max) > 0) {
+        atom_free(&min_key);
+        atom_free(&max_key);
+        RETURN_VAL(pop(vm));
+    }
+
+    int index = 1;
+    int ok = btree_collect_range(vm, db, db->root_page, min, max, out, &index);
+    atom_free(&min_key);
+    atom_free(&max_key);
+    if (!ok) {
+        pop(vm);
+        vm_runtime_error(vm, "btree.range failed.");
+        return 0;
+    }
+
+    RETURN_VAL(pop(vm));
+}
+
 void register_btree(VM* vm) {
     const NativeReg funcs[] = {
         {"open", btree_open_native},
@@ -1438,6 +1568,7 @@ void register_btree(VM* vm) {
         {"put", btree_put_native},
         {"get", btree_get_native},
         {"delete", btree_delete_native},
+        {"range", btree_range_native},
         {"close", btree_close_native},
         {NULL, NULL}
     };

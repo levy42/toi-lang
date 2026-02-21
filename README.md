@@ -179,3 +179,27 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
   }
 }
 ```
+
+
+## Benchmarks (sample)
+
+Sample benchmark results collected in this repository on:
+
+- Host: `Linux 375b89425e85 6.12.47 #1 SMP Mon Oct 27 10:01:15 UTC 2025 x86_64`
+- Build: debug (`make`)
+
+Commands used:
+
+```bash
+./pua tests/21_template_perf.pua
+./pua tests/26_json_perf.pua
+N=100000 ./pua tests/peft/btree_perf.pua
+```
+
+Observed output:
+
+- `template perf`: compile `0.026113s`, render `0.011995s`, render_with_compile `0.001019s`
+- `json perf`: encode `0.029274s`, decode `0.043280s`, payload_bytes `203`
+- `btree perf` (`n=100000`): insert `22495 op/s`, lookup `58515 op/s`, delete `32111 op/s`
+
+> Notes: results are environment-dependent (CPU, storage, compiler flags, and system load). Treat these as reference numbers, not strict performance guarantees.
