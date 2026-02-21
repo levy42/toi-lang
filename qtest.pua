@@ -1,10 +1,11 @@
 import time
-import os
-import string
-import test
+import cli
 
-
-with test.timeit() as t
-  print("hello")
+with cli.status("Working", {auto = true}) as sctx
+  print 1
+  sctx.tick("Working")
+  print 2
   time.sleep(1)
-  print t._startime
+  print 3
+  time.sleep(1)
+  print 4

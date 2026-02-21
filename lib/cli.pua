@@ -1,8 +1,14 @@
 inspect = import inspect
+io = import io
 os = import os
 string = import string
 table = import table
 types = import lib.types
+thread = nil
+try
+  thread = import thread
+except e
+  thread = nil
 
 ESC = string.char(27)
 ANSI = {
@@ -84,6 +90,43 @@ fn _format(text)
 fn printc(text)
   print _format(text)
 
+_stdout_file = nil
+_stdout_failed = false
+
+fn _stdout()
+  if _stdout_failed
+    return nil
+  if _stdout_file == nil
+    try
+      _stdout_file = io.open("/dev/stdout", "w")
+    except e
+      _stdout_failed = true
+      _stdout_file = nil
+  return _stdout_file
+
+fn _term_write(s)
+  if type(s) != "string"
+    s = str(s)
+  f = _stdout()
+  if f != nil
+    f.write(s)
+    return true
+  print s
+  return false
+
+fn _repeat_char(ch, n)
+  if n <= 0 return ""
+  out = ""
+  i = 1
+  while i <= n
+    out = out + ch
+    i = i + 1
+  return out
+
+fn _pad_right(text, target)
+  if #text >= target return text
+  return text + _repeat_char(" ", target - #text)
+
 fn coerce_arg(raw, p)
   t = p.type
   if t == nil or t == "any"
@@ -113,7 +156,8 @@ App = {}
 App.__index = App
 
 fn app_new(cls, opts = nil)
-  if type(opts) != "table" opts = {}
+  if type(opts) != "table"
+    opts = {}
   app = {
     name = opts.name == nil ? "app" : opts.name,
     commands = {},
@@ -214,12 +258,12 @@ fn run(self, argv = nil)
     args = os.argv
 
   if args == nil or #args == 0
-    print self.help()
+    printc(self.help())
     return nil
 
   cmd_name = args[1]
   if cmd_name == "-h" or cmd_name == "--help"
-    print self.help()
+    printc(self.help())
     return nil
 
   cmd = self.commands[cmd_name]
@@ -234,8 +278,211 @@ fn run(self, argv = nil)
   return cmd.fn_(*parsed)
 App.run = run
 
+Status = {}
+Status.__index = Status
+
+fn status_new(msg = "working", opts = nil)
+  if type(opts) != "table"
+    opts = {}
+  frames = opts.frames
+  if type(frames) != "table" or #frames == 0
+    frames = {"|", "/", "-", "\\"}
+  s = {
+    message = msg,
+    frames = frames,
+    frame_index = 1,
+    active = false,
+    last_len = 0,
+    auto_handle = nil,
+    auto_stop = nil,
+    auto = opts.auto == nil ? false : bool(opts.auto),
+    interval = opts.interval == nil ? 0.08 : opts.interval
+  }
+  setmetatable(s, Status)
+  return s
+
+fn _status_auto_loop(st, stop_ch, interval)
+  while true
+    local item, ok = stop_ch.tryrecv(stop_ch)
+    if ok
+      return true
+    st.tick()
+    thread.sleep(interval)
+
+Status.line = fn(self)
+  frame = self.frames[self.frame_index]
+  if frame == nil
+    frame = self.frames[1]
+  return "[cyan]" + frame + "[/] " + self.message
+
+Status.start = fn(self, msg = nil)
+  if msg != nil
+    self.message = msg
+  self.active = true
+  return self
+
+Status.start_auto = fn(self, interval = 0.08, msg = nil)
+  if msg != nil
+    self.message = msg
+  self.active = true
+  if thread == nil
+    return false
+  if self.auto_handle != nil
+    return true
+
+  if interval == nil or interval <= 0
+    interval = 0.08
+  self.auto_stop = thread.channel(1)
+  local h, err = thread.spawn(_status_auto_loop, self, self.auto_stop, interval)
+  if h == nil
+    self.auto_stop = nil
+    return false
+  self.auto_handle = h
+  return true
+
+Status.__enter = fn(self)
+  if self.auto
+    self.start_auto(self.interval)
+  else
+    self.start()
+  return self
+
+Status.tick = fn(self, msg = nil)
+  if not self.active
+    self.start()
+  if msg != nil
+    self.message = msg
+
+  raw = self.line()
+  formatted = _format(raw)
+  out = "\r" + _pad_right(formatted, self.last_len)
+  self.last_len = #formatted
+  _term_write(out)
+
+  self.frame_index = self.frame_index + 1
+  if self.frame_index > #self.frames
+    self.frame_index = 1
+  return self
+
+Status.stop = fn(self, msg = nil, ok = true)
+  if self.auto_handle != nil and self.auto_stop != nil
+    self.auto_stop.send(self.auto_stop, true)
+    thread.join(self.auto_handle)
+    self.auto_handle = nil
+    self.auto_stop = nil
+  if msg != nil
+    self.message = msg
+  final = ok ? "[green]ok[/] " : "[red]x[/] "
+  formatted = _format(final + self.message)
+  out = "\r" + _pad_right(formatted, self.last_len) + "\n"
+  _term_write(out)
+  self.active = false
+  self.last_len = 0
+  return self
+
+Status.__exit = fn(self, ex)
+  if ex == nil
+    self.stop(self.message, true)
+  else
+    self.stop(self.message, false)
+
+Progress = {}
+Progress.__index = Progress
+
+fn progress_new(total = 100, opts = nil)
+  if type(opts) != "table"
+    opts = {}
+
+  if total == nil or total <= 0
+    total = 1
+
+  p = {
+    total = int(total),
+    value = 0,
+    width = opts.width == nil ? 30 : int(opts.width),
+    prefix = opts.prefix == nil ? "" : str(opts.prefix),
+    suffix = opts.suffix == nil ? "" : str(opts.suffix),
+    complete = opts.complete == nil ? "=" : str(opts.complete),
+    incomplete = opts.incomplete == nil ? "-" : str(opts.incomplete),
+    show_counts = opts.show_counts == nil ? true : bool(opts.show_counts),
+    last_len = 0
+  }
+  if p.width < 5
+    p.width = 5
+
+  setmetatable(p, Progress)
+  return p
+
+Progress.line = fn(self)
+  v = self.value
+  if v < 0
+    v = 0
+  if v > self.total
+    v = self.total
+
+  ratio = self.total > 0 ? (v / self.total) : 1
+  filled = int(ratio * self.width)
+  if filled < 0
+    filled = 0
+  if filled > self.width
+    filled = self.width
+
+  bar = _repeat_char(self.complete, filled) + _repeat_char(self.incomplete, self.width - filled)
+  pct = int(ratio * 100)
+
+  left = self.prefix
+  if #left > 0
+    left = left + " "
+  right = self.suffix
+  if #right > 0
+    right = " " + right
+
+  counts = ""
+  if self.show_counts
+    counts = " (" + str(v) + "/" + str(self.total) + ")"
+
+  return left + "[" + bar + "] " + str(pct) + "%" + counts + right
+
+Progress.render = fn(self)
+  formatted = _format(self.line())
+  out = "\r" + _pad_right(formatted, self.last_len)
+  self.last_len = #formatted
+  _term_write(out)
+  return self
+
+Progress.update = fn(self, value, suffix = nil)
+  self.value = int(value)
+  if suffix != nil
+    self.suffix = str(suffix)
+  return self.render()
+
+Progress.advance = fn(self, delta = 1)
+  self.value = self.value + int(delta)
+  return self.render()
+
+Progress.finish = fn(self, suffix = nil)
+  self.value = self.total
+  if suffix != nil
+    self.suffix = str(suffix)
+  self.render()
+  _term_write("\n")
+  self.last_len = 0
+  return self
+
+Progress.__enter = fn(self)
+  self.render()
+  return self
+
+Progress.__exit = fn(self, ex)
+  if ex == nil
+    self.finish(self.suffix)
+  else
+    self.finish("failed")
+
 return {
   App = App,
   _format = _format,
-  printc = printc
+  printc = printc,
+  status = status_new,
+  progress = progress_new
 }

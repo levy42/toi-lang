@@ -45,7 +45,7 @@ int vm_handle_op_equal(VM* vm, CallFrame** frame, uint8_t** ip) {
                 push(vm, b);
                 (*frame)->ip = *ip;
                 if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-                *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+                *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
                 *ip = (*frame)->ip;
             } else {
                 push(vm, BOOL_VAL(0));
@@ -76,7 +76,7 @@ int vm_handle_op_greater(VM* vm, CallFrame** frame, uint8_t** ip) {
             push(vm, a);
             (*frame)->ip = *ip;
             if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-            *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+            *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
             *ip = (*frame)->ip;
         }
         else {
@@ -101,7 +101,7 @@ int vm_handle_op_less(VM* vm, CallFrame** frame, uint8_t** ip) {
             push(vm, b);
             (*frame)->ip = *ip;
             if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-            *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+            *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
             *ip = (*frame)->ip;
         }
         else {

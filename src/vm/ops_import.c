@@ -75,7 +75,7 @@ InterpretResult vm_handle_op_import(VM* vm, ObjString* module_name, CallFrame** 
         return INTERPRET_RUNTIME_ERROR;
     }
 
-    *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+    *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
     *ip = (*frame)->ip;
 
     return INTERPRET_OK;

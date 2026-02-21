@@ -35,6 +35,7 @@ fn parse_inline(text)
   local i = 1
   while i <= #text
     local ch = text[i]
+    local handled = false
 
     if ch == "`"
       local j = i + 1
@@ -60,9 +61,9 @@ fn parse_inline(text)
           k = k + 1
         out[#out + 1] = "</code>"
         i = j + 1
-        continue
+        handled = true
 
-    if ch == "*" and i < #text and text[i + 1] == "*"
+    if not handled and ch == "*" and i < #text and text[i + 1] == "*"
       local j = i + 2
       while j < #text
         if text[j] == "*" and text[j + 1] == "*"
@@ -88,9 +89,9 @@ fn parse_inline(text)
           k = k + 1
         out[#out + 1] = "</strong>"
         i = j + 2
-        continue
+        handled = true
 
-    if ch == "*"
+    if not handled and ch == "*"
       local j = i + 1
       while j <= #text and text[j] != "*"
         j = j + 1
@@ -114,22 +115,22 @@ fn parse_inline(text)
           k = k + 1
         out[#out + 1] = "</em>"
         i = j + 1
-        continue
+        handled = true
 
-    if ch == "&"
-      out[#out + 1] = "&amp;"
-    elif ch == "<"
-      out[#out + 1] = "&lt;"
-    elif ch == ">"
-      out[#out + 1] = "&gt;"
-    elif ch == '"'
-      out[#out + 1] = "&quot;"
-    elif ch == "'"
-      out[#out + 1] = "&#39;"
-    else
-      out[#out + 1] = ch
-
-    i = i + 1
+    if not handled
+      if ch == "&"
+        out[#out + 1] = "&amp;"
+      elif ch == "<"
+        out[#out + 1] = "&lt;"
+      elif ch == ">"
+        out[#out + 1] = "&gt;"
+      elif ch == '"'
+        out[#out + 1] = "&quot;"
+      elif ch == "'"
+        out[#out + 1] = "&#39;"
+      else
+        out[#out + 1] = ch
+      i = i + 1
 
   return table.concat(out, "")
 

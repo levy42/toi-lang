@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <time.h>
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/time.h>
 #include <sys/select.h>
 #if defined(__linux__)
 #include <sys/random.h>
@@ -36,9 +36,9 @@ static inline uint32_t xorshift32(void) {
 }
 
 static inline uint64_t now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
 }
 
 static inline void id_init(void) {

@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>{{ title }}</title>
+    <style>
+      body { font-family: ui-monospace, Menlo, monospace; margin: 2rem; line-height: 1.45; }
+      h1 { margin-bottom: 0.5rem; }
+      code { background: #f1f1f1; padding: 0.1rem 0.3rem; border-radius: 4px; }
+      ul { padding-left: 1.2rem; }
+      li { margin: 0.35rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>{{ title }}</h1>
+    <p>Started at clock: <code>{{ now }}</code></p>
+    <p>This page is rendered from a PTML template.</p>
+    <h2>Routes</h2>
+    <ul>
+      {% for r in routes %}
+      <li><code>{{ r.path }}</code> - {{ r.desc }}</li>
+      {% endfor %}
+    </ul>
+  </body>
+</html>

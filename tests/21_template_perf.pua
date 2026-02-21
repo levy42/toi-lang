@@ -5,10 +5,8 @@ time = import time
 global string = import string
 global table = import table
 
-global name = "Ada"
-global items = {"x", "y", "z"}
 tmpl = "Hello {{ name }}! {% for item in items %}[{{ item }}]{% endfor %}"
-ctx = {}
+ctx = {name = "Ada", items = {"x", "y", "z"}}
 expected = "Hello Ada! [x][y][z]"
 
 -- Sanity check correctness first.

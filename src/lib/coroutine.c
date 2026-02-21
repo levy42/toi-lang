@@ -4,6 +4,36 @@
 #include "../value.h"
 #include "../vm.h"
 
+static int coroutine_do_yield(VM* vm, int arg_count, Value* args) {
+    ObjThread* caller = vm_current_thread(vm)->caller;
+    if (caller == NULL) {
+        push(vm, BOOL_VAL(0));
+        RETURN_STRING("attempt to yield from outside a coroutine", 41);
+    }
+
+    if (vm_current_thread(vm)->is_generator && vm_current_thread(vm)->generator_mode) {
+        vm_current_thread(vm)->generator_mode = 0;
+        vm_current_thread(vm)->generator_index++;
+        *caller->stack_top = NUMBER_VAL((double)vm_current_thread(vm)->generator_index);
+        caller->stack_top++;
+        *caller->stack_top = (arg_count > 0) ? args[0] : NIL_VAL;
+        caller->stack_top++;
+    } else {
+        *caller->stack_top = BOOL_VAL(1); // Push status (true)
+        caller->stack_top++;
+
+        for (int i = 0; i < arg_count; i++) {
+            *caller->stack_top = args[i];
+            caller->stack_top++;
+        }
+    }
+
+    vm_set_current_thread(vm, caller);
+    vm_current_thread(vm)->caller = NULL;
+
+    return 1;
+}
+
 static int coroutine_create(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     if (!IS_CLOSURE(args[0])) { RETURN_NIL; }
@@ -34,7 +64,7 @@ static int coroutine_resume(VM* vm, int arg_count, Value* args) {
          RETURN_STRING("cannot resume dead coroutine", 28);
     }
     
-    thread->caller = vm->current_thread;
+    thread->caller = vm_current_thread(vm);
     if (thread->is_generator) {
         thread->generator_mode = 0;
     }
@@ -45,38 +75,22 @@ static int coroutine_resume(VM* vm, int arg_count, Value* args) {
         thread->stack_top++;
     }
     
-    vm->current_thread = thread;
+    vm_set_current_thread(vm, thread);
     return 1; 
 }
 
 static int coroutine_yield(VM* vm, int arg_count, Value* args) {
-    ObjThread* caller = vm->current_thread->caller;
-    if (caller == NULL) {
-        push(vm, BOOL_VAL(0));
-        RETURN_STRING("attempt to yield from outside a coroutine", 41);
-    }
+    return coroutine_do_yield(vm, arg_count, args);
+}
 
-    if (vm->current_thread->is_generator && vm->current_thread->generator_mode) {
-        vm->current_thread->generator_mode = 0;
-        vm->current_thread->generator_index++;
-        *caller->stack_top = NUMBER_VAL((double)vm->current_thread->generator_index);
-        caller->stack_top++;
-        *caller->stack_top = (arg_count > 0) ? args[0] : NIL_VAL;
-        caller->stack_top++;
-    } else {
-        *caller->stack_top = BOOL_VAL(1); // Push status (true)
-        caller->stack_top++;
+static int coroutine_sleep(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_NUMBER(0);
 
-        for (int i = 0; i < arg_count; i++) {
-            *caller->stack_top = args[i]; // Push all yield arguments
-            caller->stack_top++;
-        }
-    }
-
-    vm->current_thread = caller;
-    vm->current_thread->caller = NULL; // Unlink (the caller will relink if it resumes this thread)
-
-    return 1;
+    Value yield_args[2];
+    yield_args[0] = OBJ_VAL(copy_string("sleep", 5));
+    yield_args[1] = args[0];
+    return coroutine_do_yield(vm, 2, yield_args);
 }
 
 static int coroutine_status(VM* vm, int arg_count, Value* args) {
@@ -88,7 +102,7 @@ static int coroutine_status(VM* vm, int arg_count, Value* args) {
         RETURN_STRING("dead", 4);
     } else if (thread->caller != NULL) {
         RETURN_STRING("normal", 6); // normal means it has a caller, is running or yielded to its caller.
-    } else if (thread == vm->current_thread) {
+    } else if (thread == vm_current_thread(vm)) {
         RETURN_STRING("running", 7); // The currently executing thread is running.
     } else {
         RETURN_STRING("suspended", 9); // Suspended (created but not run, or yielded).
@@ -100,6 +114,7 @@ void register_coroutine(VM* vm) {
         {"create", coroutine_create},
         {"resume", coroutine_resume},
         {"yield", coroutine_yield},
+        {"sleep", coroutine_sleep},
         {"status", coroutine_status},
         {NULL, NULL}
     };

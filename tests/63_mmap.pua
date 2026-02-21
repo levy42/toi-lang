@@ -1,0 +1,40 @@
+from lib.test import assert_eq, assert_true
+
+mmap = import mmap
+io = import io
+os = import os
+
+PATH = "tests/tmp_mmap_case.txt"
+
+if os.exists(PATH)
+  os.remove(PATH)
+
+f = io.open(PATH, "w")
+f.write("hello mmap")
+f.close()
+
+local r, err = mmap.map(PATH, "r")
+assert_true(r != nil, "mmap r failed")
+assert_eq(r.len(), 10)
+assert_eq(r.read(), "hello mmap")
+assert_eq(r.read(7, 4), "mmap")
+assert_true(r.close())
+
+local w, err2 = mmap.map(PATH, "rw")
+assert_true(w != nil, "mmap rw failed")
+assert_true(w.write(7, "Pua!"))
+assert_true(w.flush())
+assert_true(w.close())
+
+f2 = io.open(PATH, "r")
+out = f2.read()
+f2.close()
+assert_eq(out, "hello Pua!")
+
+local miss, merr = mmap.map("tests/does_not_exist___mmap", "r")
+assert_true(miss == nil)
+assert_true(merr != nil)
+
+os.remove(PATH)
+
+print "mmap ok"

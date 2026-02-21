@@ -549,19 +549,6 @@ static int buffer_seek(VM* vm, int arg_count, Value* args) {
     RETURN_NUMBER((double)b->pos);
 }
 
-static int userdata_index(VM* vm, int arg_count, Value* args) {
-    ASSERT_ARGC_EQ(2);
-    ASSERT_USERDATA(0);
-    ASSERT_STRING(1);
-
-    ObjUserdata* udata = GET_USERDATA(0);
-    if (!udata->metatable) { RETURN_NIL; }
-
-    Value result = NIL_VAL;
-    table_get(&udata->metatable->table, GET_STRING(1), &result);
-    RETURN_VAL(result);
-}
-
 void register_io(VM* vm) {
     const NativeReg io_funcs[] = {
         {"open", io_open},
@@ -598,7 +585,7 @@ void register_io(VM* vm) {
     
     ObjString* index_name = copy_string("__index", 7);
     push(vm, OBJ_VAL(index_name));
-    push(vm, OBJ_VAL(new_native(userdata_index, index_name)));
+    push(vm, OBJ_VAL(file_mt));
     table_set(&file_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm);
     pop(vm);
@@ -643,7 +630,7 @@ void register_io(VM* vm) {
 
     ObjString* buffer_index_name = copy_string("__index", 7);
     push(vm, OBJ_VAL(buffer_index_name));
-    push(vm, OBJ_VAL(new_native(userdata_index, buffer_index_name)));
+    push(vm, OBJ_VAL(buffer_mt));
     table_set(&buffer_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm);
     pop(vm);

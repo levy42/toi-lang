@@ -4,6 +4,8 @@
 #include <stdarg.h>
 #include <time.h>
 #include <signal.h>
+#include <math.h>
+#include <pthread.h>
 
 #include "common.h"
 #include "table.h"
@@ -45,6 +47,95 @@ static inline int to_int64(double x, int64_t* out) {
     return 1;
 }
 
+// Returns 1 when handled, 0 when not handled, -1 on runtime error.
+static int try_fast_native_call(VM* vm, ObjNative* native, int arg_count, Value* args) {
+    switch ((NativeFastKind)native->fast_kind) {
+        case NATIVE_FAST_NONE:
+            return 0;
+        case NATIVE_FAST_MATH_SIN:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(sin(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_COS:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(cos(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_TAN:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(tan(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_ASIN:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(asin(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_ACOS:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(acos(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_ATAN:
+            if (arg_count == 1 && IS_NUMBER(args[0])) {
+                push(vm, NUMBER_VAL(atan(AS_NUMBER(args[0]))));
+                return 1;
+            }
+            if (arg_count == 2 && IS_NUMBER(args[0]) && IS_NUMBER(args[1])) {
+                push(vm, NUMBER_VAL(atan2(AS_NUMBER(args[0]), AS_NUMBER(args[1]))));
+                return 1;
+            }
+            goto fast_arg_error;
+        case NATIVE_FAST_MATH_SQRT:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(sqrt(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_FLOOR:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(floor(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_CEIL:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(ceil(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_ABS:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(fabs(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_EXP:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(exp(AS_NUMBER(args[0]))));
+            return 1;
+        case NATIVE_FAST_MATH_LOG:
+            if (arg_count == 1 && IS_NUMBER(args[0])) {
+                push(vm, NUMBER_VAL(log(AS_NUMBER(args[0]))));
+                return 1;
+            }
+            if (arg_count == 2 && IS_NUMBER(args[0]) && IS_NUMBER(args[1])) {
+                push(vm, NUMBER_VAL(log(AS_NUMBER(args[0])) / log(AS_NUMBER(args[1]))));
+                return 1;
+            }
+            goto fast_arg_error;
+        case NATIVE_FAST_MATH_POW:
+            if (arg_count != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(pow(AS_NUMBER(args[0]), AS_NUMBER(args[1]))));
+            return 1;
+        case NATIVE_FAST_MATH_FMOD:
+            if (arg_count != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(fmod(AS_NUMBER(args[0]), AS_NUMBER(args[1]))));
+            return 1;
+        case NATIVE_FAST_MATH_DEG:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(AS_NUMBER(args[0]) * (180.0 / 3.14159265358979323846)));
+            return 1;
+        case NATIVE_FAST_MATH_RAD:
+            if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
+            push(vm, NUMBER_VAL(AS_NUMBER(args[0]) * (3.14159265358979323846 / 180.0)));
+            return 1;
+    }
+    return 0;
+
+fast_arg_error:
+    // Fall back to native implementation for exact error text/semantics.
+    return 0;
+}
+
 static int value_matches_type(Value v, uint8_t type) {
     switch (type) {
         case TYPEHINT_ANY:
@@ -68,13 +159,14 @@ static int value_matches_type(Value v, uint8_t type) {
 }
 
 static void apply_pending_set_local(VM* vm) {
-    if (vm->pending_set_local_count == 0) return;
-    int top = vm->pending_set_local_count - 1;
-    int frame_index = vm->pending_set_local_frames[top];
-    if (frame_index != vm->current_thread->frame_count - 1) return;
-    CallFrame* target = &vm->current_thread->frames[frame_index];
-    target->slots[vm->pending_set_local_slots[top]] = peek(vm, 0);
-    vm->pending_set_local_count--;
+    ObjThread* thread = vm_current_thread(vm);
+    if (thread->pending_set_local_count == 0) return;
+    int top = thread->pending_set_local_count - 1;
+    int frame_index = thread->pending_set_local_frames[top];
+    if (frame_index != vm_current_thread(vm)->frame_count - 1) return;
+    CallFrame* target = &vm_current_thread(vm)->frames[frame_index];
+    target->slots[thread->pending_set_local_slots[top]] = peek(vm, 0);
+    thread->pending_set_local_count--;
 }
 
 extern void register_libs(VM* vm);
@@ -82,10 +174,10 @@ extern void free_object(struct Obj* object);
 void collect_garbage(VM* vm); // Defined later in this file
 
 static void reset_stack(VM* vm) {
-    if (vm->current_thread != NULL) {
-        vm->current_thread->stack_top = vm->current_thread->stack;
-        vm->current_thread->frame_count = 0;
-        vm->current_thread->open_upvalues = NULL;
+    if (vm_current_thread(vm) != NULL) {
+        vm_current_thread(vm)->stack_top = vm_current_thread(vm)->stack;
+        vm_current_thread(vm)->frame_count = 0;
+        vm_current_thread(vm)->open_upvalues = NULL;
     }
 }
 
@@ -96,21 +188,22 @@ void vm_runtime_error(VM* vm, const char* format, ...) {
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
 
-    vm->has_exception = 1;
-    vm->exception = OBJ_VAL(copy_string(buffer, (int)strlen(buffer)));
+    vm_current_thread(vm)->has_exception = 1;
+    vm_current_thread(vm)->exception = OBJ_VAL(copy_string(buffer, (int)strlen(buffer)));
+    vm_current_thread(vm)->last_error = vm_current_thread(vm)->exception;
 }
 
 static void report_exception(VM* vm) {
-    if (!vm->has_exception) return;
-    Value ex = vm->exception;
+    if (!vm_current_thread(vm)->has_exception) return;
+    Value ex = vm_current_thread(vm)->exception;
     if (IS_STRING(ex)) {
         fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "%s\n", AS_CSTRING(ex));
     } else {
         fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "<exception>\n");
     }
 
-    for (int i = vm->current_thread->frame_count - 1; i >= 0; i--) {
-        CallFrame* frame = &vm->current_thread->frames[i];
+    for (int i = vm_current_thread(vm)->frame_count - 1; i >= 0; i--) {
+        CallFrame* frame = &vm_current_thread(vm)->frames[i];
         ObjFunction* function = frame->closure->function;
         size_t instruction = frame->ip - function->chunk.code - 1;
         fprintf(stderr, "[line %d] in ", function->chunk.lines[instruction]);
@@ -123,12 +216,12 @@ static void report_exception(VM* vm) {
 }
 
 Value peek(VM* vm, int distance) {
-    return vm->current_thread->stack_top[-1 - distance];
+    return vm_current_thread(vm)->stack_top[-1 - distance];
 }
 
 static int handle_exception(VM* vm, CallFrame** frame, uint8_t** ip) {
-    if (!vm->has_exception) return 0;
-    ObjThread* thread = vm->current_thread;
+    if (!vm_current_thread(vm)->has_exception) return 0;
+    ObjThread* thread = vm_current_thread(vm);
     while (thread->handler_count > 0) {
         ExceptionHandler* handler = &thread->handlers[thread->handler_count - 1];
 
@@ -141,8 +234,8 @@ static int handle_exception(VM* vm, CallFrame** frame, uint8_t** ip) {
         if (thread->frame_count == 0) {
             report_exception(vm);
             reset_stack(vm);
-            vm->has_exception = 0;
-            vm->exception = NIL_VAL;
+            thread->has_exception = 0;
+            thread->exception = NIL_VAL;
             return 0;
         }
 
@@ -152,9 +245,9 @@ static int handle_exception(VM* vm, CallFrame** frame, uint8_t** ip) {
         if (handler->has_except && !handler->in_except) {
             handler->in_except = 1;
             *ip = handler->except_ip;
-            push(vm, vm->exception);
-            vm->has_exception = 0;
-            vm->exception = NIL_VAL;
+            push(vm, thread->exception);
+            thread->has_exception = 0;
+            thread->exception = NIL_VAL;
             return 1;
         }
 
@@ -169,25 +262,62 @@ static int handle_exception(VM* vm, CallFrame** frame, uint8_t** ip) {
 
     report_exception(vm);
     reset_stack(vm);
-    vm->has_exception = 0;
-    vm->exception = NIL_VAL;
+    thread->has_exception = 0;
+    thread->exception = NIL_VAL;
     return 0;
 }
 
 static volatile sig_atomic_t interrupt_requested = 0;
+
+static pthread_key_t current_thread_key;
+static pthread_once_t current_thread_key_once = PTHREAD_ONCE_INIT;
+
+static void make_current_thread_key(void) {
+    pthread_key_create(&current_thread_key, NULL);
+}
+
+ObjThread* vm_current_thread(VM* vm) {
+    if (!vm->use_thread_tls) {
+        return vm->current_thread;
+    }
+    pthread_once(&current_thread_key_once, make_current_thread_key);
+    ObjThread* t = (ObjThread*)pthread_getspecific(current_thread_key);
+    if (t != NULL) return t;
+    return vm->current_thread;
+}
+
+void vm_set_current_thread(VM* vm, ObjThread* thread) {
+    if (!vm->use_thread_tls) {
+        vm->current_thread = thread;
+        return;
+    }
+    pthread_once(&current_thread_key_once, make_current_thread_key);
+    pthread_setspecific(current_thread_key, thread);
+    if (thread == NULL || thread == vm->current_thread) return;
+    if (vm->current_thread == NULL) {
+        vm->current_thread = thread;
+    }
+}
+
+void vm_enable_thread_tls(VM* vm) {
+    if (vm->use_thread_tls) return;
+    vm->use_thread_tls = 1;
+    pthread_once(&current_thread_key_once, make_current_thread_key);
+    pthread_setspecific(current_thread_key, vm->current_thread);
+}
 
 void vm_request_interrupt(void) {
     interrupt_requested = 1;
 }
 
 void push(VM* vm, Value value) {
-    *vm->current_thread->stack_top = value;
-    vm->current_thread->stack_top++;
+    *vm_current_thread(vm)->stack_top = value;
+    vm_current_thread(vm)->stack_top++;
 }
 
 Value pop(VM* vm) {
-    vm->current_thread->stack_top--;
-    return *vm->current_thread->stack_top;
+    vm_current_thread(vm)->stack_top--;
+    return *vm_current_thread(vm)->stack_top;
 }
 
 static Value get_metamethod_cached(VM* vm, Value val, ObjString* name);
@@ -198,7 +328,7 @@ static int finish_closure_call(VM* vm, ObjClosure* closure, int arg_count) {
 
     if (function->param_types_count > 0) {
         int check_count = function->param_types_count < function->arity ? function->param_types_count : function->arity;
-        Value* args = vm->current_thread->stack_top - arg_count;
+        Value* args = vm_current_thread(vm)->stack_top - arg_count;
         for (int i = 0; i < check_count; i++) {
             uint8_t type = function->param_types[i];
             if (type == TYPEHINT_ANY) continue;
@@ -209,32 +339,37 @@ static int finish_closure_call(VM* vm, ObjClosure* closure, int arg_count) {
         }
     }
 
-    if (vm->current_thread->frame_count == vm->current_thread->frame_capacity) {
+    if (vm_current_thread(vm)->frame_count == vm_current_thread(vm)->frame_capacity) {
         vm_runtime_error(vm, "Stack overflow.");
         return 0;
     }
 
-    CallFrame* frame = &vm->current_thread->frames[vm->current_thread->frame_count++];
+    CallFrame* frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count++];
     frame->closure = closure;
     frame->ip = function->chunk.code;
-    frame->slots = vm->current_thread->stack_top - arg_count - 1;
+    frame->slots = vm_current_thread(vm)->stack_top - arg_count - 1;
     return 1;
 }
 
 int call_value(VM* vm, Value callee, int arg_count, CallFrame** frame, uint8_t** ip) {
     if (IS_NATIVE(callee)) {
-        NativeFn native = AS_NATIVE(callee);
-        Value* args = vm->current_thread->stack_top - arg_count;
-        vm->current_thread->stack_top -= arg_count + 1; // Pop args and callee
+        ObjNative* native_obj = AS_NATIVE_OBJ(callee);
+        NativeFn native = native_obj->function;
+        Value* args = vm_current_thread(vm)->stack_top - arg_count;
+        vm_current_thread(vm)->stack_top -= arg_count + 1; // Pop args and callee
 
         (*frame)->ip = *ip;
-        ObjThread* current = vm->current_thread;
+        int fast = try_fast_native_call(vm, native_obj, arg_count, args);
+        if (fast > 0) {
+            return 1;
+        }
+        ObjThread* current = vm_current_thread(vm);
         if (!native(vm, arg_count, args)) {
             return 0;
         }
 
-        if (vm->current_thread != current) {
-            *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        if (vm_current_thread(vm) != current) {
+            *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
             *ip = (*frame)->ip;
         }
         return 1;
@@ -245,7 +380,7 @@ int call_value(VM* vm, Value callee, int arg_count, CallFrame** frame, uint8_t**
         if (!call(vm, AS_CLOSURE(callee), arg_count)) {
             return 0;
         }
-        *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
         return 1;
     }
@@ -254,7 +389,7 @@ int call_value(VM* vm, Value callee, int arg_count, CallFrame** frame, uint8_t**
 }
 
 static int create_generator_positional(VM* vm, ObjClosure* closure, int arg_count) {
-    ObjThread* caller = vm->current_thread;
+    ObjThread* caller = vm_current_thread(vm);
     Value* args_start = caller->stack_top - arg_count;
 
     ObjThread* gen = new_thread_with_caps(GEN_STACK_MAX, GEN_FRAMES_MAX, GEN_HANDLERS_MAX);
@@ -263,16 +398,16 @@ static int create_generator_positional(VM* vm, ObjClosure* closure, int arg_coun
     gen->generator_mode = 0;
     gen->generator_index = 0;
 
-    vm->current_thread = gen;
+    vm_set_current_thread(vm, gen);
     push(vm, OBJ_VAL(closure));
     for (int i = 0; i < arg_count; i++) {
         push(vm, args_start[i]);
     }
     if (!call(vm, closure, arg_count)) {
-        vm->current_thread = caller;
+        vm_set_current_thread(vm, caller);
         return 0;
     }
-    vm->current_thread = caller;
+    vm_set_current_thread(vm, caller);
 
     caller->stack_top -= arg_count + 1;
     push(vm, OBJ_VAL(gen));
@@ -280,7 +415,7 @@ static int create_generator_positional(VM* vm, ObjClosure* closure, int arg_coun
 }
 
 static int create_generator_named(VM* vm, ObjClosure* closure, int arg_count) {
-    ObjThread* caller = vm->current_thread;
+    ObjThread* caller = vm_current_thread(vm);
     Value* args_start = caller->stack_top - arg_count;
 
     ObjThread* gen = new_thread_with_caps(GEN_STACK_MAX, GEN_FRAMES_MAX, GEN_HANDLERS_MAX);
@@ -289,16 +424,16 @@ static int create_generator_named(VM* vm, ObjClosure* closure, int arg_count) {
     gen->generator_mode = 0;
     gen->generator_index = 0;
 
-    vm->current_thread = gen;
+    vm_set_current_thread(vm, gen);
     push(vm, OBJ_VAL(closure));
     for (int i = 0; i < arg_count; i++) {
         push(vm, args_start[i]);
     }
     if (!call_named(vm, closure, arg_count)) {
-        vm->current_thread = caller;
+        vm_set_current_thread(vm, caller);
         return 0;
     }
-    vm->current_thread = caller;
+    vm_set_current_thread(vm, caller);
 
     caller->stack_top -= arg_count + 1;
     push(vm, OBJ_VAL(gen));
@@ -314,11 +449,11 @@ static int invoke_call_with_arg_count(VM* vm, int arg_count, CallFrame** frame, 
         // Stack: [callee, arg1, ..., arg_n]
         // We want: [method, receiver, arg1, ..., arg_n]
         for (int i = 0; i < arg_count; i++) {
-            vm->current_thread->stack_top[0 - i] = vm->current_thread->stack_top[-1 - i];
+            vm_current_thread(vm)->stack_top[0 - i] = vm_current_thread(vm)->stack_top[-1 - i];
         }
-        vm->current_thread->stack_top[-arg_count] = bound->receiver;
-        vm->current_thread->stack_top[-arg_count - 1] = method_val;
-        vm->current_thread->stack_top++;
+        vm_current_thread(vm)->stack_top[-arg_count] = bound->receiver;
+        vm_current_thread(vm)->stack_top[-arg_count - 1] = method_val;
+        vm_current_thread(vm)->stack_top++;
         arg_count++;
         callee = method_val;
     }
@@ -344,12 +479,12 @@ static int invoke_call_with_arg_count(VM* vm, int arg_count, CallFrame** frame, 
             // Stack: [callee, arg1, ..., arg_n]
             // We want: [mm, callee, arg1, ..., arg_n]
             for (int i = 0; i < arg_count; i++) {
-                vm->current_thread->stack_top[0 - i] = vm->current_thread->stack_top[-1 - i];
+                vm_current_thread(vm)->stack_top[0 - i] = vm_current_thread(vm)->stack_top[-1 - i];
             }
 
-            vm->current_thread->stack_top[-arg_count] = callee;      // Insert table as first arg
-            vm->current_thread->stack_top[-arg_count - 1] = mm;      // Replace callee slot with callable
-            vm->current_thread->stack_top++;                        // Increase stack size
+            vm_current_thread(vm)->stack_top[-arg_count] = callee;      // Insert table as first arg
+            vm_current_thread(vm)->stack_top[-arg_count - 1] = mm;      // Replace callee slot with callable
+            vm_current_thread(vm)->stack_top++;                        // Increase stack size
 
             arg_count++;
             if (!call_value(vm, mm, arg_count, frame, ip)) {
@@ -370,11 +505,11 @@ static int invoke_call_with_named_arg_count(VM* vm, int arg_count, CallFrame** f
         Value method_val = OBJ_VAL(bound->method);
 
         for (int i = 0; i < arg_count; i++) {
-            vm->current_thread->stack_top[0 - i] = vm->current_thread->stack_top[-1 - i];
+            vm_current_thread(vm)->stack_top[0 - i] = vm_current_thread(vm)->stack_top[-1 - i];
         }
-        vm->current_thread->stack_top[-arg_count] = bound->receiver;
-        vm->current_thread->stack_top[-arg_count - 1] = method_val;
-        vm->current_thread->stack_top++;
+        vm_current_thread(vm)->stack_top[-arg_count] = bound->receiver;
+        vm_current_thread(vm)->stack_top[-arg_count - 1] = method_val;
+        vm_current_thread(vm)->stack_top++;
         arg_count++;
         callee = method_val;
     }
@@ -397,7 +532,7 @@ static int invoke_call_with_named_arg_count(VM* vm, int arg_count, CallFrame** f
         if (!call_named(vm, AS_CLOSURE(callee), arg_count)) {
             return 0;
         }
-        *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
         return 1;
     }
@@ -406,12 +541,12 @@ static int invoke_call_with_named_arg_count(VM* vm, int arg_count, CallFrame** f
         Value mm = get_metamethod_cached(vm, callee, vm->mm_call);
         if (IS_CLOSURE(mm) || IS_NATIVE(mm)) {
             for (int i = 0; i < arg_count; i++) {
-                vm->current_thread->stack_top[0 - i] = vm->current_thread->stack_top[-1 - i];
+                vm_current_thread(vm)->stack_top[0 - i] = vm_current_thread(vm)->stack_top[-1 - i];
             }
 
-            vm->current_thread->stack_top[-arg_count] = callee;
-            vm->current_thread->stack_top[-arg_count - 1] = mm;
-            vm->current_thread->stack_top++;
+            vm_current_thread(vm)->stack_top[-arg_count] = callee;
+            vm_current_thread(vm)->stack_top[-arg_count - 1] = mm;
+            vm_current_thread(vm)->stack_top++;
 
             arg_count++;
             if (IS_CLOSURE(mm)) {
@@ -419,7 +554,7 @@ static int invoke_call_with_named_arg_count(VM* vm, int arg_count, CallFrame** f
                 if (!call_named(vm, AS_CLOSURE(mm), arg_count)) {
                     return 0;
                 }
-                *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+                *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
                 *ip = (*frame)->ip;
             } else {
                 if (!call_value(vm, mm, arg_count, frame, ip)) {
@@ -461,7 +596,7 @@ static Value get_metamethod_cached(VM* vm, Value val, ObjString* name) {
 
 static ObjUpvalue* capture_upvalue(VM* vm, Value* local) {
     ObjUpvalue* prev_upvalue = NULL;
-    ObjUpvalue* upvalue = vm->current_thread->open_upvalues;
+    ObjUpvalue* upvalue = vm_current_thread(vm)->open_upvalues;
 
     // Find existing upvalue or position to insert
     while (upvalue != NULL && upvalue->location > local) {
@@ -479,7 +614,7 @@ static ObjUpvalue* capture_upvalue(VM* vm, Value* local) {
     created_upvalue->next = upvalue;
 
     if (prev_upvalue == NULL) {
-        vm->current_thread->open_upvalues = created_upvalue;
+        vm_current_thread(vm)->open_upvalues = created_upvalue;
     } else {
         prev_upvalue->next = created_upvalue;
     }
@@ -489,17 +624,17 @@ static ObjUpvalue* capture_upvalue(VM* vm, Value* local) {
 
 static void close_upvalues(VM* vm, Value* last) {
 
-    while (vm->current_thread->open_upvalues != NULL &&
+    while (vm_current_thread(vm)->open_upvalues != NULL &&
 
-           vm->current_thread->open_upvalues->location >= last) {
+           vm_current_thread(vm)->open_upvalues->location >= last) {
 
-        ObjUpvalue* upvalue = vm->current_thread->open_upvalues;
+        ObjUpvalue* upvalue = vm_current_thread(vm)->open_upvalues;
 
         upvalue->closed = *upvalue->location;
 
         upvalue->location = &upvalue->closed;
 
-        vm->current_thread->open_upvalues = upvalue->next;
+        vm_current_thread(vm)->open_upvalues = upvalue->next;
 
     }
 
@@ -524,7 +659,7 @@ int call(VM* vm, ObjClosure* closure, int arg_count) {
         // Pop extra args and put them in the varargs array part so
         // call-spread (`fn(*args)`) can iterate them via table_get_array.
         for (int i = 0; i < extra_args; i++) {
-            Value arg = vm->current_thread->stack_top[-extra_args + i];
+            Value arg = vm_current_thread(vm)->stack_top[-extra_args + i];
             table_set_array(&varargs->table, i + 1, arg);
             #ifdef DEBUG_VARIADIC
             printf("Vararg[%d] = ", i + 1);
@@ -534,7 +669,7 @@ int call(VM* vm, ObjClosure* closure, int arg_count) {
         }
 
         // Remove the extra args from the stack
-        vm->current_thread->stack_top -= extra_args;
+        vm_current_thread(vm)->stack_top -= extra_args;
 
         // Push the varargs table as the last argument
         push(vm, OBJ_VAL(varargs));
@@ -603,7 +738,7 @@ static int call_named(VM* vm, ObjClosure* closure, int arg_count) {
         return 0;
     }
 
-    Value named_value = vm->current_thread->stack_top[-1];
+    Value named_value = vm_current_thread(vm)->stack_top[-1];
     if (!IS_TABLE(named_value)) {
         vm_runtime_error(vm, "Named call requires a table as final argument.");
         return 0;
@@ -614,7 +749,7 @@ static int call_named(VM* vm, ObjClosure* closure, int arg_count) {
     int non_variadic_arity = function->is_variadic ? (function->arity - 1) : function->arity;
     if (non_variadic_arity < 0) non_variadic_arity = 0;
 
-    Value* incoming = vm->current_thread->stack_top - arg_count;
+    Value* incoming = vm_current_thread(vm)->stack_top - arg_count;
     Value bound_args[256];
     uint8_t assigned[256];
     memset(assigned, 0, sizeof(assigned));
@@ -709,7 +844,7 @@ static int call_named(VM* vm, ObjClosure* closure, int arg_count) {
         bound_args[non_variadic_arity] = OBJ_VAL(varargs);
     }
 
-    vm->current_thread->stack_top -= arg_count;
+    vm_current_thread(vm)->stack_top -= arg_count;
     for (int i = 0; i < function->arity; i++) {
         push(vm, bound_args[i]);
     }
@@ -718,8 +853,11 @@ static int call_named(VM* vm, ObjClosure* closure, int arg_count) {
 }
 
 static void mark_roots(VM* vm) {
-    if (vm->current_thread != NULL) {
-        mark_object((struct Obj*)vm->current_thread);
+    if (vm_current_thread(vm) != NULL) {
+        mark_object((struct Obj*)vm_current_thread(vm));
+    }
+    for (ObjThread* parked = vm->gc_parked_threads; parked != NULL; parked = parked->gc_park_next) {
+        mark_object((struct Obj*)parked);
     }
     if (vm->mm_index != NULL) mark_object((struct Obj*)vm->mm_index);
     if (vm->mm_newindex != NULL) mark_object((struct Obj*)vm->mm_newindex);
@@ -728,8 +866,13 @@ static void mark_roots(VM* vm) {
     if (vm->mm_new != NULL) mark_object((struct Obj*)vm->mm_new);
     if (vm->mm_append != NULL) mark_object((struct Obj*)vm->mm_append);
     if (vm->mm_next != NULL) mark_object((struct Obj*)vm->mm_next);
-    if (vm->has_exception) mark_value(vm->exception);
-
+    if (vm->mm_slice != NULL) mark_object((struct Obj*)vm->mm_slice);
+    if (vm->str_module_name != NULL) mark_object((struct Obj*)vm->str_module_name);
+    if (vm->str_upper_name != NULL) mark_object((struct Obj*)vm->str_upper_name);
+    if (vm->str_lower_name != NULL) mark_object((struct Obj*)vm->str_lower_name);
+    if (vm->slice_name != NULL) mark_object((struct Obj*)vm->slice_name);
+    if (!IS_NIL(vm->str_upper_fn)) mark_value(vm->str_upper_fn);
+    if (!IS_NIL(vm->str_lower_fn)) mark_value(vm->str_lower_fn);
     // Mark globals
     for (int i = 0; i < vm->globals.capacity; i++) {
         Entry* entry = &vm->globals.entries[i];
@@ -741,13 +884,13 @@ static void mark_roots(VM* vm) {
 }
 
 void init_vm(VM* vm) {
-   vm->current_thread = new_thread(); // Create initial (main) thread
-   vm->current_thread->vm = vm;
+   vm->current_thread = new_thread(); // Main thread root/fallback
+   vm_set_current_thread(vm, vm->current_thread);
+   vm_current_thread(vm)->vm = vm;
+   vm->gc_parked_threads = NULL;
+   vm->use_thread_tls = 0;
    vm->disable_gc = 0;
    vm->is_repl = 0;
-   vm->pending_set_local_count = 0;
-   vm->has_exception = 0;
-   vm->exception = NIL_VAL;
    vm->mm_index = NULL;
    vm->mm_newindex = NULL;
    vm->mm_str = NULL;
@@ -755,12 +898,19 @@ void init_vm(VM* vm) {
    vm->mm_new = NULL;
    vm->mm_append = NULL;
    vm->mm_next = NULL;
+   vm->mm_slice = NULL;
+   vm->str_module_name = NULL;
+   vm->str_upper_name = NULL;
+   vm->str_lower_name = NULL;
+   vm->slice_name = NULL;
+   vm->str_upper_fn = NIL_VAL;
+   vm->str_lower_fn = NIL_VAL;
 
     init_table(&vm->globals);
     init_table(&vm->modules);
     vm->cli_argc = 0;
     vm->cli_argv = NULL;
-   vm->current_thread->open_upvalues = NULL;
+   vm_current_thread(vm)->open_upvalues = NULL;
 
     vm->mm_index = copy_string("__index", 7);
     vm->mm_newindex = copy_string("__newindex", 10);
@@ -769,6 +919,11 @@ void init_vm(VM* vm) {
     vm->mm_new = copy_string("__new", 5);
     vm->mm_append = copy_string("__append", 8);
     vm->mm_next = copy_string("__next", 6);
+    vm->mm_slice = copy_string("__slice", 7);
+    vm->str_module_name = copy_string("string", 6);
+    vm->str_upper_name = copy_string("upper", 5);
+    vm->str_lower_name = copy_string("lower", 5);
+    vm->slice_name = copy_string("slice", 5);
 
     // Register built-in native functions (from libs module)
     register_libs(vm);
@@ -780,8 +935,8 @@ void free_vm(VM* vm) {
    // The current_thread will be freed as part of GC if it's reachable.
     // We manually free the main thread if it's not part of GC collection.
     // Since we explicitly control it, we can free it here.
-    // free_object((struct Obj*)vm->current_thread);
-    vm->current_thread = NULL;
+    // free_object((struct Obj*)vm_current_thread(vm));
+    vm_set_current_thread(vm, NULL);
 
     collect_garbage(vm); // Final garbage collection
 #ifdef DEBUG_LOG_GC
@@ -846,7 +1001,7 @@ Value get_metamethod(VM* vm, Value val, const char* name) {
 }
 
 InterpretResult vm_run(VM* vm, int min_frame_count) {
-    CallFrame* frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+    CallFrame* frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
     uint8_t* ip = frame->ip;
 
 #define READ_BYTE() (*ip++)
@@ -863,7 +1018,7 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
         }
 #ifdef DEBUG_TRACE_EXECUTION
         printf("          ");
-        for (Value* slot = vm->current_thread->stack; slot < vm->current_thread->stack_top; slot++) {
+        for (Value* slot = vm_current_thread(vm)->stack; slot < vm_current_thread(vm)->stack_top; slot++) {
             printf("[ ");
             print_value(*slot);
             printf(" ]");
@@ -976,7 +1131,7 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                 break;
             }
             case OP_CLOSE_UPVALUE: {
-                close_upvalues(vm, vm->current_thread->stack_top - 1);
+                close_upvalues(vm, vm_current_thread(vm)->stack_top - 1);
                 pop(vm);
                 break;
             }
@@ -1027,6 +1182,24 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
             case OP_CALL: {
                 int arg_count = READ_BYTE();
                 if (!invoke_call_with_arg_count(vm, arg_count, &frame, &ip)) {
+                    goto runtime_error;
+                }
+                break;
+            }
+            case OP_CALL0: {
+                if (!invoke_call_with_arg_count(vm, 0, &frame, &ip)) {
+                    goto runtime_error;
+                }
+                break;
+            }
+            case OP_CALL1: {
+                if (!invoke_call_with_arg_count(vm, 1, &frame, &ip)) {
+                    goto runtime_error;
+                }
+                break;
+            }
+            case OP_CALL2: {
+                if (!invoke_call_with_arg_count(vm, 2, &frame, &ip)) {
                     goto runtime_error;
                 }
                 break;
@@ -1133,18 +1306,18 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
             case OP_RETURN: {
                 Value result = pop(vm);
                 close_upvalues(vm, frame->slots);
-                discard_handlers_for_frame_return(vm->current_thread);
-                vm->current_thread->frame_count--;
+                discard_handlers_for_frame_return(vm_current_thread(vm));
+                vm_current_thread(vm)->frame_count--;
 
                 // Restore stack and push result
-                vm->current_thread->stack_top = frame->slots;
+                vm_current_thread(vm)->stack_top = frame->slots;
                 push(vm, result);
                 apply_pending_set_local(vm);
 
-                if (vm->current_thread->frame_count <= min_frame_count) {
-                    if (vm->current_thread->caller != NULL) {
-                        ObjThread* caller = vm->current_thread->caller;
-                        vm->current_thread->caller = NULL;
+                if (vm_current_thread(vm)->frame_count <= min_frame_count) {
+                    if (vm_current_thread(vm)->caller != NULL) {
+                        ObjThread* caller = vm_current_thread(vm)->caller;
+                        vm_current_thread(vm)->caller = NULL;
 
                         // Check stack overflow
                         if (caller->stack_top + 2 >= caller->stack + caller->stack_capacity) {
@@ -1152,8 +1325,8 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                             goto runtime_error;
                         }
 
-                        if (vm->current_thread->is_generator && vm->current_thread->generator_mode) {
-                            vm->current_thread->generator_mode = 0;
+                        if (vm_current_thread(vm)->is_generator && vm_current_thread(vm)->generator_mode) {
+                            vm_current_thread(vm)->generator_mode = 0;
                             *caller->stack_top = NIL_VAL;
                             caller->stack_top++;
                             *caller->stack_top = NIL_VAL;
@@ -1165,8 +1338,8 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                             caller->stack_top++;
                         }
 
-                        vm->current_thread = caller;
-                        frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+                        vm_set_current_thread(vm, caller);
+                        frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
                         ip = frame->ip;
                         break;
                     }
@@ -1179,22 +1352,22 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                     return INTERPRET_OK;
                 }
 
-                frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+                frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
                 ip = frame->ip;
                 break;
             }
             case OP_RETURN_N: {
                 uint8_t count = READ_BYTE();
-                Value* results = vm->current_thread->stack_top - count;
+                Value* results = vm_current_thread(vm)->stack_top - count;
                 close_upvalues(vm, frame->slots);
-                discard_handlers_for_frame_return(vm->current_thread);
-                vm->current_thread->frame_count--;
+                discard_handlers_for_frame_return(vm_current_thread(vm));
+                vm_current_thread(vm)->frame_count--;
 
                 // Copy results to where the function was called (frame->slots)
                 // This replaces the function + args with the return values
                 Value* dest = frame->slots;
                 #ifdef DEBUG_MULTI_RETURN
-                printf("OP_RETURN_N: count=%d, dest offset=%ld\n", count, dest - vm->current_thread->stack);
+                printf("OP_RETURN_N: count=%d, dest offset=%ld\n", count, dest - vm_current_thread(vm)->stack);
                 for (int i = 0; i < count; i++) {
                     printf("  result[%d] = ", i);
                     print_value(results[i]);
@@ -1204,21 +1377,21 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                 for (int i = 0; i < count; i++) {
                     dest[i] = results[i];
                 }
-                vm->current_thread->stack_top = dest + count;
+                vm_current_thread(vm)->stack_top = dest + count;
                 apply_pending_set_local(vm);
 
-                if (vm->current_thread->frame_count <= min_frame_count) {
-                    if (vm->current_thread->caller != NULL) {
-                        ObjThread* caller = vm->current_thread->caller;
-                        vm->current_thread->caller = NULL;
+                if (vm_current_thread(vm)->frame_count <= min_frame_count) {
+                    if (vm_current_thread(vm)->caller != NULL) {
+                        ObjThread* caller = vm_current_thread(vm)->caller;
+                        vm_current_thread(vm)->caller = NULL;
 
                         if (caller->stack_top + 1 + count >= caller->stack + caller->stack_capacity) {
                             vm_runtime_error(vm, "Stack overflow in caller.");
                             goto runtime_error;
                         }
 
-                        if (vm->current_thread->is_generator && vm->current_thread->generator_mode) {
-                            vm->current_thread->generator_mode = 0;
+                        if (vm_current_thread(vm)->is_generator && vm_current_thread(vm)->generator_mode) {
+                            vm_current_thread(vm)->generator_mode = 0;
                             *caller->stack_top = NIL_VAL;
                             caller->stack_top++;
                             *caller->stack_top = NIL_VAL;
@@ -1227,35 +1400,35 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                             *caller->stack_top = BOOL_VAL(1);
                             caller->stack_top++;
 
-                            Value* results = vm->current_thread->stack_top - count;
+                            Value* results = vm_current_thread(vm)->stack_top - count;
                             for (int i = 0; i < count; i++) {
                                 *caller->stack_top = results[i];
                                 caller->stack_top++;
                             }
                         }
 
-                        vm->current_thread = caller;
-                        frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+                        vm_set_current_thread(vm, caller);
+                        frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
                         ip = frame->ip;
                         break;
                     }
 
                     if (min_frame_count == 0) {
-                        vm->current_thread->stack_top -= count;
+                        vm_current_thread(vm)->stack_top -= count;
                     }
                     return INTERPRET_OK;
                 }
 
-                frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+                frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
                 ip = frame->ip;
                 break;
             }
             case OP_ADJUST_STACK: {
                 uint8_t target_depth = READ_BYTE();
-                vm->current_thread->stack_top = frame->slots + target_depth;
+                vm_current_thread(vm)->stack_top = frame->slots + target_depth;
                 #ifdef DEBUG_MULTI_RETURN
                 printf("OP_ADJUST_STACK: target depth=%d, new stack_top offset=%ld\n",
-                       target_depth, vm->current_thread->stack_top - vm->current_thread->stack);
+                       target_depth, vm_current_thread(vm)->stack_top - vm_current_thread(vm)->stack);
                 #endif
                 break;
             }

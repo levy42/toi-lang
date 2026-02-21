@@ -12,6 +12,7 @@ void init_table(Table* table) {
     table->count = 0;
     table->capacity = 0;
     table->entries = NULL;
+    table->version = 0;
     table->array = NULL;
     table->array_capacity = 0;
     table->array_max = 0;
@@ -92,6 +93,7 @@ int table_set(Table* table, ObjString* key, Value value) {
 
     entry->key = key;
     entry->value = value;
+    table->version++;
     return is_new_key;
 }
 
@@ -104,6 +106,7 @@ int table_delete(Table* table, ObjString* key) {
     // Place a tombstone.
     entry->key = NULL;
     entry->value = BOOL_VAL(1);
+    table->version++;
     return 1;
 }
 

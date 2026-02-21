@@ -21,6 +21,9 @@ fn _new_http_server_app(cls, opts = nil)
   app.gc_every_requests = opts.gc_every_requests or 1000
   app.log_every_requests = opts.log_every_requests or 1000
   app.trim_after_gc = opts.trim_after_gc
+  app.worker_threads = opts.worker_threads or 0
+  app.worker_select_timeout = opts.worker_select_timeout or 0.05
+  app.worker_queue_capacity = opts.worker_queue_capacity or 0
   if app.trim_after_gc == nil
     app.trim_after_gc = true
   app.handler = opts.handler

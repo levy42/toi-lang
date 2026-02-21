@@ -189,9 +189,9 @@ static int gen_next_native(VM* vm, int arg_count, Value* args) {
         return 2;
     }
 
-    thread->caller = vm->current_thread;
+    thread->caller = vm_current_thread(vm);
     thread->generator_mode = 1;
-    vm->current_thread = thread;
+    vm_set_current_thread(vm, thread);
     return 1;
 }
 
@@ -358,7 +358,7 @@ int core_tostring(VM* vm, int arg_count, Value* args) {
             Value str_method;
             ObjString* str_key = copy_string("__str", 5);
             if (table_get(&table->metatable->table, str_key, &str_method) && IS_CLOSURE(str_method)) {
-                int saved_frame_count = vm->current_thread->frame_count;
+                int saved_frame_count = vm_current_thread(vm)->frame_count;
 
                 push(vm, str_method);
                 push(vm, val);
@@ -452,7 +452,7 @@ static int is_falsey_simple(Value v) {
 
 static int call_bool_metamethod(VM* vm, Value receiver, Value method, int* out_bool) {
     if (IS_CLOSURE(method)) {
-        int saved_frame_count = vm->current_thread->frame_count;
+        int saved_frame_count = vm_current_thread(vm)->frame_count;
 
         push(vm, method);
         push(vm, receiver);
@@ -475,8 +475,8 @@ static int call_bool_metamethod(VM* vm, Value receiver, Value method, int* out_b
         push(vm, method);
         push(vm, receiver);
 
-        Value* call_args = vm->current_thread->stack_top - 1;
-        vm->current_thread->stack_top -= 2;
+        Value* call_args = vm_current_thread(vm)->stack_top - 1;
+        vm_current_thread(vm)->stack_top -= 2;
 
         if (!AS_NATIVE(method)(vm, 1, call_args)) {
             return 0;
@@ -883,6 +883,8 @@ static int mem_native(VM* vm, int arg_count, Value* args) {
 
 void register_core(VM* vm) {
     const NativeReg core_funcs[] = {
+        {"str", core_tostring},
+        {"tostring", core_tostring},
         {"exit", exit_native},
         {"bool", bool_native},
         {"int", int_native},

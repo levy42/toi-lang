@@ -140,6 +140,21 @@ int vm_handle_op_slice(VM* vm, CallFrame** frame, uint8_t** ip) {
         return 0;
     }
 
+    Value mm_slice = get_metamethod_cached_local(vm, obj, vm->mm_slice);
+    if (!IS_NIL(mm_slice)) {
+        if (!IS_CLOSURE(mm_slice) && !IS_NATIVE(mm_slice)) {
+            vm_runtime_error(vm, "__slice must be a function.");
+            return 0;
+        }
+        push(vm, mm_slice);
+        push(vm, obj);
+        push(vm, start);
+        push(vm, end);
+        push(vm, step);
+        if (!call_value(vm, mm_slice, 4, frame, ip)) return 0;
+        return 1;
+    }
+
     if (IS_NIL(start) || IS_NIL(end)) {
         int len = 0;
         if (IS_TABLE(obj)) {
@@ -170,8 +185,7 @@ int vm_handle_op_slice(VM* vm, CallFrame** frame, uint8_t** ip) {
     }
 
     Value slice_fn = NIL_VAL;
-    ObjString* name = copy_string("slice", 5);
-    if (!table_get(&vm->globals, name, &slice_fn)) {
+    if (!table_get(&vm->globals, vm->slice_name, &slice_fn)) {
         vm_runtime_error(vm, "slice not found.");
         return 0;
     }

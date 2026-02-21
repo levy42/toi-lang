@@ -12,7 +12,7 @@ int vm_handle_op_print(VM* vm, CallFrame** frame, uint8_t** ip, InterpretResult*
             ObjString* str_key = vm->mm_str;
             if (table_get(&table->metatable->table, str_key, &str_method) &&
                 (IS_CLOSURE(str_method) || IS_NATIVE(str_method))) {
-                int saved_frame_count = vm->current_thread->frame_count;
+                int saved_frame_count = vm_current_thread(vm)->frame_count;
 
                 push(vm, str_method);
                 push(vm, v);

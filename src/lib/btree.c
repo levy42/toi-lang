@@ -1423,19 +1423,6 @@ static int btree_close_native(VM* vm, int arg_count, Value* args) {
     RETURN_TRUE;
 }
 
-static int btree_index_native(VM* vm, int arg_count, Value* args) {
-    ASSERT_ARGC_EQ(2);
-    ASSERT_USERDATA(0);
-    ASSERT_STRING(1);
-
-    ObjUserdata* u = GET_USERDATA(0);
-    if (!u->metatable) RETURN_NIL;
-
-    Value result = NIL_VAL;
-    table_get(&u->metatable->table, GET_STRING(1), &result);
-    RETURN_VAL(result);
-}
-
 void register_btree(VM* vm) {
     const NativeReg funcs[] = {
         {"open", btree_open_native},
@@ -1468,7 +1455,7 @@ void register_btree(VM* vm) {
 
     ObjString* idx = copy_string("__index", 7);
     push(vm, OBJ_VAL(idx));
-    push(vm, OBJ_VAL(new_native(btree_index_native, idx)));
+    push(vm, OBJ_VAL(mt));
     table_set(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm);
     pop(vm);

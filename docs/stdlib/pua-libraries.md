@@ -33,10 +33,27 @@ CLI application framework:
 - `app.help()`
 - `app.run([argv])`
 - `printc(text)` ANSI-color helper
+- `status(msg, [opts])` spinner-style status line helper
+- `progress(total, [opts])` single-line progress bar helper
+  - status supports manual `tick()` and optional auto mode via `start_auto([interval])` when `thread` is available.
+  - both expose context-manager hooks `__enter/__exit` for `with` blocks.
 
 ## `lib.scheduler`
 
 Cooperative scheduling utilities for coroutine-driven workflows.
+
+## `lib.selector`
+
+Small readiness selector helper over native `poll` (with `socket.select` fallback).
+
+Primary API:
+
+- `selector.new() -> sel`
+- `selector.add_read(sel, sock)`
+- `selector.add_write(sel, sock)`
+- `selector.remove(sel, sock)`
+- `selector.clear(sel)`
+- `selector.wait(sel, [timeout_seconds]) -> ready_read, ready_write`
 
 ## `lib.http_server`
 

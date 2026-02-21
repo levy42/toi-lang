@@ -12,6 +12,11 @@ Available native modules:
 - `time`
 - `io`
 - `os`
+- `stat`
+- `dir`
+- `signal`
+- `mmap`
+- `poll`
 - `coroutine`
 - `string`
 - `table`
@@ -21,6 +26,9 @@ Available native modules:
 - `template`
 - `http`
 - `inspect`
+- `regex`
+- `fnmatch`
+- `glob`
 - `binary`
 - `struct`
 - `btree`

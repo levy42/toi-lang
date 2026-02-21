@@ -1,0 +1,119 @@
+table = import table
+socket = import socket
+
+poll = nil
+try
+  poll = import poll
+except e
+  poll = nil
+
+fn fd_key(fd)
+  return "fd:" + str(int(fd))
+
+fn has_sock(list, sock)
+  return table.find_index(list, sock) > 0
+
+fn ensure_event(events, name)
+  if table.find_index(events, name) == 0
+    table.insert(events, name)
+
+Selector = {}
+
+Selector.new = fn()
+  return {read_socks = {}, write_socks = {}}
+
+Selector.clear = fn(sel)
+  sel.read_socks = {}
+  sel.write_socks = {}
+  return sel
+
+Selector.add_read = fn(sel, sock)
+  if sock and not has_sock(sel.read_socks, sock)
+    table.insert(sel.read_socks, sock)
+  return sel
+
+Selector.add_write = fn(sel, sock)
+  if sock and not has_sock(sel.write_socks, sock)
+    table.insert(sel.write_socks, sock)
+  return sel
+
+Selector.remove = fn(sel, sock)
+  ridx = table.find_index(sel.read_socks, sock)
+  if ridx > 0
+    table.remove(sel.read_socks, ridx)
+  widx = table.find_index(sel.write_socks, sock)
+  if widx > 0
+    table.remove(sel.write_socks, widx)
+  return sel
+
+Selector.read_count = fn(sel)
+  return #sel.read_socks
+
+Selector.write_count = fn(sel)
+  return #sel.write_socks
+
+Selector.wait = fn(sel, timeout = nil)
+  if timeout == nil
+    timeout = 0
+
+  if poll == nil
+    return socket.select(sel.read_socks, sel.write_socks, timeout)
+
+  poll_items = {}
+  item_idx_by_fd = {}
+  read_by_fd = {}
+  write_by_fd = {}
+
+  for sock in sel.read_socks
+    f = sock.fileno
+    if type(f) == "function"
+      fd = f(sock)
+      if type(fd) == "number"
+        key = fd_key(fd)
+        read_by_fd[key] = sock
+        idx = item_idx_by_fd[key]
+        if idx == nil
+          row = {fd = fd, events = {}}
+          table.insert(row.events, "in")
+          table.insert(poll_items, row)
+          item_idx_by_fd[key] = #poll_items
+        else
+          ensure_event(poll_items[idx].events, "in")
+
+  for sock in sel.write_socks
+    f = sock.fileno
+    if type(f) == "function"
+      fd = f(sock)
+      if type(fd) == "number"
+        key = fd_key(fd)
+        write_by_fd[key] = sock
+        idx = item_idx_by_fd[key]
+        if idx == nil
+          row = {fd = fd, events = {}}
+          table.insert(row.events, "out")
+          table.insert(poll_items, row)
+          item_idx_by_fd[key] = #poll_items
+        else
+          ensure_event(poll_items[idx].events, "out")
+
+  if #poll_items == 0
+    return {}, {}
+
+  timeout_ms = int(timeout * 1000)
+  if timeout_ms < 0
+    timeout_ms = -1
+  rows = poll.wait(poll_items, timeout_ms)
+
+  ready_read = {}
+  ready_write = {}
+
+  for row in rows
+    key = fd_key(row.fd)
+    if row["in"] and read_by_fd[key]
+      table.insert(ready_read, read_by_fd[key])
+    if row["out"] and write_by_fd[key]
+      table.insert(ready_write, write_by_fd[key])
+
+  return ready_read, ready_write
+
+return Selector

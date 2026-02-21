@@ -14,13 +14,14 @@ static inline int to_int64_local(double x, int64_t* out) {
 }
 
 static int push_pending_set_local_local(VM* vm, int frame_index, int slot) {
-    if (vm->pending_set_local_count >= 8) {
+    ObjThread* thread = vm_current_thread(vm);
+    if (thread->pending_set_local_count >= 8) {
         vm_runtime_error(vm, "Pending set-local stack overflow.");
         return 0;
     }
-    int idx = vm->pending_set_local_count++;
-    vm->pending_set_local_frames[idx] = frame_index;
-    vm->pending_set_local_slots[idx] = slot;
+    int idx = thread->pending_set_local_count++;
+    thread->pending_set_local_frames[idx] = frame_index;
+    thread->pending_set_local_slots[idx] = slot;
     return 1;
 }
 
@@ -105,10 +106,10 @@ int vm_handle_op_add_set_local(VM* vm, CallFrame** frame, uint8_t** ip) {
     push(vm, method);
     push(vm, a);
     push(vm, b);
-    if (!push_pending_set_local_local(vm, vm->current_thread->frame_count - 1, slot)) return 0;
+    if (!push_pending_set_local_local(vm, vm_current_thread(vm)->frame_count - 1, slot)) return 0;
     (*frame)->ip = *ip;
     if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-    *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+    *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
     *ip = (*frame)->ip;
     return 1;
 }
@@ -148,10 +149,10 @@ static int binary_set_local(
     push(vm, method);
     push(vm, a);
     push(vm, b);
-    if (!push_pending_set_local_local(vm, vm->current_thread->frame_count - 1, slot)) return 0;
+    if (!push_pending_set_local_local(vm, vm_current_thread(vm)->frame_count - 1, slot)) return 0;
     (*frame)->ip = *ip;
     if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-    *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+    *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
     *ip = (*frame)->ip;
     return 1;
 }

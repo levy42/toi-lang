@@ -183,6 +183,12 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return jump_instruction("OP_LOOP", -1, chunk, offset);
         case OP_CALL:
             return byte_instruction("OP_CALL", chunk, offset);
+        case OP_CALL0:
+            return simple_instruction("OP_CALL0", offset);
+        case OP_CALL1:
+            return simple_instruction("OP_CALL1", offset);
+        case OP_CALL2:
+            return simple_instruction("OP_CALL2", offset);
         case OP_CALL_NAMED:
             return byte_instruction("OP_CALL_NAMED", chunk, offset);
         case OP_CALL_EXPAND:

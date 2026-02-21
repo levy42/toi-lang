@@ -451,6 +451,18 @@ static int sock_getsockname(VM* vm, int arg_count, Value* args) {
     return 2;
 }
 
+// sock:fileno() -> fd
+static int sock_fileno(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    ASSERT_USERDATA(0);
+
+    SocketData* sock = get_socket_data(GET_USERDATA(0));
+    if (sock == NULL || sock->fd < 0) {
+        RETURN_NIL;
+    }
+    RETURN_NUMBER((double)sock->fd);
+}
+
 // Helper to add sockets from a table (handles both array and hash parts)
 static int add_sockets_from_table(ObjTable* table, fd_set* fds, int* max_fd,
                                    ObjUserdata** socket_array, int* count) {
@@ -592,6 +604,7 @@ void register_socket(VM* vm) {
         {"close", sock_close},
         {"getpeername", sock_getpeername},
         {"getsockname", sock_getsockname},
+        {"fileno", sock_fileno},
         {NULL, NULL}
     };
 

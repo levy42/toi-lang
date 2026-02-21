@@ -4,6 +4,9 @@
 #include "common.h"
 #include "value.h"
 
+struct ObjString;
+struct ObjTable;
+
 typedef enum {
     OP_CONSTANT,
     OP_APPEND,
@@ -49,6 +52,9 @@ typedef enum {
     OP_JUMP_IF_TRUE,
     OP_LOOP,
     OP_CALL,
+    OP_CALL0,
+    OP_CALL1,
+    OP_CALL2,
     OP_CALL_NAMED,
     OP_CALL_EXPAND,
     OP_CLOSURE,
@@ -99,6 +105,13 @@ typedef struct {
     int capacity;
     uint8_t* code;
     int* lines; // Line number for each byte for debugging
+    uint32_t* global_ic_versions; // keyed by opcode byte offset
+    struct ObjString** global_ic_names;
+    Value* global_ic_values;
+    uint32_t* get_table_ic_versions; // keyed by opcode byte offset
+    struct ObjTable** get_table_ic_tables;
+    struct ObjString** get_table_ic_keys;
+    Value* get_table_ic_values;
     ValueArray constants;
 } Chunk;
 

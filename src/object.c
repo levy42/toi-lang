@@ -83,6 +83,7 @@ ObjNative* new_native(NativeFn function, ObjString* name) {
     native->function = function;
     native->name = name;
     native->is_self = 0;
+    native->fast_kind = NATIVE_FAST_NONE;
     return native;
 }
 
@@ -133,6 +134,12 @@ ObjThread* new_thread_with_caps(int stack_cap, int frame_cap, int handler_cap) {
     thread->generator_mode = 0;
     thread->generator_index = 0;
     thread->handler_count = 0;
+    thread->gc_park_next = NULL;
+    thread->gc_park_count = 0;
+    thread->has_exception = 0;
+    thread->exception = NIL_VAL;
+    thread->last_error = NIL_VAL;
+    thread->pending_set_local_count = 0;
     bytes_allocated += sizeof(Value) * (size_t)stack_cap;
     bytes_allocated += sizeof(CallFrame) * (size_t)frame_cap;
     bytes_allocated += sizeof(ExceptionHandler) * (size_t)handler_cap;
@@ -144,13 +151,18 @@ ObjThread* new_thread() {
 }
 
 ObjUserdata* new_userdata(void* data) {
-    return new_userdata_with_finalizer(data, NULL);
+    return new_userdata_with_hooks(data, NULL, NULL);
 }
 
 ObjUserdata* new_userdata_with_finalizer(void* data, UserdataFinalizer finalize) {
+    return new_userdata_with_hooks(data, finalize, NULL);
+}
+
+ObjUserdata* new_userdata_with_hooks(void* data, UserdataFinalizer finalize, UserdataMarker mark) {
     ObjUserdata* userdata = (ObjUserdata*)allocate_object(sizeof(ObjUserdata), OBJ_USERDATA);
     userdata->data = data;
     userdata->finalize = finalize;
+    userdata->mark = mark;
     userdata->metatable = NULL;
     return userdata;
 }
@@ -348,6 +360,23 @@ void mark_object(struct Obj* object) {
         for (int i = 0; i < function->chunk.constants.count; i++) {
             mark_value(function->chunk.constants.values[i]);
         }
+        for (int i = 0; i < function->chunk.capacity; i++) {
+            if (function->chunk.global_ic_names != NULL && function->chunk.global_ic_names[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.global_ic_names[i]);
+            }
+            if (function->chunk.global_ic_values != NULL && !IS_NIL(function->chunk.global_ic_values[i])) {
+                mark_value(function->chunk.global_ic_values[i]);
+            }
+            if (function->chunk.get_table_ic_tables != NULL && function->chunk.get_table_ic_tables[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.get_table_ic_tables[i]);
+            }
+            if (function->chunk.get_table_ic_keys != NULL && function->chunk.get_table_ic_keys[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.get_table_ic_keys[i]);
+            }
+            if (function->chunk.get_table_ic_values != NULL && !IS_NIL(function->chunk.get_table_ic_values[i])) {
+                mark_value(function->chunk.get_table_ic_values[i]);
+            }
+        }
         // Mark default parameter values
         for (int i = 0; i < function->defaults_count; i++) {
             mark_value(function->defaults[i]);
@@ -374,6 +403,12 @@ void mark_object(struct Obj* object) {
         for (Value* slot = thread->stack; slot < thread->stack_top; slot++) {
             mark_value(*slot);
         }
+        if (thread->has_exception) {
+            mark_value(thread->exception);
+        }
+        if (!IS_NIL(thread->last_error)) {
+            mark_value(thread->last_error);
+        }
         for (int i = 0; i < thread->frame_count; i++) {
             mark_object((struct Obj*)thread->frames[i].closure);
         }
@@ -385,6 +420,9 @@ void mark_object(struct Obj* object) {
         }
     } else if (object->type == OBJ_USERDATA) {
         ObjUserdata* userdata = (ObjUserdata*)object;
+        if (userdata->data != NULL && userdata->mark != NULL) {
+            userdata->mark(userdata->data);
+        }
         if (userdata->metatable) {
             mark_object((struct Obj*)userdata->metatable);
         }

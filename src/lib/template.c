@@ -67,6 +67,9 @@ typedef struct {
     StrBuf code;
     int indent_level;
     char* error;
+    char** locals;
+    int locals_count;
+    int locals_cap;
 } Parser;
 
 static void parser_init(Parser* p, const char* src) {
@@ -76,10 +79,17 @@ static void parser_init(Parser* p, const char* src) {
     buf_init(&p->code);
     p->indent_level = 1; // Start inside function
     p->error = NULL;
+    p->locals = NULL;
+    p->locals_count = 0;
+    p->locals_cap = 0;
 }
 
 static void parser_free(Parser* p) {
     buf_free(&p->code);
+    for (int i = 0; i < p->locals_count; i++) {
+        free(p->locals[i]);
+    }
+    free(p->locals);
     if (p->error) free(p->error);
 }
 
@@ -103,15 +113,126 @@ static void emit_text(Parser* p, const char* text, size_t len) {
     buf_append_str(&p->code, ")\n");
 }
 
+static int parser_is_local(Parser* p, const char* name, size_t len) {
+    for (int i = 0; i < p->locals_count; i++) {
+        if (strlen(p->locals[i]) == len &&
+            memcmp(p->locals[i], name, len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void parser_add_local(Parser* p, const char* name, size_t len) {
+    if (parser_is_local(p, name, len)) return;
+    if (p->locals_count == p->locals_cap) {
+        p->locals_cap = p->locals_cap == 0 ? 8 : p->locals_cap * 2;
+        p->locals = realloc(p->locals, sizeof(char*) * (size_t)p->locals_cap);
+    }
+    char* copy = malloc(len + 1);
+    memcpy(copy, name, len);
+    copy[len] = '\0';
+    p->locals[p->locals_count++] = copy;
+}
+
+static int is_ident_start(char c) {
+    return isalpha((unsigned char)c) || c == '_';
+}
+
+static int is_ident_char(char c) {
+    return isalnum((unsigned char)c) || c == '_';
+}
+
+static int is_keyword_or_builtin(const char* s, size_t len) {
+    static const char* names[] = {
+        "and","or","not","true","false","nil","if","elif","else","for","in",
+        "while","fn","return","local","match","case","try","except","finally",
+        "break","continue","import","from","yield","gc","mem","__ctx","str",
+        "tostring",
+        "int","float","bool","type","len","table","string","math","os","io",
+        "http","json","template","coroutine","thread","socket", NULL
+    };
+    for (int i = 0; names[i] != NULL; i++) {
+        if (strlen(names[i]) == len && memcmp(names[i], s, len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void rewrite_expr(Parser* p, const char* expr, size_t len, StrBuf* out) {
+    size_t i = 0;
+    while (i < len) {
+        char c = expr[i];
+        if (c == '"' || c == '\'') {
+            char quote = c;
+            buf_append(out, &expr[i], 1);
+            i++;
+            while (i < len) {
+                char ch = expr[i];
+                buf_append(out, &expr[i], 1);
+                i++;
+                if (ch == '\\' && i < len) {
+                    buf_append(out, &expr[i], 1);
+                    i++;
+                    continue;
+                }
+                if (ch == quote) break;
+            }
+            continue;
+        }
+
+        if (!is_ident_start(c)) {
+            buf_append(out, &expr[i], 1);
+            i++;
+            continue;
+        }
+
+        size_t start = i;
+        i++;
+        while (i < len && is_ident_char(expr[i])) i++;
+        size_t ident_len = i - start;
+        const char* ident = expr + start;
+
+        size_t prev = start;
+        while (prev > 0 && isspace((unsigned char)expr[prev - 1])) prev--;
+        char prev_ch = prev > 0 ? expr[prev - 1] : '\0';
+
+        size_t next = i;
+        while (next < len && isspace((unsigned char)expr[next])) next++;
+        char next_ch = next < len ? expr[next] : '\0';
+        char next2_ch = (next + 1 < len) ? expr[next + 1] : '\0';
+
+        int should_prefix = 1;
+        if (is_keyword_or_builtin(ident, ident_len) || parser_is_local(p, ident, ident_len)) {
+            should_prefix = 0;
+        } else if (prev_ch == '.' || prev_ch == ':') {
+            should_prefix = 0;
+        } else if (next_ch == '=' && next2_ch != '=') {
+            should_prefix = 0;
+        }
+
+        if (should_prefix) {
+            buf_append_str(out, "__ctx.");
+        }
+        buf_append(out, ident, ident_len);
+    }
+}
+
 static void emit_expr(Parser* p, const char* expr, size_t len) {
     // Trim whitespace
     while (len > 0 && isspace((unsigned char)*expr)) { expr++; len--; }
     while (len > 0 && isspace((unsigned char)expr[len-1])) { len--; }
 
+    StrBuf rewritten;
+    buf_init(&rewritten);
+    rewrite_expr(p, expr, len, &rewritten);
+
     emit_indent(p);
-    buf_append_str(&p->code, "table.insert(__out, str(");
-    buf_append(&p->code, expr, len);
+    buf_append_str(&p->code, "table.insert(__out, tostring(");
+    buf_append(&p->code, rewritten.data, rewritten.len);
     buf_append_str(&p->code, "))\n");
+    buf_free(&rewritten);
 }
 
 // Find next occurrence of str, return position or -1
@@ -163,10 +284,14 @@ static int parse_tag(Parser* p) {
         size_t cond_len = content_len - 2;
         skip_spaces(&cond, &cond_len);
 
+        StrBuf rewritten;
+        buf_init(&rewritten);
+        rewrite_expr(p, cond, cond_len, &rewritten);
         emit_indent(p);
         buf_append_str(&p->code, "if ");
-        buf_append(&p->code, cond, cond_len);
+        buf_append(&p->code, rewritten.data, rewritten.len);
         buf_append_str(&p->code, "\n");
+        buf_free(&rewritten);
         p->indent_level++;
     }
     else if (kw_len == 4 && strncmp(content, "elif", 4) == 0) {
@@ -174,11 +299,15 @@ static int parse_tag(Parser* p) {
         size_t cond_len = content_len - 4;
         skip_spaces(&cond, &cond_len);
 
+        StrBuf rewritten;
+        buf_init(&rewritten);
+        rewrite_expr(p, cond, cond_len, &rewritten);
         p->indent_level--;
         emit_indent(p);
         buf_append_str(&p->code, "elif ");
-        buf_append(&p->code, cond, cond_len);
+        buf_append(&p->code, rewritten.data, rewritten.len);
         buf_append_str(&p->code, "\n");
+        buf_free(&rewritten);
         p->indent_level++;
     }
     else if (kw_len == 4 && strncmp(content, "else", 4) == 0) {
@@ -203,6 +332,7 @@ static int parse_tag(Parser* p) {
         }
 
         const char* var_name = rest;
+        parser_add_local(p, var_name, var_len);
         rest += var_len;
         rest_len -= var_len;
         skip_spaces(&rest, &rest_len);
@@ -216,13 +346,17 @@ static int parse_tag(Parser* p) {
         rest_len -= 2;
         skip_spaces(&rest, &rest_len);
 
+        StrBuf rewritten;
+        buf_init(&rewritten);
+        rewrite_expr(p, rest, rest_len, &rewritten);
         // rest is the iterable expression
         emit_indent(p);
         buf_append_str(&p->code, "for __idx#, ");
         buf_append(&p->code, var_name, var_len);
         buf_append_str(&p->code, " in ");
-        buf_append(&p->code, rest, rest_len);
+        buf_append(&p->code, rewritten.data, rewritten.len);
         buf_append_str(&p->code, "\n");
+        buf_free(&rewritten);
         p->indent_level++;
     }
     else if (kw_len == 6 && strncmp(content, "endfor", 6) == 0) {
@@ -241,6 +375,7 @@ static int parse_tag(Parser* p) {
         }
 
         const char* var_name = rest;
+        parser_add_local(p, var_name, var_len);
         rest += var_len;
         rest_len -= var_len;
         skip_spaces(&rest, &rest_len);
@@ -254,12 +389,16 @@ static int parse_tag(Parser* p) {
         rest_len--;
         skip_spaces(&rest, &rest_len);
 
+        StrBuf rewritten;
+        buf_init(&rewritten);
+        rewrite_expr(p, rest, rest_len, &rewritten);
         emit_indent(p);
         buf_append_str(&p->code, "local ");
         buf_append(&p->code, var_name, var_len);
         buf_append_str(&p->code, " = ");
-        buf_append(&p->code, rest, rest_len);
+        buf_append(&p->code, rewritten.data, rewritten.len);
         buf_append_str(&p->code, "\n");
+        buf_free(&rewritten);
     }
     else {
         p->error = malloc(64);
@@ -383,7 +522,7 @@ static int template_compile(VM* vm, int arg_count, Value* args) {
     push(vm, OBJ_VAL(script_closure));
 
     // Get current frame count
-    int frame_count = vm->current_thread->frame_count;
+    int frame_count = vm_current_thread(vm)->frame_count;
 
     // Call the script
     if (!call(vm, script_closure, 0)) {
@@ -409,6 +548,8 @@ static int template_render(VM* vm, int arg_count, Value* args) {
     ASSERT_TABLE(1);
 
     ObjString* tmpl_str = GET_STRING(0);
+    Value ctx_arg = args[1];
+    push(vm, ctx_arg); // Root context while compiling/caching.
     Value tmpl_fn = NIL_VAL;
     ObjTable* cache = get_template_cache(vm);
 
@@ -423,6 +564,7 @@ static int template_render(VM* vm, int arg_count, Value* args) {
             snprintf(err_msg, sizeof(err_msg), "Template error: %s", parser.error ? parser.error : "unknown");
             parser_free(&parser);
             vm_runtime_error(vm, err_msg);
+            pop(vm);
             return 0;
         }
 
@@ -432,6 +574,7 @@ static int template_render(VM* vm, int arg_count, Value* args) {
 
         if (script_fn == NULL) {
             vm_runtime_error(vm, "Failed to compile template");
+            pop(vm);
             return 0;
         }
 
@@ -439,13 +582,15 @@ static int template_render(VM* vm, int arg_count, Value* args) {
         ObjClosure* script_closure = new_closure(script_fn);
         push(vm, OBJ_VAL(script_closure));
 
-        int frame_count = vm->current_thread->frame_count;
+        int frame_count = vm_current_thread(vm)->frame_count;
         if (!call(vm, script_closure, 0)) {
+            pop(vm);
             return 0;
         }
 
         InterpretResult result = vm_run(vm, frame_count);
         if (result != INTERPRET_OK) {
+            pop(vm);
             return 0;
         }
 
@@ -453,6 +598,7 @@ static int template_render(VM* vm, int arg_count, Value* args) {
         tmpl_fn = peek(vm, 0);
         if (!IS_CLOSURE(tmpl_fn)) {
             vm_runtime_error(vm, "Template compilation did not return a function");
+            pop(vm);
             return 0;
         }
 
@@ -464,10 +610,11 @@ static int template_render(VM* vm, int arg_count, Value* args) {
     }
 
     // Step 2: Call the template function with the context
+    ctx_arg = pop(vm); // Unroot from temp stack slot; will be pushed as call arg.
     push(vm, tmpl_fn);   // callee
-    push(vm, args[1]); // Push context table
+    push(vm, ctx_arg); // Push context table
 
-    int frame_count = vm->current_thread->frame_count;
+    int frame_count = vm_current_thread(vm)->frame_count;
     if (!call(vm, AS_CLOSURE(tmpl_fn), 1)) {
         return 0;
     }

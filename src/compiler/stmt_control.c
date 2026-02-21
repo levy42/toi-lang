@@ -486,7 +486,7 @@ static void with_statement() {
     emit_bytes(OP_CONSTANT, identifier_constant(&enter_token));
     emit_byte(OP_GET_TABLE);
     int skip_enter = emit_jump(OP_JUMP_IF_FALSE);
-    emit_bytes(OP_CALL, 0);
+    emit_call(0);
     int after_enter = emit_jump(OP_JUMP);
     patch_jump(skip_enter);
     emit_byte(OP_POP);
@@ -553,7 +553,7 @@ static void with_statement() {
     emit_byte(OP_GET_TABLE);
     int skip_exit = emit_jump(OP_JUMP_IF_FALSE);
     emit_bytes(OP_GET_LOCAL, (uint8_t)ex_slot);
-    emit_bytes(OP_CALL, 1);
+    emit_call(1);
     emit_byte(OP_POP);
     int after_exit = emit_jump(OP_JUMP);
     patch_jump(skip_exit);
@@ -851,7 +851,7 @@ static void for_statement() {
         emit_bytes(OP_GET_LOCAL, (uint8_t)iter_slot);
         emit_bytes(OP_GET_LOCAL, (uint8_t)state_slot);
         emit_bytes(OP_GET_LOCAL, (uint8_t)control_slot);
-        emit_bytes(OP_CALL, 2);
+        emit_call(2);
 
         // Iterators return 2 values (key, value). If we have fewer loop variables,
         // pop the extra values to keep the stack balanced.
@@ -1009,7 +1009,7 @@ static void yield_statement() {
         } while (match(TOKEN_COMMA));
     }
 
-    emit_bytes(OP_CALL, (uint8_t)value_count);
+    emit_call((uint8_t)value_count);
 }
 
 static void assert_statement() {

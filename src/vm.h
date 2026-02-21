@@ -7,17 +7,14 @@
 
 typedef struct VM {
    ObjThread* current_thread;
+   ObjThread* gc_parked_threads;
    Table globals;
    Table modules;  // Cache of loaded native modules
+   int use_thread_tls;
    int cli_argc;
    char** cli_argv;
-   int disable_gc;
+    int disable_gc;
     int is_repl;
-    int pending_set_local_count;
-    int pending_set_local_slots[8];
-    int pending_set_local_frames[8];
-    int has_exception;
-    Value exception;
     ObjString* mm_index;
     ObjString* mm_newindex;
     ObjString* mm_str;
@@ -25,6 +22,13 @@ typedef struct VM {
     ObjString* mm_new;
     ObjString* mm_append;
     ObjString* mm_next;
+    ObjString* mm_slice;
+    ObjString* str_module_name;
+    ObjString* str_upper_name;
+    ObjString* str_lower_name;
+    ObjString* slice_name;
+    Value str_upper_fn;
+    Value str_lower_fn;
 } VM;
 
 typedef enum {
@@ -49,5 +53,8 @@ void maybe_collect_garbage(VM* vm);
 InterpretResult vm_run(VM* vm, int min_frame_count);
 Value get_metamethod(VM* vm, Value val, const char* name);
 void vm_request_interrupt(void);
+ObjThread* vm_current_thread(VM* vm);
+void vm_set_current_thread(VM* vm, ObjThread* thread);
+void vm_enable_thread_tls(VM* vm);
 
 #endif

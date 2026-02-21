@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "libs.h"
@@ -234,6 +235,14 @@ static int math_sum(VM* vm, int arg_count, Value* args) {
     RETURN_NUMBER(sum);
 }
 
+static void set_math_fast_kind(ObjTable* math_module, const char* name, NativeFastKind kind) {
+    ObjString* key = copy_string(name, (int)strlen(name));
+    Value fn = NIL_VAL;
+    if (table_get(&math_module->table, key, &fn) && IS_NATIVE(fn)) {
+        AS_NATIVE_OBJ(fn)->fast_kind = (uint8_t)kind;
+    }
+}
+
 void register_math(VM* vm) {
     const NativeReg math_funcs[] = {
         {"sin", math_sin},
@@ -264,6 +273,23 @@ void register_math(VM* vm) {
 
     register_module(vm, "math", math_funcs);
     ObjTable* math_module = AS_TABLE(peek(vm, 0)); // Module is on stack
+
+    set_math_fast_kind(math_module, "sin", NATIVE_FAST_MATH_SIN);
+    set_math_fast_kind(math_module, "cos", NATIVE_FAST_MATH_COS);
+    set_math_fast_kind(math_module, "tan", NATIVE_FAST_MATH_TAN);
+    set_math_fast_kind(math_module, "asin", NATIVE_FAST_MATH_ASIN);
+    set_math_fast_kind(math_module, "acos", NATIVE_FAST_MATH_ACOS);
+    set_math_fast_kind(math_module, "atan", NATIVE_FAST_MATH_ATAN);
+    set_math_fast_kind(math_module, "sqrt", NATIVE_FAST_MATH_SQRT);
+    set_math_fast_kind(math_module, "floor", NATIVE_FAST_MATH_FLOOR);
+    set_math_fast_kind(math_module, "ceil", NATIVE_FAST_MATH_CEIL);
+    set_math_fast_kind(math_module, "abs", NATIVE_FAST_MATH_ABS);
+    set_math_fast_kind(math_module, "exp", NATIVE_FAST_MATH_EXP);
+    set_math_fast_kind(math_module, "log", NATIVE_FAST_MATH_LOG);
+    set_math_fast_kind(math_module, "pow", NATIVE_FAST_MATH_POW);
+    set_math_fast_kind(math_module, "fmod", NATIVE_FAST_MATH_FMOD);
+    set_math_fast_kind(math_module, "deg", NATIVE_FAST_MATH_DEG);
+    set_math_fast_kind(math_module, "rad", NATIVE_FAST_MATH_RAD);
 
     // Constants
     push(vm, OBJ_VAL(copy_string("pi", 2)));

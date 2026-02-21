@@ -1,0 +1,29 @@
+from lib.test import assert_eq, assert_true
+
+mmap = import mmap
+io = import io
+os = import os
+
+PATH = "tests/tmp_mmap_slice_case.txt"
+
+if os.exists(PATH)
+  os.remove(PATH)
+
+f = io.open(PATH, "w")
+f.write("abcdefg")
+f.close()
+
+local r, err = mmap.map(PATH, "r")
+assert_true(r != nil, "mmap r failed")
+
+assert_eq(r[2..4], "bcd")
+assert_eq(r[..3], "abc")
+assert_eq(r[5..], "efg")
+assert_eq(r[5..1:-2], "eca")
+assert_eq(r[9..12], "")
+assert_eq(r[2..1], "")
+
+assert_true(r.close())
+os.remove(PATH)
+
+print "mmap slice ok"

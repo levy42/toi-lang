@@ -1,6 +1,7 @@
 #ifndef TABLE_H
 #define TABLE_H
 
+#include <stdint.h>
 #include "value.h"
 // #include "object.h" // Removed to avoid circular dependency
 
@@ -15,6 +16,7 @@ typedef struct {
     int count;
     int capacity;
     Entry* entries;
+    uint32_t version;
     
     // Array optimization
     Value* array;

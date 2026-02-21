@@ -38,9 +38,9 @@ def bench_string_ops():
     total = 0
     for _ in range(20_000):
         x = s.upper()
-        # y = x.lower()
-        # z = y[4:19]
-        # total += len(z)
+        y = x.lower()
+        z = y[4:19]
+        total += len(z)
     return total
 
 

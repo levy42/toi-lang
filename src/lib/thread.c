@@ -12,12 +12,13 @@
 // Global Interpreter Lock
 static pthread_mutex_t gil = PTHREAD_MUTEX_INITIALIZER;
 static int gil_initialized = 0;
-static int gil_disabled = 0;  // Set via MYLANG_NO_GIL env var
+static int no_gil_enabled = 0;
 
 // Thread data structure
 typedef struct {
     pthread_t pthread;
     VM* vm;
+    ObjThread* caller_thread;
     ObjClosure* closure;
     Value* args;
     int arg_count;
@@ -51,16 +52,92 @@ typedef struct {
     int closed;
 } ChannelData;
 
-static void acquire_gil(void) {
-    if (!gil_disabled) {
-        pthread_mutex_lock(&gil);
+static void thread_handle_mark(void* ptr) {
+    ThreadData* data = (ThreadData*)ptr;
+    if (data == NULL) return;
+    if (data->closure != NULL) {
+        mark_object((struct Obj*)data->closure);
+    }
+    for (int i = 0; i < data->arg_count; i++) {
+        mark_value(data->args[i]);
+    }
+    if (data->result_count > 0) {
+        mark_value(data->result);
     }
 }
 
-static void release_gil(void) {
-    if (!gil_disabled) {
-        pthread_mutex_unlock(&gil);
+static void channel_mark(void* ptr) {
+    ChannelData* data = (ChannelData*)ptr;
+    if (data == NULL) return;
+    pthread_mutex_lock(&data->mutex);
+    for (ChannelNode* node = data->head; node != NULL; node = node->next) {
+        mark_value(node->value);
     }
+    pthread_mutex_unlock(&data->mutex);
+}
+
+static void acquire_gil(void) {
+    if (no_gil_enabled) return;
+    pthread_mutex_lock(&gil);
+}
+
+static void release_gil(void) {
+    if (no_gil_enabled) return;
+    pthread_mutex_unlock(&gil);
+}
+
+static void park_vm_thread(VM* vm, ObjThread* thread) {
+    if (thread == NULL) return;
+    if (thread->gc_park_count == 0) {
+        thread->gc_park_next = vm->gc_parked_threads;
+        vm->gc_parked_threads = thread;
+    }
+    thread->gc_park_count++;
+}
+
+static void unpark_vm_thread(VM* vm, ObjThread* thread) {
+    if (thread == NULL) return;
+    if (thread->gc_park_count <= 0) return;
+    thread->gc_park_count--;
+    if (thread->gc_park_count > 0) return;
+
+    ObjThread* prev = NULL;
+    ObjThread* cur = vm->gc_parked_threads;
+    while (cur != NULL) {
+        if (cur == thread) {
+            if (prev != NULL) {
+                prev->gc_park_next = cur->gc_park_next;
+            } else {
+                vm->gc_parked_threads = cur->gc_park_next;
+            }
+            thread->gc_park_next = NULL;
+            return;
+        }
+        prev = cur;
+        cur = cur->gc_park_next;
+    }
+}
+
+// Preserve and restore the caller VM thread across unlock/relock windows.
+// Without this, vm_current_thread(vm) can be clobbered by another OS thread.
+static ObjThread* suspend_vm_thread(VM* vm) {
+    ObjThread* caller = vm_current_thread(vm);
+    if (!no_gil_enabled) {
+        park_vm_thread(vm, caller);
+    }
+    release_gil();
+    return caller;
+}
+
+static void resume_vm_thread(VM* vm, ObjThread* caller) {
+    if (!no_gil_enabled) {
+        sched_yield();
+    }
+    acquire_gil();
+    if (!no_gil_enabled) {
+        unpark_vm_thread(vm, caller);
+    }
+    vm_set_current_thread(vm, caller);
 }
 
 // Thread entry point
@@ -69,47 +146,58 @@ static void* thread_runner(void* arg) {
 
     acquire_gil();
 
-    // Save the main thread
-    ObjThread* main_thread = data->vm->current_thread;
+    // Restore to the spawning VM thread, not whatever happens to be current.
+    ObjThread* main_thread = data->caller_thread;
+    if (main_thread == NULL) {
+        main_thread = vm_current_thread(data->vm);
+    }
 
     // Create a new thread like coroutine.create does
     ObjThread* worker_thread = new_thread();
     worker_thread->vm = data->vm;
 
-    // Push closure onto the worker thread's stack
-    worker_thread->stack[0] = OBJ_VAL(data->closure);
-    worker_thread->stack_top = worker_thread->stack + 1;
+    // Switch to worker thread and run
+    vm_set_current_thread(data->vm, worker_thread);
 
-    // Push arguments
+    // Build a normal call frame to preserve VM invariants.
+    push(data->vm, OBJ_VAL(data->closure));
     for (int i = 0; i < data->arg_count; i++) {
-        *worker_thread->stack_top = data->args[i];
-        worker_thread->stack_top++;
+        push(data->vm, data->args[i]);
+    }
+    if (!call(data->vm, data->closure, data->arg_count)) {
+        data->error = 1;
+        if (worker_thread->has_exception && IS_STRING(worker_thread->last_error)) {
+            ObjString* msg = AS_STRING(worker_thread->last_error);
+            snprintf(data->error_msg, sizeof(data->error_msg), "%.*s", msg->length, msg->chars);
+        } else {
+            snprintf(data->error_msg, sizeof(data->error_msg), "Thread setup error");
+        }
+        worker_thread->last_error = NIL_VAL;
+        vm_set_current_thread(data->vm, main_thread);
+        data->done = 1;
+        release_gil();
+        return NULL;
     }
 
-    // Set up the call frame
-    CallFrame* frame = &worker_thread->frames[0];
-    frame->closure = data->closure;
-    frame->ip = data->closure->function->chunk.code;
-    frame->slots = worker_thread->stack;
-    worker_thread->frame_count = 1;
-
-    // Switch to worker thread and run
-    data->vm->current_thread = worker_thread;
-
-    // Set REPL mode to keep result on stack after vm_run
-    int saved_repl = data->vm->is_repl;
-    data->vm->is_repl = 1;
-
-    InterpretResult result = vm_run(data->vm, 0);
-
-    data->vm->is_repl = saved_repl;
+    // Run until this worker frame returns; min_frame_count=1 keeps the
+    // return value on the worker stack without touching global REPL mode.
+    InterpretResult result = vm_run(data->vm, 1);
 
     if (result != INTERPRET_OK) {
         data->error = 1;
-        snprintf(data->error_msg, sizeof(data->error_msg), "Thread execution error");
+        ObjThread* t = vm_current_thread(data->vm);
+        if (t != NULL && IS_STRING(t->last_error)) {
+            ObjString* msg = AS_STRING(t->last_error);
+            snprintf(data->error_msg, sizeof(data->error_msg), "%.*s", msg->length, msg->chars);
+        } else {
+            snprintf(data->error_msg, sizeof(data->error_msg), "Thread execution error");
+        }
+        if (t != NULL) {
+            t->last_error = NIL_VAL;
+        }
     } else {
         // After vm_run completes, the result is on top of the stack
-        ObjThread* t = data->vm->current_thread;
+        ObjThread* t = vm_current_thread(data->vm);
         if (t->stack_top > t->stack) {
             data->result = t->stack_top[-1];
             data->result_count = 1;
@@ -120,7 +208,7 @@ static void* thread_runner(void* arg) {
     }
 
     // Restore main thread
-    data->vm->current_thread = main_thread;
+    vm_set_current_thread(data->vm, main_thread);
     data->done = 1;
     release_gil();
 
@@ -129,6 +217,7 @@ static void* thread_runner(void* arg) {
 
 // thread.spawn(fn, ...) - create and start a new thread
 static int thread_spawn(VM* vm, int arg_count, Value* args) {
+    vm_enable_thread_tls(vm);
     if (arg_count < 1 || !IS_CLOSURE(args[0])) {
         vm_runtime_error(vm, "thread.spawn requires a function as first argument");
         return 0;
@@ -140,6 +229,7 @@ static int thread_spawn(VM* vm, int arg_count, Value* args) {
     }
 
     data->vm = vm;
+    data->caller_thread = vm_current_thread(vm);
     data->closure = AS_CLOSURE(args[0]);
     data->arg_count = arg_count - 1;
     data->args = NULL;
@@ -157,14 +247,14 @@ static int thread_spawn(VM* vm, int arg_count, Value* args) {
         }
     }
 
-    // Release GIL before creating thread
-    release_gil();
+    // Release lock before creating OS thread.
+    ObjThread* caller = suspend_vm_thread(vm);
 
     // Create the thread
     int thread_err = pthread_create(&data->pthread, NULL, thread_runner, data);
 
-    // Reacquire GIL
-    acquire_gil();
+    // Reacquire lock and restore caller VM thread.
+    resume_vm_thread(vm, caller);
 
     if (thread_err != 0) {
         free(data->args);
@@ -174,7 +264,7 @@ static int thread_spawn(VM* vm, int arg_count, Value* args) {
         return 2;
     }
 
-    ObjUserdata* udata = new_userdata(data);
+    ObjUserdata* udata = new_userdata_with_hooks(data, NULL, thread_handle_mark);
 
     // Set metatable
     Value thread_val;
@@ -202,13 +292,13 @@ static int thread_join(VM* vm, int arg_count, Value* args) {
         RETURN_NIL;
     }
 
-    // Release GIL while waiting
-    release_gil();
+    // Release lock while waiting.
+    ObjThread* caller = suspend_vm_thread(vm);
 
     pthread_join(data->pthread, NULL);
 
-    // Reacquire GIL
-    acquire_gil();
+    // Reacquire lock and restore caller VM thread.
+    resume_vm_thread(vm, caller);
 
     if (data->error) {
         push(vm, NIL_VAL);
@@ -236,9 +326,9 @@ static int thread_join(VM* vm, int arg_count, Value* args) {
 static int thread_yield_native(VM* vm, int arg_count, Value* args) {
     (void)vm; (void)arg_count; (void)args;
 
-    release_gil();
+    ObjThread* caller = suspend_vm_thread(vm);
     sched_yield(); // Let other threads run
-    acquire_gil();
+    resume_vm_thread(vm, caller);
 
     RETURN_NIL;
 }
@@ -250,9 +340,9 @@ static int thread_sleep(VM* vm, int arg_count, Value* args) {
 
     double seconds = GET_NUMBER(0);
 
-    release_gil();
+    ObjThread* caller = suspend_vm_thread(vm);
     usleep((unsigned int)(seconds * 1000000));
-    acquire_gil();
+    resume_vm_thread(vm, caller);
 
     RETURN_NIL;
 }
@@ -289,10 +379,10 @@ static int mutex_lock(VM* vm, int arg_count, Value* args) {
     MutexData* data = (MutexData*)GET_USERDATA(0)->data;
     if (!data) { RETURN_FALSE; }
 
-    // Release GIL while waiting for mutex
-    release_gil();
+    // Release lock while waiting for mutex.
+    ObjThread* caller = suspend_vm_thread(vm);
     pthread_mutex_lock(&data->mutex);
-    acquire_gil();
+    resume_vm_thread(vm, caller);
 
     data->locked = 1;
     RETURN_TRUE;
@@ -344,7 +434,7 @@ static int thread_channel(VM* vm, int arg_count, Value* args) {
     data->capacity = capacity;
     data->closed = 0;
 
-    ObjUserdata* udata = new_userdata(data);
+    ObjUserdata* udata = new_userdata_with_hooks(data, NULL, channel_mark);
 
     // Set metatable
     Value thread_val;
@@ -370,8 +460,8 @@ static int channel_send(VM* vm, int arg_count, Value* args) {
 
     Value value = args[1];
 
-    // Release GIL, acquire channel mutex
-    release_gil();
+    // Release lock while waiting on channel mutex/condition.
+    ObjThread* caller = suspend_vm_thread(vm);
     pthread_mutex_lock(&data->mutex);
 
     // Wait if channel is full (bounded)
@@ -381,7 +471,7 @@ static int channel_send(VM* vm, int arg_count, Value* args) {
 
     if (data->closed) {
         pthread_mutex_unlock(&data->mutex);
-        acquire_gil();
+        resume_vm_thread(vm, caller);
         RETURN_FALSE;
     }
 
@@ -401,7 +491,7 @@ static int channel_send(VM* vm, int arg_count, Value* args) {
     pthread_cond_signal(&data->not_empty);
     pthread_mutex_unlock(&data->mutex);
 
-    acquire_gil();
+    resume_vm_thread(vm, caller);
     RETURN_TRUE;
 }
 
@@ -413,8 +503,8 @@ static int channel_recv(VM* vm, int arg_count, Value* args) {
     ChannelData* data = (ChannelData*)GET_USERDATA(0)->data;
     if (!data) { RETURN_NIL; }
 
-    // Release GIL, acquire channel mutex
-    release_gil();
+    // Release lock while waiting on channel mutex/condition.
+    ObjThread* caller = suspend_vm_thread(vm);
     pthread_mutex_lock(&data->mutex);
 
     // Wait for data
@@ -424,7 +514,7 @@ static int channel_recv(VM* vm, int arg_count, Value* args) {
 
     if (data->count == 0 && data->closed) {
         pthread_mutex_unlock(&data->mutex);
-        acquire_gil();
+        resume_vm_thread(vm, caller);
         RETURN_NIL;
     }
 
@@ -439,7 +529,7 @@ static int channel_recv(VM* vm, int arg_count, Value* args) {
     pthread_cond_signal(&data->not_full);
     pthread_mutex_unlock(&data->mutex);
 
-    acquire_gil();
+    resume_vm_thread(vm, caller);
     RETURN_VAL(value);
 }
 
@@ -497,15 +587,16 @@ static int channel_tryrecv(VM* vm, int arg_count, Value* args) {
 }
 
 void register_thread(VM* vm) {
-    // Check for GIL disable option
+    // Initialize VM-state lock once.
     if (!gil_initialized) {
         gil_initialized = 1;
-        const char* no_gil = getenv("MYLANG_NO_GIL");
+        const char* no_gil = getenv("PUA_NO_GIL");
         if (no_gil && (no_gil[0] == '1' || no_gil[0] == 'y' || no_gil[0] == 'Y')) {
-            gil_disabled = 1;
-            fprintf(stderr, "WARNING: GIL disabled. VM is not thread-safe - expect crashes!\n");
-            fprintf(stderr, "         Only safe for threads with completely isolated data.\n");
-        } else {
+            no_gil_enabled = 1;
+            fprintf(stderr, "WARNING: PUA_NO_GIL enabled (experimental/unsafe).\n");
+            fprintf(stderr, "         Shared-VM execution may race or crash.\n");
+        }
+        if (!no_gil_enabled) {
             acquire_gil();
         }
     }
@@ -514,6 +605,7 @@ void register_thread(VM* vm) {
         {"spawn", thread_spawn},
         {"join", thread_join},
         {"yield", thread_yield_native},
+        {"runtime_yield", thread_yield_native},
         {"sleep", thread_sleep},
         {"mutex", thread_mutex},
         {"channel", thread_channel},

@@ -138,9 +138,9 @@ static int http_parse(VM* vm, int arg_count, Value* args) {
 
         // Header name (lowercase for consistency)
         int name_len = colon - p;
-        char* name_buf = malloc(name_len + 1);
+        char name_buf[name_len + 1];
         for (int i = 0; i < name_len; i++) {
-            name_buf[i] = tolower((unsigned char)p[i]);
+            name_buf[i] = (char)tolower((unsigned char)p[i]);
         }
         name_buf[name_len] = '\0';
 
@@ -156,7 +156,6 @@ static int http_parse(VM* vm, int arg_count, Value* args) {
         table_set(&headers->table, hdr_key, OBJ_VAL(hdr_val));
         pop(vm); pop(vm);
 
-        free(name_buf);
         p = line_end + 2;
     }
 
@@ -193,10 +192,13 @@ static int http_response(VM* vm, int arg_count, Value* args) {
 
     // Build response
     char status_line[64];
-    snprintf(status_line, sizeof(status_line), "HTTP/1.1 %d %s\r\n", status, reason);
+    int status_line_len = snprintf(status_line, sizeof(status_line), "HTTP/1.1 %d %s\r\n", status, reason);
+    if (status_line_len < 0) {
+        RETURN_NIL;
+    }
 
     // Calculate total size
-    size_t total_len = strlen(status_line);
+    size_t total_len = (size_t)status_line_len;
 
     // Headers
     ObjTable* headers = NULL;
@@ -212,20 +214,15 @@ static int http_response(VM* vm, int arg_count, Value* args) {
         body_len = AS_STRING(args[2])->length;
     }
 
-    // Build headers string
-    char* headers_buf = malloc(4096);
-    headers_buf[0] = '\0';
-    int headers_len = 0;
-
+    // Compute headers length.
+    size_t headers_len = 0;
     if (headers) {
         for (int i = 0; i < headers->table.capacity; i++) {
             Entry* entry = &headers->table.entries[i];
             if (entry->key != NULL) {
-                const char* key = entry->key->chars;
                 if (IS_STRING(entry->value)) {
-                    const char* val = AS_CSTRING(entry->value);
-                    headers_len += snprintf(headers_buf + headers_len, 4096 - headers_len,
-                        "%s: %s\r\n", key, val);
+                    ObjString* val = AS_STRING(entry->value);
+                    headers_len += (size_t)entry->key->length + 2 + (size_t)val->length + 2;
                 }
             }
         }
@@ -233,23 +230,46 @@ static int http_response(VM* vm, int arg_count, Value* args) {
 
     // Add Content-Length if body present
     char content_length[64] = "";
+    int content_length_len = 0;
     if (body_len > 0) {
-        snprintf(content_length, sizeof(content_length), "Content-Length: %d\r\n", body_len);
+        content_length_len = snprintf(content_length, sizeof(content_length), "Content-Length: %d\r\n", body_len);
+        if (content_length_len < 0) {
+            RETURN_NIL;
+        }
     }
 
-    total_len += headers_len + strlen(content_length) + 2 + body_len; // +2 for final \r\n
+    total_len += headers_len + (size_t)content_length_len + 2 + (size_t)body_len; // +2 for final \r\n
+    char* response = (char*)malloc(total_len + 1);
+    if (response == NULL) {
+        RETURN_NIL;
+    }
 
-    char* response = malloc(total_len + 1);
     char* p = response;
+    memcpy(p, status_line, (size_t)status_line_len);
+    p += status_line_len;
 
-    memcpy(p, status_line, strlen(status_line));
-    p += strlen(status_line);
+    if (headers) {
+        for (int i = 0; i < headers->table.capacity; i++) {
+            Entry* entry = &headers->table.entries[i];
+            if (entry->key != NULL && IS_STRING(entry->value)) {
+                ObjString* key = entry->key;
+                ObjString* val = AS_STRING(entry->value);
+                memcpy(p, key->chars, (size_t)key->length);
+                p += key->length;
+                memcpy(p, ": ", 2);
+                p += 2;
+                memcpy(p, val->chars, (size_t)val->length);
+                p += val->length;
+                memcpy(p, "\r\n", 2);
+                p += 2;
+            }
+        }
+    }
 
-    memcpy(p, headers_buf, headers_len);
-    p += headers_len;
-
-    memcpy(p, content_length, strlen(content_length));
-    p += strlen(content_length);
+    if (content_length_len > 0) {
+        memcpy(p, content_length, (size_t)content_length_len);
+        p += content_length_len;
+    }
 
     memcpy(p, "\r\n", 2);
     p += 2;
@@ -261,9 +281,7 @@ static int http_response(VM* vm, int arg_count, Value* args) {
 
     *p = '\0';
 
-    ObjString* result = copy_string(response, p - response);
-
-    free(headers_buf);
+    ObjString* result = copy_string(response, (int)(p - response));
     free(response);
 
     RETURN_OBJ(result);

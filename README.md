@@ -120,6 +120,11 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 - `table`: remove, concat, sort
 - `io`: open, read/write, close (file operations)
 - `os`: getenv, rename, remove, system, clock
+- `stat`: stat/lstat/chmod/umask metadata helpers
+- `dir`: directory listing/scandir helpers
+- `signal`: raise/ignore/default POSIX signals
+- `mmap`: memory-mapped file helpers
+- `poll`: POSIX poll wrapper (`wait`)
 - `json`: encode/decode
 - `binary`: `pack(value)` / `unpack(bytes)`
 - `struct`: `pack(fmt, ...)` / `unpack(fmt, bytes, offset=1)`
@@ -128,12 +133,16 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 - `thread`: threads and scheduling helpers
 - `template`: `compile`, `render`, `code`
 - `http`: basic http parser/response helpers
+- `regex`: POSIX regex wrapper (`match`, `search`, `replace`, `split`)
+- `fnmatch`: POSIX glob wrapper (`match`)
+- `glob`: POSIX pathname expansion wrapper (`match`)
 
 ## Pua libraries (`lib/*.pua`)
 
 - `lib.types` – small type-check helpers (String/Number/Boolean/Integer/List/Optional/Record)
 - `lib.record` – record schemas + validation + `__str`
 - `lib.scheduler` – cooperative scheduler
+- `lib.selector` – poll/select readiness helper
 - `lib.http_server` – simple concurrent HTTP server framework
 
 ## Notes

@@ -86,7 +86,7 @@ int vm_handle_op_add_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b) {
         push(vm, b);
         (*frame)->ip = *ip;
         if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-        *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
     }
     return 1;
@@ -119,7 +119,7 @@ int vm_handle_op_add(VM* vm, CallFrame** frame, uint8_t** ip) {
         push(vm, b);
         (*frame)->ip = *ip;
         if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-        *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
     }
     return 1;
@@ -141,7 +141,7 @@ int vm_handle_op_subtract(VM* vm, CallFrame** frame, uint8_t** ip) {
         push(vm, b);
         (*frame)->ip = *ip;
         if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-        *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
     }
     return 1;
@@ -163,7 +163,7 @@ int vm_handle_op_multiply(VM* vm, CallFrame** frame, uint8_t** ip) {
         push(vm, b);
         (*frame)->ip = *ip;
         if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-        *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
     }
     return 1;
@@ -185,7 +185,7 @@ int vm_handle_op_divide(VM* vm, CallFrame** frame, uint8_t** ip) {
         push(vm, b);
         (*frame)->ip = *ip;
         if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-        *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
     }
     return 1;
@@ -211,7 +211,7 @@ int vm_handle_op_modulo(VM* vm, CallFrame** frame, uint8_t** ip) {
         push(vm, method); push(vm, a); push(vm, b);
         (*frame)->ip = *ip;
         if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-        *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
     }
     return 1;

@@ -1,0 +1,27 @@
+from lib.test import assert_eq, assert_true
+
+regex = import regex
+
+assert_true(regex.match("^abc$", "abc"))
+assert_true(not regex.match("^abc$", "zabc"))
+assert_true(regex.match("^abc$", "ABC", "i"))
+
+m = regex.search("a([0-9]+)b", "xxa123bzz")
+assert_true(m != nil)
+assert_eq(m.match, "a123b")
+assert_eq(m.start, 3)
+assert_eq(m.end, 7)
+assert_eq(m.groups[1], "123")
+
+assert_eq(regex.search("q+", "abc"), nil)
+
+assert_eq(regex.replace("[0-9]+", "a1b22c333", "#"), "a#b#c#")
+assert_eq(regex.replace("[0-9]+", "a1b22c333", "#", 2), "a#b#c333")
+
+parts = regex.split("[,;]+", "a,b;;c,d")
+assert_eq(parts[1], "a")
+assert_eq(parts[2], "b")
+assert_eq(parts[3], "c")
+assert_eq(parts[4], "d")
+
+print "regex ok"

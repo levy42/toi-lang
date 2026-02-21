@@ -7,11 +7,31 @@ void vm_handle_op_constant(VM* vm, CallFrame* frame, uint8_t** ip) {
 }
 
 int vm_handle_op_get_global(VM* vm, CallFrame* frame, uint8_t** ip) {
-    ObjString* name = AS_STRING(frame->closure->function->chunk.constants.values[*(*ip)++]);
+    Chunk* chunk = &frame->closure->function->chunk;
+    int operand_offset = (int)(*ip - chunk->code);
+    uint8_t constant_index = *(*ip)++;
+    int opcode_offset = operand_offset - 1;
+    ObjString* name = AS_STRING(chunk->constants.values[constant_index]);
+
+    if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+        chunk->global_ic_names != NULL &&
+        chunk->global_ic_names[opcode_offset] == name &&
+        chunk->global_ic_versions[opcode_offset] == vm->globals.version) {
+        push(vm, chunk->global_ic_values[opcode_offset]);
+        return 1;
+    }
+
     Value value;
     if (!table_get(&vm->globals, name, &value)) {
         vm_runtime_error(vm, "Undefined variable '%s'.", name->chars);
         return 0;
+    }
+
+    if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+        chunk->global_ic_names != NULL) {
+        chunk->global_ic_names[opcode_offset] = name;
+        chunk->global_ic_versions[opcode_offset] = vm->globals.version;
+        chunk->global_ic_values[opcode_offset] = value;
     }
     push(vm, value);
     return 1;

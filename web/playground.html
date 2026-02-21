@@ -1,339 +1,438 @@
 <!doctype html>
 <html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Pua WASM Playground</title>
-    <style>
-        :root {
-            --bg: #0f172a;
-            --panel: #111827;
-            --muted: #94a3b8;
-            --text: #e2e8f0;
-            --accent: #22d3ee;
-            --ok: #4ade80;
-            --err: #f87171;
-            --border: #1e293b;
-        }
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Pua WASM Playground</title>
+        <link
+            rel="icon"
+            type="image/svg+xml"
+            href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -2 26 26"%3E%3Cpath d="M10,3 m-2,2 l-6,6 8,8 M14,3 l8,8 -6,6 m" fill="none" stroke="%23d9f" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/%3E%3C/svg%3E'
+        />
+        <style>
+            :root {
+                --bg: #fff;
+                --panel: #fefefe;
+                --muted: #888;
+                --text: #000;
+                --accent: #22759a;
+                --ok: #2aae50;
+                --err: #a83151;
+            }
 
-        * { box-sizing: border-box; }
+            * {
+                box-sizing: border-box;
+            }
 
-        body {
-            margin: 0;
-            font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", Menlo, Consolas, monospace;
-            background: radial-gradient(circle at top, #1e293b 0%, var(--bg) 55%);
-            color: var(--text);
-            min-height: 100vh;
-            padding: 20px;
-        }
+            body {
+                margin: 0;
+                font-family: "Fira Sans", sans-serif;
+                background: var(--bg);
+                min-height: 100vh;
+                padding: 0 2em;
+                font-size: 1.1rem;
+            }
 
-        .app {
-            max-width: 1100px;
-            margin: 0 auto;
-            display: grid;
-            gap: 14px;
-        }
+            main {
+                margin: 0 auto;
+                display: grid;
+                gap: 0.7em;
+            }
 
-        .panel {
-            background: color-mix(in srgb, var(--panel) 90%, black 10%);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            overflow: hidden;
-        }
+            section,
+            h1 {
+                display: flex;
+                gap: 0.7em;
+            }
 
-        .row {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            align-items: center;
-            padding: 12px;
-            border-bottom: 1px solid var(--border);
-        }
+            button,
+            textarea {
+                border: none;
+                outline: none;
+            }
 
-        button {
-            border: 1px solid #0e7490;
-            background: linear-gradient(180deg, #155e75, #0e7490);
-            color: #ecfeff;
-            padding: 8px 14px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 700;
-        }
+            button {
+                display: inline-flex;
+                align-items: center;
+                align-content: center;
+                vertical-align: middle;
+                max-height: 2em;
+                gap: 0.5em;
+                background: #f2f2f2;
+                padding: 0.5em 1em;
+                border-radius: 0.4em;
+                cursor: pointer;
+                font-size: 1em;
+                transition: background-color 0.3s ease;
 
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
+                &:hover {
+                    background: #e6e6e6;
+                }
+            }
 
-        .status {
-            color: var(--muted);
-            font-size: 13px;
-        }
+            #runBtn {
+                padding-left: 0.6em;
+            }
 
-        textarea, pre {
-            width: 100%;
-            border: 0;
-            margin: 0;
-            background: transparent;
-            color: var(--text);
-            font: inherit;
-            line-height: 1.45;
-            padding: 12px;
-        }
+            #clearBtn {
+                color: var(--err);
+                background: #ffeeee;
+                &:hover {
+                    background: #ffdddd;
+                }
+            }
 
-        pre {
-            min-height: 180px;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-        
-        .editor {
-            position: relative;
-            min-height: 260px;
-            border-top: 1px solid var(--border);
-            border-bottom: 1px solid var(--border);
-        }
+            button:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
 
-        .editor-highlight,
-        .editor-input {
-            font: inherit;
-            line-height: 1.45;
-            padding: 12px;
-            margin: 0;
-            width: 100%;
-            min-height: 260px;
-            white-space: pre-wrap;
-            word-break: break-word;
-            overflow: auto;
-        }
+            textarea,
+            pre {
+                width: 100%;
+                border: 0;
+                margin: 0;
+                background: transparent;
+                font: inherit;
+                line-height: 1.45;
+                padding: 12px;
+            }
 
-        .editor-highlight {
-            color: var(--text);
-            pointer-events: none;
-        }
+            pre {
+                font-family: monospace !important;
+                font-size: 1em;
+                min-height: 20em;
+                white-space: pre-wrap;
+                word-break: break-word;
+                background-color: #fff;
+                background-image:
+                    radial-gradient(#bbb 0.5px, transparent 0.5px),
+                    radial-gradient(#bbb 0.5px, #fff 0.5px);
+                background-size: 0.75em 0.75em;
+                background-position:
+                    0 0,
+                    5px 5px;
+            }
 
-        .editor-input {
-            position: absolute;
-            inset: 0;
-            border: 0;
-            resize: vertical;
-            outline: none;
-            background: transparent;
-            color: transparent;
-            caret-color: var(--text);
-        }
+            .editor {
+                position: relative;
+                min-height: 20em;
+            }
 
-        #output {
-            min-height: 180px;
-        }
+            .editor-highlight,
+            .editor-input {
+                font-family: monospace !important;
+                font-size: 1em;
+                line-height: 1.4;
+                padding: 12px;
+                margin: 0;
+                width: 100%;
+                min-height: 20em;
+                white-space: pre-wrap;
+                word-break: break-word;
+                overflow: auto;
+            }
 
-        .hint {
-            color: var(--muted);
-            font-size: 13px;
-            padding: 0 12px 12px;
-        }
+            .editor-highlight {
+                color: var(--text);
+                pointer-events: none;
+            }
 
-        .tok-kw { color: #60a5fa; }
-        .tok-str { color: #34d399; }
-        .tok-num { color: #f59e0b; }
-        .tok-com { color: #94a3b8; }
-        .tok-bool { color: #f87171; }
-        .tok-fn { color: #f472b6; }
+            .editor-input {
+                position: absolute;
+                inset: 0;
+                border: 0;
+                resize: vertical;
+                background: transparent;
+                color: transparent;
+                caret-color: #000;
+            }
 
-        .ok { color: var(--ok); }
-        .err { color: var(--err); }
-    </style>
-</head>
-<body>
-    <main class="app">
-        <section class="panel">
-            <div class="row">
-                <button id="runBtn">Run</button>
+            .status {
+                color: var(--muted);
+                font-size: 13px;
+                margin-left: auto;
+            }
+
+            .tok-kw {
+                color: #2075aa;
+            }
+            .tok-str {
+                color: #248344;
+            }
+            .tok-num {
+                color: #c57e00;
+            }
+            .tok-com {
+                color: #749388;
+            }
+            .tok-bool {
+                color: #a85141;
+            }
+            .tok-fn {
+                color: #c45276;
+            }
+
+            .ok {
+                color: var(--ok);
+            }
+            .err {
+                color: var(--err);
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="-2 -2 26 26"
+                    width="48"
+                    height="48"
+                >
+                    <path
+                        d="M10,3 m-2,2 l-6,6 8,8 M14,3 l8,8 -6,6 m"
+                        fill="none"
+                        stroke="#d9f"
+                        stroke-width="3.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    />
+                </svg>
+                Pua Playground
+            </h1>
+            <section>
+                <button id="runBtn">
+                    <svg
+                        width="24"
+                        height="24"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+                        <polygon
+                            points="5,5 20,12 5,20"
+                            fill="#d9f"
+                            stroke-linejoin="round"
+                            stroke-linecap="round"
+                        ></polygon>
+                    </svg>
+                    <b>Run</b>
+                </button>
                 <button id="clearBtn" type="button">Clear Output</button>
-                <input id="wasmFile" type="file" accept=".wasm,application/wasm">
-                <span class="status" id="status">Ready</span>
-            </div>
+                <span id="status" class="status">Ready</span>
+            </section>
             <div class="editor">
-                <pre id="highlight" class="editor-highlight" aria-hidden="true"></pre>
-                <textarea id="source" class="editor-input" spellcheck="false">print "Hello from Pua WASM"
+                <pre
+                    id="highlight"
+                    class="editor-highlight"
+                    aria-hidden="true"
+                ></pre>
+                <textarea id="source" class="editor-input" spellcheck="false">
+print "Hello from Pua WASM"
 print 1 + 2
-</textarea>
+</textarea
+                >
             </div>
-            <div class="hint">Runs your code as <code>/main.pua</code>. Select a local <code>pua.wasm</code> file first.</div>
-        </section>
 
-        <section class="panel">
-            <div class="row"><strong>Output</strong></div>
+            <div class="row"><strong>Output:</strong></div>
             <pre id="output"></pre>
-        </section>
-    </main>
+        </main>
 
-    <script type="module">
-        import {
-            WASI,
-            File,
-            OpenFile,
-            ConsoleStdout,
-            PreopenDirectory
-        } from "https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@0.4.2/+esm";
+        <script type="module">
+            import {
+                WASI,
+                File,
+                OpenFile,
+                ConsoleStdout,
+                PreopenDirectory,
+            } from "https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@0.4.2/+esm";
 
-        const runBtn = document.getElementById("runBtn");
-        const clearBtn = document.getElementById("clearBtn");
-        const wasmFileEl = document.getElementById("wasmFile");
-        const sourceEl = document.getElementById("source");
-        const highlightEl = document.getElementById("highlight");
-        const outputEl = document.getElementById("output");
-        const statusEl = document.getElementById("status");
-        const keywordSet = new Set(["fn", "return", "if", "else", "elif", "for", "while", "break", "continue", "import", "from", "as", "try", "catch", "throw", "with", "yield", "in", "print", "assert"]);
-        const boolSet = new Set(["true", "false", "nil"]);
+            const runBtn = document.getElementById("runBtn");
+            const clearBtn = document.getElementById("clearBtn");
+            const sourceEl = document.getElementById("source");
+            const highlightEl = document.getElementById("highlight");
+            const outputEl = document.getElementById("output");
+            const statusEl = document.getElementById("status");
+            const keywordSet = new Set([
+                "fn",
+                "return",
+                "if",
+                "else",
+                "elif",
+                "for",
+                "while",
+                "break",
+                "continue",
+                "import",
+                "from",
+                "as",
+                "try",
+                "catch",
+                "throw",
+                "with",
+                "yield",
+                "in",
+                "print",
+                "assert",
+            ]);
+            const boolSet = new Set(["true", "false", "nil"]);
 
-        function setStatus(text, kind = "") {
-            statusEl.textContent = text;
-            statusEl.className = `status ${kind}`.trim();
-        }
+            function setStatus(text, kind = "") {
+                if (!statusEl) return;
+                statusEl.textContent = text;
+                statusEl.className = `status ${kind}`.trim();
+            }
 
-        function appendOutput(line) {
-            outputEl.textContent += line;
-            outputEl.scrollTop = outputEl.scrollHeight;
-        }
+            function appendOutput(line) {
+                outputEl.textContent += line;
+                outputEl.scrollTop = outputEl.scrollHeight;
+            }
 
-        function escHtml(text) {
-            return text
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;");
-        }
+            function escHtml(text) {
+                return text
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+            }
 
-        function highlightLine(line) {
-            let out = "";
-            let i = 0;
-            while (i < line.length) {
-                const ch = line[i];
+            function highlightLine(line) {
+                let out = "";
+                let i = 0;
+                while (i < line.length) {
+                    const ch = line[i];
 
-                if (ch === "#") {
-                    out += `<span class="tok-com">${escHtml(line.slice(i))}</span>`;
-                    break;
-                }
+                    if (ch === "#") {
+                        out += `<span class="tok-com">${escHtml(line.slice(i))}</span>`;
+                        break;
+                    }
 
-                if (ch === "'" || ch === "\"") {
-                    const quote = ch;
-                    let j = i + 1;
-                    while (j < line.length) {
-                        if (line[j] === "\\") {
-                            j += 2;
-                            continue;
-                        }
-                        if (line[j] === quote) {
+                    if (ch === "'" || ch === '"') {
+                        const quote = ch;
+                        let j = i + 1;
+                        while (j < line.length) {
+                            if (line[j] === "\\") {
+                                j += 2;
+                                continue;
+                            }
+                            if (line[j] === quote) {
+                                j++;
+                                break;
+                            }
                             j++;
-                            break;
                         }
-                        j++;
+                        out += `<span class="tok-str">${escHtml(line.slice(i, j))}</span>`;
+                        i = j;
+                        continue;
                     }
-                    out += `<span class="tok-str">${escHtml(line.slice(i, j))}</span>`;
-                    i = j;
-                    continue;
-                }
 
-                if (/[0-9]/.test(ch)) {
-                    let j = i + 1;
-                    while (j < line.length && /[0-9._]/.test(line[j])) j++;
-                    out += `<span class="tok-num">${escHtml(line.slice(i, j))}</span>`;
-                    i = j;
-                    continue;
-                }
-
-                if (/[A-Za-z_]/.test(ch)) {
-                    let j = i + 1;
-                    while (j < line.length && /[A-Za-z0-9_]/.test(line[j])) j++;
-                    const word = line.slice(i, j);
-                    if (keywordSet.has(word)) {
-                        out += `<span class="tok-kw">${word}</span>`;
-                    } else if (boolSet.has(word)) {
-                        out += `<span class="tok-bool">${word}</span>`;
-                    } else if (line.slice(j).match(/^\s*\(/)) {
-                        out += `<span class="tok-fn">${word}</span>`;
-                    } else {
-                        out += escHtml(word);
+                    if (/[0-9]/.test(ch)) {
+                        let j = i + 1;
+                        while (j < line.length && /[0-9._]/.test(line[j])) j++;
+                        out += `<span class="tok-num">${escHtml(line.slice(i, j))}</span>`;
+                        i = j;
+                        continue;
                     }
-                    i = j;
-                    continue;
+
+                    if (/[A-Za-z_]/.test(ch)) {
+                        let j = i + 1;
+                        while (j < line.length && /[A-Za-z0-9_]/.test(line[j]))
+                            j++;
+                        const word = line.slice(i, j);
+                        if (keywordSet.has(word)) {
+                            out += `<span class="tok-kw">${word}</span>`;
+                        } else if (boolSet.has(word)) {
+                            out += `<span class="tok-bool">${word}</span>`;
+                        } else if (line.slice(j).match(/^\s*\(/)) {
+                            out += `<span class="tok-fn">${word}</span>`;
+                        } else {
+                            out += escHtml(word);
+                        }
+                        i = j;
+                        continue;
+                    }
+
+                    out += escHtml(ch);
+                    i++;
                 }
-
-                out += escHtml(ch);
-                i++;
-            }
-            return out;
-        }
-
-        function renderHighlight() {
-            const lines = sourceEl.value.split("\n");
-            let html = lines.map((line) => highlightLine(line)).join("\n");
-            if (sourceEl.value.endsWith("\n")) html += "\n";
-            highlightEl.innerHTML = html || " ";
-            highlightEl.scrollTop = sourceEl.scrollTop;
-            highlightEl.scrollLeft = sourceEl.scrollLeft;
-        }
-
-        async function loadWasmModule() {
-            const selectedFile = wasmFileEl.files && wasmFileEl.files[0];
-            if (!selectedFile) {
-                throw new Error("Select your local pua.wasm file first.");
+                return out;
             }
 
-            const bytes = await selectedFile.arrayBuffer();
-            return {
-                module: await WebAssembly.compile(bytes),
-                sourceLabel: selectedFile.name
-            };
-        }
-
-        async function runCode() {
-            runBtn.disabled = true;
-            setStatus("Running...");
-            outputEl.textContent = "";
-
-            try {
-                const encoder = new TextEncoder();
-                const sourceBytes = encoder.encode(sourceEl.value);
-                const stdout = ConsoleStdout.lineBuffered((msg) => appendOutput(msg + "\n"));
-                const stderr = ConsoleStdout.lineBuffered((msg) => appendOutput(msg + "\n"));
-
-                const args = ["pua.wasm", "/main.pua"];
-                const env = [];
-                const fds = [
-                    new OpenFile(new File([])),
-                    stdout,
-                    stderr,
-                    new PreopenDirectory("/", [["main.pua", new File(sourceBytes)]])
-                ];
-                const wasi = new WASI(args, env, fds);
-
-                const { module, sourceLabel } = await loadWasmModule();
-                const instance = await WebAssembly.instantiate(module, {
-                    wasi_snapshot_preview1: wasi.wasiImport
-                });
-
-                wasi.start(instance);
-                setStatus(`Done (${sourceLabel})`, "ok");
-            } catch (err) {
-                appendOutput(String(err) + "\n");
-                setStatus("Failed", "err");
-            } finally {
-                runBtn.disabled = false;
+            function renderHighlight() {
+                const lines = sourceEl.value.split("\n");
+                let html = lines.map((line) => highlightLine(line)).join("\n");
+                if (sourceEl.value.endsWith("\n")) html += "\n";
+                highlightEl.innerHTML = html || " ";
+                highlightEl.scrollTop = sourceEl.scrollTop;
+                highlightEl.scrollLeft = sourceEl.scrollLeft;
             }
-        }
 
-        runBtn.addEventListener("click", runCode);
-        clearBtn.addEventListener("click", () => {
-            outputEl.textContent = "";
-            setStatus("Ready");
-        });
-        sourceEl.addEventListener("input", renderHighlight);
-        sourceEl.addEventListener("scroll", () => {
-            highlightEl.scrollTop = sourceEl.scrollTop;
-            highlightEl.scrollLeft = sourceEl.scrollLeft;
-        });
-        renderHighlight();
-    </script>
-</body>
+            async function loadWasmModule() {
+                const wasmPath = "../pua.wasm";
+                const response = await fetch(wasmPath);
+                if (!response.ok) {
+                    throw new Error(
+                        `Failed to load ${wasmPath} (${response.status} ${response.statusText})`,
+                    );
+                }
+                const bytes = await response.arrayBuffer();
+                return {
+                    module: await WebAssembly.compile(bytes),
+                    sourceLabel: wasmPath,
+                };
+            }
+
+            async function runCode() {
+                runBtn.disabled = true;
+                setStatus("Running...");
+                outputEl.textContent = "";
+
+                try {
+                    const encoder = new TextEncoder();
+                    const sourceBytes = encoder.encode(sourceEl.value);
+                    const stdout = ConsoleStdout.lineBuffered((msg) =>
+                        appendOutput(msg + "\n"),
+                    );
+                    const stderr = ConsoleStdout.lineBuffered((msg) =>
+                        appendOutput(msg + "\n"),
+                    );
+
+                    const args = ["pua.wasm", "/main.pua"];
+                    const env = [];
+                    const fds = [
+                        new OpenFile(new File([])),
+                        stdout,
+                        stderr,
+                        new PreopenDirectory("/", [
+                            ["main.pua", new File(sourceBytes)],
+                        ]),
+                    ];
+                    const wasi = new WASI(args, env, fds);
+
+                    const { module, sourceLabel } = await loadWasmModule();
+                    const instance = await WebAssembly.instantiate(module, {
+                        wasi_snapshot_preview1: wasi.wasiImport,
+                    });
+
+                    wasi.start(instance);
+                    setStatus(`Done (${sourceLabel})`, "ok");
+                } catch (err) {
+                    appendOutput(String(err) + "\n");
+                    setStatus("Failed", "err");
+                } finally {
+                    runBtn.disabled = false;
+                }
+            }
+
+            runBtn.addEventListener("click", runCode);
+            clearBtn.addEventListener("click", () => {
+                outputEl.textContent = "";
+                setStatus("Ready");
+            });
+            sourceEl.addEventListener("input", renderHighlight);
+            sourceEl.addEventListener("scroll", () => {
+                highlightEl.scrollTop = sourceEl.scrollTop;
+                highlightEl.scrollLeft = sourceEl.scrollLeft;
+            });
+            renderHighlight();
+        </script>
+    </body>
 </html>

@@ -44,7 +44,7 @@ int vm_handle_op_mod_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b) {
     push(vm, b);
     (*frame)->ip = *ip;
     if (!call(vm, AS_CLOSURE(method), 2)) return 0;
-    *frame = &vm->current_thread->frames[vm->current_thread->frame_count - 1];
+    *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
     *ip = (*frame)->ip;
     return 1;
 }

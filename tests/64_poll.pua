@@ -1,0 +1,30 @@
+from lib.test import assert_eq, assert_true
+
+socket = import socket
+poll = import poll
+
+s = socket.udp()
+assert_true(s != nil, "udp socket create failed")
+
+fd = s.fileno(s)
+assert_true(type(fd) == "number", "fileno must return number")
+
+ready_out = poll.wait({{fd = fd, events = "out"}}, 50)
+assert_eq(type(ready_out), "table")
+assert_eq(#ready_out, 1)
+out_row = ready_out[1]
+assert_eq(out_row.index, 1)
+assert_eq(out_row.fd, fd)
+assert_true(out_row["out"] == true)
+
+ready_default = poll.wait({fd}, 0)
+assert_eq(type(ready_default), "table")
+assert_eq(#ready_default, 0)
+
+ready_in = poll.wait({{fd = fd, events = "in"}}, 0)
+assert_eq(type(ready_in), "table")
+assert_eq(#ready_in, 0)
+
+assert_true(s.close(s) == true)
+
+print "poll ok"

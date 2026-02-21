@@ -1,0 +1,67 @@
+from lib.test import assert_eq, assert_true
+
+glob = import glob
+io = import io
+os = import os
+
+ROOT = "tests/tmp_glob_case"
+
+fn safe_rm(path)
+  if os.exists(path)
+    os.remove(path)
+
+fn safe_rmdir(path)
+  if os.exists(path) and os.isdir(path)
+    os.rmdir(path)
+
+safe_rm(ROOT + "/a.txt")
+safe_rm(ROOT + "/b.txt")
+safe_rm(ROOT + "/c.log")
+safe_rmdir(ROOT + "/sub")
+safe_rmdir(ROOT)
+
+local ok, err = os.mkdir(ROOT)
+assert_true(ok == true, "mkdir ROOT failed")
+local ok2, err2 = os.mkdir(ROOT + "/sub")
+assert_true(ok2 == true, "mkdir sub failed")
+
+f = io.open(ROOT + "/a.txt", "w")
+f.write("a")
+f.close()
+
+f = io.open(ROOT + "/b.txt", "w")
+f.write("b")
+f.close()
+
+f = io.open(ROOT + "/c.log", "w")
+f.write("c")
+f.close()
+
+paths = glob.match(ROOT + "/*.txt")
+assert_eq(type(paths), "table")
+
+found_a = false
+found_b = false
+count = 0
+for p in paths
+  count = count + 1
+  if p == ROOT + "/a.txt"
+    found_a = true
+  if p == ROOT + "/b.txt"
+    found_b = true
+
+assert_eq(count, 2)
+assert_true(found_a)
+assert_true(found_b)
+
+none = glob.match(ROOT + "/*.zzz")
+assert_eq(type(none), "table")
+assert_eq(#none, 0)
+
+safe_rm(ROOT + "/a.txt")
+safe_rm(ROOT + "/b.txt")
+safe_rm(ROOT + "/c.log")
+safe_rmdir(ROOT + "/sub")
+safe_rmdir(ROOT)
+
+print "glob ok"

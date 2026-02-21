@@ -23,7 +23,7 @@ static int value_equals_for_find(Value a, Value b) {
 
 static int call_unary_lookup(VM* vm, Value fn, Value arg, Value* out) {
     if (IS_CLOSURE(fn)) {
-        int saved_frame_count = vm->current_thread->frame_count;
+        int saved_frame_count = vm_current_thread(vm)->frame_count;
 
         push(vm, fn);
         push(vm, arg);
@@ -45,8 +45,8 @@ static int call_unary_lookup(VM* vm, Value fn, Value arg, Value* out) {
         push(vm, fn);
         push(vm, arg);
 
-        Value* call_args = vm->current_thread->stack_top - 1;
-        vm->current_thread->stack_top -= 2;
+        Value* call_args = vm_current_thread(vm)->stack_top - 1;
+        vm_current_thread(vm)->stack_top -= 2;
 
         if (!AS_NATIVE(fn)(vm, 1, call_args)) {
             return 0;

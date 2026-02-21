@@ -2,10 +2,141 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 #include "libs.h"
 #include "../object.h"
 #include "../value.h"
 #include "../vm.h"
+
+typedef struct {
+    uint32_t magic;
+    int length;
+    char* chars;
+} MutableString;
+
+#define MUTABLE_STRING_MAGIC 0x4d535452u
+
+static void mutable_string_finalizer(void* ptr) {
+    MutableString* ms = (MutableString*)ptr;
+    if (ms == NULL) return;
+    free(ms->chars);
+    ms->chars = NULL;
+    free(ms);
+}
+
+static ObjTable* string_lookup_metatable(VM* vm, const char* key, int key_len) {
+    Value string_module = NIL_VAL;
+    if (!table_get(&vm->globals, vm->str_module_name, &string_module) || !IS_TABLE(string_module)) {
+        return NULL;
+    }
+
+    ObjString* key_str = copy_string(key, key_len);
+    Value mt = NIL_VAL;
+    if (!table_get(&AS_TABLE(string_module)->table, key_str, &mt) || !IS_TABLE(mt)) {
+        return NULL;
+    }
+    return AS_TABLE(mt);
+}
+
+static MutableString* mutable_string_from_userdata(VM* vm, ObjUserdata* udata) {
+    MutableString* ms = (MutableString*)udata->data;
+    if (ms == NULL || ms->magic != MUTABLE_STRING_MAGIC) {
+        vm_runtime_error(vm, "Invalid mutable string.");
+        return NULL;
+    }
+    return ms;
+}
+
+static int string_mutable(VM* vm, int arg_count, Value* args) {
+    if (arg_count > 1) {
+        vm_runtime_error(vm, "string.mutable() expects at most 1 argument.");
+        return 0;
+    }
+
+    const char* src = "";
+    int len = 0;
+    if (arg_count == 1) {
+        if (!IS_STRING(args[0])) {
+            vm_runtime_error(vm, "string.mutable() expects string.");
+            return 0;
+        }
+        ObjString* str = GET_STRING(0);
+        src = str->chars;
+        len = str->length;
+    }
+
+    MutableString* ms = (MutableString*)malloc(sizeof(MutableString));
+    if (ms == NULL) {
+        vm_runtime_error(vm, "string.mutable(): out of memory.");
+        return 0;
+    }
+    ms->chars = (char*)malloc((size_t)len + 1);
+    if (ms->chars == NULL) {
+        free(ms);
+        vm_runtime_error(vm, "string.mutable(): out of memory.");
+        return 0;
+    }
+    if (len > 0) memcpy(ms->chars, src, (size_t)len);
+    ms->chars[len] = '\0';
+    ms->length = len;
+    ms->magic = MUTABLE_STRING_MAGIC;
+
+    ObjUserdata* udata = new_userdata_with_finalizer(ms, mutable_string_finalizer);
+    udata->metatable = string_lookup_metatable(vm, "_mutable_mt", 11);
+    RETURN_OBJ(udata);
+}
+
+static int mutable_toupper(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_USERDATA(0);
+
+    ObjUserdata* udata = GET_USERDATA(0);
+    MutableString* ms = mutable_string_from_userdata(vm, udata);
+    if (ms == NULL) return 0;
+
+    for (int i = 0; i < ms->length; i++) {
+        unsigned char c = (unsigned char)ms->chars[i];
+        ms->chars[i] = (char)toupper((int)c);
+    }
+    RETURN_VAL(args[0]);
+}
+
+static int mutable_tolower(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_USERDATA(0);
+
+    ObjUserdata* udata = GET_USERDATA(0);
+    MutableString* ms = mutable_string_from_userdata(vm, udata);
+    if (ms == NULL) return 0;
+
+    for (int i = 0; i < ms->length; i++) {
+        unsigned char c = (unsigned char)ms->chars[i];
+        ms->chars[i] = (char)tolower((int)c);
+    }
+    RETURN_VAL(args[0]);
+}
+
+static int mutable_value(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_USERDATA(0);
+
+    ObjUserdata* udata = GET_USERDATA(0);
+    MutableString* ms = mutable_string_from_userdata(vm, udata);
+    if (ms == NULL) return 0;
+
+    RETURN_STRING(ms->chars, ms->length);
+}
+
+static int mutable_len(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_USERDATA(0);
+
+    ObjUserdata* udata = GET_USERDATA(0);
+    MutableString* ms = mutable_string_from_userdata(vm, udata);
+    if (ms == NULL) return 0;
+
+    RETURN_NUMBER(ms->length);
+}
 
 static int string_len(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
@@ -52,14 +183,34 @@ static int string_lower(VM* vm, int arg_count, Value* args) {
     ASSERT_STRING(0);
 
     ObjString* str = GET_STRING(0);
-    
-    char* buf = (char*)malloc(str->length + 1);
-    for (int i = 0; i < str->length; i++) {
-        buf[i] = tolower(str->chars[i]);
+    const char* chars = str->chars;
+    int len = str->length;
+    char* buf = NULL;
+
+    for (int i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)chars[i];
+        char lowered = (char)tolower((int)c);
+        if (buf != NULL) {
+            buf[i] = lowered;
+            continue;
+        }
+        if (lowered != chars[i]) {
+            buf = (char*)malloc((size_t)len + 1);
+            if (buf == NULL) {
+                vm_runtime_error(vm, "string.lower(): out of memory.");
+                return 0;
+            }
+            if (i > 0) memcpy(buf, chars, (size_t)i);
+            buf[i] = lowered;
+        }
     }
-    buf[str->length] = '\0';
-    
-    RETURN_OBJ(take_string(buf, str->length));
+
+    if (buf == NULL) {
+        RETURN_OBJ(str);
+    }
+
+    buf[len] = '\0';
+    RETURN_OBJ(take_string(buf, len));
 }
 
 static int string_upper(VM* vm, int arg_count, Value* args) {
@@ -67,14 +218,34 @@ static int string_upper(VM* vm, int arg_count, Value* args) {
     ASSERT_STRING(0);
 
     ObjString* str = GET_STRING(0);
-    
-    char* buf = (char*)malloc(str->length + 1);
-    for (int i = 0; i < str->length; i++) {
-        buf[i] = toupper(str->chars[i]);
+    const char* chars = str->chars;
+    int len = str->length;
+    char* buf = NULL;
+
+    for (int i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)chars[i];
+        char uppered = (char)toupper((int)c);
+        if (buf != NULL) {
+            buf[i] = uppered;
+            continue;
+        }
+        if (uppered != chars[i]) {
+            buf = (char*)malloc((size_t)len + 1);
+            if (buf == NULL) {
+                vm_runtime_error(vm, "string.upper(): out of memory.");
+                return 0;
+            }
+            if (i > 0) memcpy(buf, chars, (size_t)i);
+            buf[i] = uppered;
+        }
     }
-    buf[str->length] = '\0';
-    
-    RETURN_OBJ(take_string(buf, str->length));
+
+    if (buf == NULL) {
+        RETURN_OBJ(str);
+    }
+
+    buf[len] = '\0';
+    RETURN_OBJ(take_string(buf, len));
 }
 
 static int string_char(VM* vm, int arg_count, Value* args) {
@@ -581,6 +752,7 @@ void register_string(VM* vm) {
         {"sub", string_sub},
         {"lower", string_lower},
         {"upper", string_upper},
+        {"mutable", string_mutable},
         {"char", string_char},
         {"byte", string_byte},
         {"find", string_find},
@@ -625,6 +797,49 @@ void register_string(VM* vm) {
     table_set(&vm->globals, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); // string_module
     pop(vm); // str_name
+
+    // Mutable string userdata metatable.
+    ObjTable* mutable_mt = new_table();
+    push(vm, OBJ_VAL(mutable_mt));
+
+    const NativeReg mutable_methods[] = {
+        {"toupper", mutable_toupper},
+        {"tolower", mutable_tolower},
+        {"value", mutable_value},
+        {"len", mutable_len},
+        {NULL, NULL}
+    };
+
+    for (int i = 0; mutable_methods[i].name != NULL; i++) {
+        ObjString* name_str = copy_string(mutable_methods[i].name, (int)strlen(mutable_methods[i].name));
+        push(vm, OBJ_VAL(name_str));
+        ObjNative* method = new_native(mutable_methods[i].function, name_str);
+        method->is_self = 1;
+        push(vm, OBJ_VAL(method));
+        table_set(&mutable_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+        pop(vm);
+        pop(vm);
+    }
+
+    ObjString* index_name = copy_string("__index", 7);
+    push(vm, OBJ_VAL(index_name));
+    push(vm, OBJ_VAL(mutable_mt));
+    table_set(&mutable_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
+    push(vm, OBJ_VAL(copy_string("__name", 6)));
+    push(vm, OBJ_VAL(copy_string("string.mutable", 14)));
+    table_set(&mutable_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
+    push(vm, OBJ_VAL(copy_string("_mutable_mt", 11)));
+    push(vm, OBJ_VAL(mutable_mt));
+    table_set(&string_module_table->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+    pop(vm); // mutable_mt
     
     pop(vm); // pop mt
     pop(vm); // Pop string module

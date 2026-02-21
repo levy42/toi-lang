@@ -120,6 +120,15 @@ void emit_bytes(uint8_t byte1, uint8_t byte2) {
     emit_byte(byte2);
 }
 
+void emit_call(uint8_t arg_count) {
+    switch (arg_count) {
+        case 0: emit_byte(OP_CALL0); break;
+        case 1: emit_byte(OP_CALL1); break;
+        case 2: emit_byte(OP_CALL2); break;
+        default: emit_bytes(OP_CALL, arg_count); break;
+    }
+}
+
 int emit_jump(uint8_t instruction) {
     emit_byte(instruction);
     emit_byte(0xff);
@@ -1585,7 +1594,7 @@ static void table_comprehension(int can_assign) {
     emit_bytes(OP_GET_LOCAL, (uint8_t)iter_slot);
     emit_bytes(OP_GET_LOCAL, (uint8_t)state_slot);
     emit_bytes(OP_GET_LOCAL, (uint8_t)control_slot);
-    emit_bytes(OP_CALL, 2);
+    emit_call(2);
 
     for (int i = var_count; i < 2; i++) {
         emit_byte(OP_POP);
@@ -1673,7 +1682,7 @@ static void table_comprehension(int can_assign) {
         emit_byte(compiler.upvalues[i].is_local ? 1 : 0);
         emit_byte(compiler.upvalues[i].index);
     }
-    emit_bytes(OP_CALL, 0);
+    emit_call(0);
     last_expr_ends_with_call = 1;
 }
 
@@ -2071,7 +2080,7 @@ static void apply_decorators(Token function_name, DecoratorSpan* decorators, int
     for (int i = decorator_count - 1; i >= 0; i--) {
         compile_expression_from_string(decorators[i].start, decorators[i].length);
         emit_get_named(function_name);
-        emit_bytes(OP_CALL, 1);
+        emit_call(1);
         emit_set_named(function_name);
         emit_byte(OP_POP);
     }
@@ -2217,7 +2226,7 @@ static void parse_call(int can_assign) {
     } else if (in_named_args) {
         emit_bytes(OP_CALL_NAMED, arg_count);
     } else {
-        emit_bytes(OP_CALL, arg_count);
+        emit_call(arg_count);
     }
     last_expr_ends_with_call = 1;
     type_stack_top = base_top;

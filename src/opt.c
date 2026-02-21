@@ -36,6 +36,10 @@ static int instr_length(Chunk* chunk, int offset) {
         case OP_IMPORT:
         case OP_BUILD_STRING:
             return 2;
+        case OP_CALL0:
+        case OP_CALL1:
+        case OP_CALL2:
+            return 1;
         case OP_TRY:
             return 7;
         case OP_INC_LOCAL:
@@ -457,8 +461,40 @@ void optimize_chunk(Chunk* chunk) {
 
     free(chunk->code);
     free(chunk->lines);
+    free(chunk->global_ic_versions);
+    free(chunk->global_ic_names);
+    free(chunk->global_ic_values);
+    free(chunk->get_table_ic_versions);
+    free(chunk->get_table_ic_tables);
+    free(chunk->get_table_ic_keys);
+    free(chunk->get_table_ic_values);
     chunk->code = new_code;
     chunk->lines = new_lines;
     chunk->count = new_count;
     chunk->capacity = new_capacity;
+    chunk->global_ic_versions = NULL;
+    chunk->global_ic_names = NULL;
+    chunk->global_ic_values = NULL;
+    chunk->get_table_ic_versions = NULL;
+    chunk->get_table_ic_tables = NULL;
+    chunk->get_table_ic_keys = NULL;
+    chunk->get_table_ic_values = NULL;
+    if (new_capacity > 0) {
+        chunk->global_ic_versions = (uint32_t*)malloc(sizeof(uint32_t) * new_capacity);
+        chunk->global_ic_names = (ObjString**)malloc(sizeof(ObjString*) * new_capacity);
+        chunk->global_ic_values = (Value*)malloc(sizeof(Value) * new_capacity);
+        chunk->get_table_ic_versions = (uint32_t*)malloc(sizeof(uint32_t) * new_capacity);
+        chunk->get_table_ic_tables = (ObjTable**)malloc(sizeof(ObjTable*) * new_capacity);
+        chunk->get_table_ic_keys = (ObjString**)malloc(sizeof(ObjString*) * new_capacity);
+        chunk->get_table_ic_values = (Value*)malloc(sizeof(Value) * new_capacity);
+        for (int i = 0; i < new_capacity; i++) {
+            chunk->global_ic_versions[i] = 0;
+            chunk->global_ic_names[i] = NULL;
+            chunk->global_ic_values[i] = NIL_VAL;
+            chunk->get_table_ic_versions[i] = 0;
+            chunk->get_table_ic_tables[i] = NULL;
+            chunk->get_table_ic_keys[i] = NULL;
+            chunk->get_table_ic_values[i] = NIL_VAL;
+        }
+    }
 }

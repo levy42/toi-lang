@@ -24,6 +24,7 @@ socket = import socket
 - `sock.close()`
 - `sock.getpeername() -> ip, port`
 - `sock.getsockname() -> ip, port`
+- `sock.fileno() -> fd|nil`
 
 ## `socket.select`
 

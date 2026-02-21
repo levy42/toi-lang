@@ -1,0 +1,33 @@
+from lib.test import assert_eq, assert_true
+
+thread = import thread
+
+i = 99
+
+fn worker_uses_global()
+  i = 1
+  while i <= 10
+    i = i + 1
+  return i
+
+local h1, err1 = thread.spawn(worker_uses_global)
+assert_true(h1 != nil, "spawn worker_uses_global failed")
+local r1 = thread.join(h1)
+assert_eq(r1, 11)
+assert_eq(i, 11)
+
+i = 99
+
+fn worker_uses_local()
+  local i = 1
+  while i <= 10
+    i = i + 1
+  return i
+
+local h2, err3 = thread.spawn(worker_uses_local)
+assert_true(h2 != nil, "spawn worker_uses_local failed")
+local r2 = thread.join(h2)
+assert_eq(r2, 11)
+assert_eq(i, 99)
+
+print "thread globals/local scope ok"

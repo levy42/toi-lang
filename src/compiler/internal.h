@@ -94,6 +94,7 @@ int check(TokenType type);
 void emit_byte(uint8_t byte);
 void emit_constant(Value value);
 void emit_bytes(uint8_t byte1, uint8_t byte2);
+void emit_call(uint8_t arg_count);
 int emit_jump(uint8_t instruction);
 TryPatch emit_try(uint8_t depth);
 void patch_jump(int offset);

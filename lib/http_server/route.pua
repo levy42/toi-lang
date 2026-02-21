@@ -30,24 +30,31 @@ fn parse_param_segment(seg)
   return nil
 
 fn coerce_param(raw, type_name)
-  if {"any", "str", "string", nil} has type_name
-    return raw
+  t = type_name
+  if t == nil
+    t = "any"
+  t = string.lower(str(t))
 
-  if type_name == "int"
-    return int(raw)
-
-  if type_name == "float"
-    return float(raw)
-
-  if type_name == "bool"
-    s = string.lower(str(raw))
-    if s == "true" or s == "1"
-      return true
-    if s == "false" or s == "0"
-      return false
-    error("expected bool, got '" + str(raw) + "'")
-
-  return raw
+  match t
+    case "any"
+      return raw
+    case "str"
+      return raw
+    case "string"
+      return raw
+    case "int"
+      return int(raw)
+    case "float"
+      return float(raw)
+    case "bool"
+      s = string.lower(str(raw))
+      if s == "true" or s == "1"
+        return true
+      if s == "false" or s == "0"
+        return false
+      error("expected bool, got '" + str(raw) + "'")
+    else
+      return raw
 
 fn build_handler_args(route, path_params)
   sig = route.signature

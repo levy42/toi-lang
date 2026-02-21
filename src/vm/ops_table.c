@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "../lib/libs.h"
 #include "ops_table.h"
@@ -7,6 +8,13 @@ static int is_self_callable_local(Value v) {
     if (IS_CLOSURE(v)) return AS_CLOSURE(v)->function->is_self;
     if (IS_NATIVE(v)) return AS_NATIVE_OBJ(v)->is_self;
     return 0;
+}
+
+static int objstring_equals_local(ObjString* a, ObjString* b) {
+    if (a == b) return 1;
+    if (a->length != b->length) return 0;
+    if (a->hash != b->hash) return 0;
+    return memcmp(a->chars, b->chars, (size_t)a->length) == 0;
 }
 
 static Value maybe_bind_self_local(Value receiver, Value result) {
@@ -91,6 +99,8 @@ int vm_handle_op_append(VM* vm, CallFrame** frame, uint8_t** ip) {
 }
 
 int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 1;
     Value key = pop(vm);
     Value table = pop(vm);
     Value result = NIL_VAL;
@@ -98,7 +108,30 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
     if (IS_TABLE(table)) {
         ObjTable* t = AS_TABLE(table);
         if (IS_STRING(key)) {
-            if (table_get(&t->table, AS_STRING(key), &result)) {
+            ObjString* key_str = AS_STRING(key);
+            if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+                chunk->get_table_ic_tables != NULL &&
+                chunk->get_table_ic_tables[opcode_offset] == t &&
+                chunk->get_table_ic_keys[opcode_offset] == key_str &&
+                chunk->get_table_ic_versions[opcode_offset] == t->table.version) {
+                result = maybe_bind_self_local(table, chunk->get_table_ic_values[opcode_offset]);
+                push(vm, result);
+                maybe_collect_garbage(vm);
+                return 1;
+            }
+
+            if (table_get(&t->table, key_str, &result)) {
+                // Cache only plain values; self-callable function values can
+                // have different runtime behavior due to binding.
+                if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+                    chunk->get_table_ic_tables != NULL &&
+                    !is_self_callable_local(result) &&
+                    !IS_BOUND_METHOD(result)) {
+                    chunk->get_table_ic_tables[opcode_offset] = t;
+                    chunk->get_table_ic_keys[opcode_offset] = key_str;
+                    chunk->get_table_ic_versions[opcode_offset] = t->table.version;
+                    chunk->get_table_ic_values[opcode_offset] = result;
+                }
                 result = maybe_bind_self_local(table, result);
             } else if (t->metatable) {
                 int handled = handle_index_metamethod_local(vm, t, table, key, &result, frame, ip);
@@ -168,21 +201,52 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
     } else if (IS_STRING(table)) {
         if (IS_STRING(key)) {
             Value string_module = NIL_VAL;
-            ObjString* string_name = copy_string("string", 6);
-            push(vm, OBJ_VAL(string_name));
-            if ((!table_get(&vm->globals, string_name, &string_module) || !IS_TABLE(string_module)) &&
+            ObjString* method_name = AS_STRING(key);
+            Value cached_method = NIL_VAL;
+            int use_cached = 0;
+
+            if (objstring_equals_local(method_name, vm->str_upper_name)) {
+                if (!IS_NIL(vm->str_upper_fn)) {
+                    cached_method = vm->str_upper_fn;
+                    use_cached = 1;
+                }
+            } else if (objstring_equals_local(method_name, vm->str_lower_name)) {
+                if (!IS_NIL(vm->str_lower_fn)) {
+                    cached_method = vm->str_lower_fn;
+                    use_cached = 1;
+                }
+            }
+
+            if (use_cached) {
+                result = maybe_bind_self_local(table, cached_method);
+                push(vm, result);
+                maybe_collect_garbage(vm);
+                return 1;
+            }
+
+            if ((!table_get(&vm->globals, vm->str_module_name, &string_module) || !IS_TABLE(string_module)) &&
                 load_native_module(vm, "string")) {
                 string_module = peek(vm, 0);
                 pop(vm);
             }
             if (IS_TABLE(string_module)) {
-                if (table_get(&AS_TABLE(string_module)->table, AS_STRING(key), &result)) {
+                ObjString* lookup_name = method_name;
+                if (objstring_equals_local(method_name, vm->str_upper_name)) {
+                    lookup_name = vm->str_upper_name;
+                } else if (objstring_equals_local(method_name, vm->str_lower_name)) {
+                    lookup_name = vm->str_lower_name;
+                }
+                if (table_get(&AS_TABLE(string_module)->table, lookup_name, &result)) {
+                    if (lookup_name == vm->str_upper_name) {
+                        vm->str_upper_fn = result;
+                    } else if (lookup_name == vm->str_lower_name) {
+                        vm->str_lower_fn = result;
+                    }
                     result = maybe_bind_self_local(table, result);
                 } else {
                     result = NIL_VAL;
                 }
             }
-            pop(vm);
         } else if (IS_NUMBER(key)) {
             double num_key = AS_NUMBER(key);
             int idx = (int)num_key;

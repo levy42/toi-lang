@@ -1,0 +1,12 @@
+from lib.test import assert_true, expect_error
+
+signal = import signal
+
+assert_true(signal.ignore("INT"))
+assert_true(signal.raise("INT"))
+assert_true(signal.default("INT"))
+
+msg = expect_error(fn() signal.raise("NO_SUCH_SIGNAL"))
+assert_true(msg != nil)
+
+print "signal ok"

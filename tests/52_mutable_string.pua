@@ -1,0 +1,27 @@
+from lib.test import assert_eq, expect_error
+
+string = import string
+
+s = string.mutable("AbC xyz")
+assert_eq(s.len(), 7)
+assert_eq(s.value(), "AbC xyz")
+
+s.toupper()
+assert_eq(s.value(), "ABC XYZ")
+
+s.tolower()
+assert_eq(s.value(), "abc xyz")
+
+u = s
+u.toupper()
+assert_eq(s.value(), "ABC XYZ")
+
+empty = string.mutable()
+assert_eq(empty.value(), "")
+
+msg = expect_error(fn()
+  string.mutable(123)
+)
+assert_eq(msg, "string.mutable() expects string.")
+
+print "mutable string ok"

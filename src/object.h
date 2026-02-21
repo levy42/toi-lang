@@ -7,6 +7,7 @@
 
 struct VM;
 typedef void (*UserdataFinalizer)(void*);
+typedef void (*UserdataMarker)(void*);
 
 typedef enum {
     OBJ_STRING,
@@ -76,15 +77,44 @@ typedef struct ObjThread {
     struct ExceptionHandler* handlers;
     int handler_capacity;
     int handler_count;
+    struct ObjThread* gc_park_next;
+    int gc_park_count;
+    int has_exception;
+    Value exception;
+    Value last_error;
+    int pending_set_local_count;
+    int pending_set_local_slots[8];
+    int pending_set_local_frames[8];
 } ObjThread;
 
 typedef int (*NativeFn)(struct VM* vm, int arg_count, Value* args);
+
+typedef enum {
+    NATIVE_FAST_NONE = 0,
+    NATIVE_FAST_MATH_SIN,
+    NATIVE_FAST_MATH_COS,
+    NATIVE_FAST_MATH_TAN,
+    NATIVE_FAST_MATH_ASIN,
+    NATIVE_FAST_MATH_ACOS,
+    NATIVE_FAST_MATH_ATAN,
+    NATIVE_FAST_MATH_SQRT,
+    NATIVE_FAST_MATH_FLOOR,
+    NATIVE_FAST_MATH_CEIL,
+    NATIVE_FAST_MATH_ABS,
+    NATIVE_FAST_MATH_EXP,
+    NATIVE_FAST_MATH_LOG,
+    NATIVE_FAST_MATH_POW,
+    NATIVE_FAST_MATH_FMOD,
+    NATIVE_FAST_MATH_DEG,
+    NATIVE_FAST_MATH_RAD
+} NativeFastKind;
 
 typedef struct {
     struct Obj obj;
     NativeFn function;
     ObjString* name;
     uint8_t is_self;
+    uint8_t fast_kind;
 } ObjNative;
 
 typedef struct {
@@ -124,6 +154,7 @@ typedef struct {
     struct Obj obj;
     void* data;
     UserdataFinalizer finalize;
+    UserdataMarker mark;
     ObjTable* metatable;
 } ObjUserdata;
 
@@ -181,6 +212,7 @@ ObjThread* new_thread();
 ObjThread* new_thread_with_caps(int stack_cap, int frame_cap, int handler_cap);
 ObjUserdata* new_userdata(void* data);
 ObjUserdata* new_userdata_with_finalizer(void* data, UserdataFinalizer finalize);
+ObjUserdata* new_userdata_with_hooks(void* data, UserdataFinalizer finalize, UserdataMarker mark);
 ObjBoundMethod* new_bound_method(Value receiver, struct Obj* method);
 void print_object(Value value);
 
