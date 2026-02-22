@@ -17,12 +17,30 @@ Runtime type-validation/composition helpers.
 
 Provided constructors and helpers include:
 
-- Primitive type defs: `String`, `Number`, `Boolean`, `Integer`, `Any`
+- Primitive type defs: `String`, `Number`, `Boolean`, `Integer`
 - Containers: `List(inner)`, `Optional(inner)`, `Record(schema, [opts])`
 - Combinators: `Union(...)`, `Literal(...)`, `Constraints(inner, opts)`
-- Validation/coercion helpers: `check(type_def, value)`, `coerce(type_def, value)`, `from_hint(name)`
+- Validation/coercion helpers: `validate(type_def, value)`, `coerce(type_def, value)`, `from_hint(name)`
 
-See `tests/20_pua_libs.pua` for detailed usage.
+Primitive types are now callable with constraint/default metadata, which is sugar for wrapping with `Constraints(...)`.
+
+Examples:
+
+```pua
+types = import lib.types
+
+short_name_t = types.String(max_len = 30, pattern = "^[A-Z]")
+adult_t = types.Integer(min = 18, max = 120)
+
+profile_t = types.Record({
+  name = types.String(default = "Anonymous"),
+  age = types.Integer(default = 18)
+})
+```
+
+When a record field is missing, `Record.check(...)` applies the field's `default` (value or function) before validation.
+
+See `tests/20_pua_libs.pua` and `tests/70_types_options_defaults.pua` for detailed usage.
 
 ## `lib.cli`
 

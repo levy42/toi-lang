@@ -41,6 +41,9 @@ void register_btree(VM* vm);
 #ifndef PUA_WASM
 void register_uuid(VM* vm);
 #endif
+#ifdef PUA_HAS_ZLIB
+void register_gzip(VM* vm);
+#endif
 
 static int load_registered_module(VM* vm, const char* name, void (*register_fn)(VM*)) {
     register_fn(vm);
@@ -95,6 +98,9 @@ static int load_btree(VM* vm) { return load_registered_module(vm, "btree", regis
 #ifndef PUA_WASM
 static int load_uuid(VM* vm) { return load_registered_module(vm, "uuid", register_uuid); }
 #endif
+#ifdef PUA_HAS_ZLIB
+static int load_gzip(VM* vm) { return load_registered_module(vm, "gzip", register_gzip); }
+#endif
 
 // Native module registry - modules that can be imported on demand
 static const ModuleReg native_modules[] = {
@@ -132,6 +138,9 @@ static const ModuleReg native_modules[] = {
     {"btree", load_btree},
 #ifndef PUA_WASM
     {"uuid", load_uuid},
+#endif
+#ifdef PUA_HAS_ZLIB
+    {"gzip", load_gzip},
 #endif
     {NULL, NULL}  // Sentinel
 };

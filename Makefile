@@ -2,6 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -g
 LDFLAGS =
 LDLIBS ?=
+ZLIB_ENABLED ?= auto
 WASM_CC ?= zig cc
 WASM_SYSROOT ?=
 WASM_ENV ?= ZIG_GLOBAL_CACHE_DIR=/tmp/zig-cache ZIG_LOCAL_CACHE_DIR=/tmp/zig-local
@@ -35,10 +36,25 @@ TIMEOUT := $(shell command -v gtimeout >/dev/null 2>&1 && echo gtimeout || echo 
 SRC = src/main.c src/lexer.c src/object.c src/table.c src/value.c src/chunk.c src/debug.c src/vm.c src/vm/build_string.c src/vm/ops_arith.c src/vm/ops_arith_const.c src/vm/ops_compare.c src/vm/ops_control.c src/vm/ops_exception.c src/vm/ops_float.c src/vm/ops_has.c src/vm/ops_import.c src/vm/ops_import_star.c src/vm/ops_iter.c src/vm/ops_local_const.c src/vm/ops_local_set.c src/vm/ops_meta.c src/vm/ops_mod.c src/vm/ops_power.c src/vm/ops_print.c src/vm/ops_state.c src/vm/ops_table.c src/vm/ops_unary.c src/compiler.c src/compiler/fstring.c src/compiler/stmt_control.c src/compiler/stmt.c src/opt.c src/repl.c src/pua_lineedit.c \
       src/lib/math.c src/lib/time.c src/lib/io.c src/lib/os.c src/lib/stat.c src/lib/dir.c src/lib/signal.c src/lib/mmap.c src/lib/poll.c src/lib/coroutine.c src/lib/string.c src/lib/core.c src/lib/libs.c src/lib/table.c src/lib/socket.c src/lib/thread.c src/lib/json.c src/lib/template.c src/lib/http.c src/lib/regex.c src/lib/fnmatch.c src/lib/glob.c \
       src/lib/inspect.c src/lib/binary.c src/lib/structlib.c src/lib/btree.c src/lib/uuid.c
+
+ifeq ($(ZLIB_ENABLED),auto)
+ZLIB_ENABLED := $(shell printf '' | $(CC) -E -include zlib.h - >/dev/null 2>&1 && echo yes || echo no)
+endif
+
+ifeq ($(ZLIB_ENABLED),1)
+ZLIB_ENABLED := yes
+endif
+
+ifeq ($(ZLIB_ENABLED),yes)
+CFLAGS += -DPUA_HAS_ZLIB
+LDLIBS += -lz
+SRC += src/lib/gzip.c
+endif
+
 OBJ = $(SRC:.c=.o)
 TARGET =pua
 WASM_TARGET = pua.wasm
-WASM_SRC = $(filter-out src/repl.c src/pua_lineedit.c src/lib/os.c src/lib/stat.c src/lib/dir.c src/lib/signal.c src/lib/mmap.c src/lib/poll.c src/lib/socket.c src/lib/thread.c src/lib/time.c src/lib/uuid.c src/lib/regex.c src/lib/fnmatch.c src/lib/glob.c,$(SRC)) src/repl_stub.c
+WASM_SRC = $(filter-out src/repl.c src/pua_lineedit.c src/lib/os.c src/lib/stat.c src/lib/dir.c src/lib/signal.c src/lib/mmap.c src/lib/poll.c src/lib/socket.c src/lib/thread.c src/lib/time.c src/lib/uuid.c src/lib/regex.c src/lib/fnmatch.c src/lib/glob.c src/lib/gzip.c,$(SRC)) src/repl_stub.c
 WASM_OBJ = $(WASM_SRC:.c=.wasm.o)
 
 all: $(TARGET)

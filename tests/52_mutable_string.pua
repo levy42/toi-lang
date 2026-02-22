@@ -5,12 +5,15 @@ string = import string
 s = string.mutable("AbC xyz")
 assert_eq(s.len(), 7)
 assert_eq(s.value(), "AbC xyz")
+assert_eq(str(s), "AbC xyz")
 
 s.toupper()
 assert_eq(s.value(), "ABC XYZ")
+assert_eq(str(s), "ABC XYZ")
 
 s.tolower()
 assert_eq(s.value(), "abc xyz")
+assert_eq(str(s), "abc xyz")
 
 u = s
 u.toupper()

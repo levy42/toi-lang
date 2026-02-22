@@ -16,6 +16,7 @@ btree = import btree
 - `db.put(key, value)`
 - `db.get(key) -> value|nil`
 - `db.delete(key) -> bool`
+- `db.range([min], [max], [limit]) -> rows`
 - `db.close()`
 
 Keys and values support string/number usage shown in tests.

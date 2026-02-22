@@ -302,7 +302,7 @@ Highest to lowest:
 6. Logical `and`
 7. Logical `or`
 8. Ternary `?:`
-9. Assignment `=` (only on valid l-values)
+9. Assignment `=` and walrus `:=` (only on valid l-values)
 
 Notes:
 
@@ -318,8 +318,16 @@ Valid assignment targets:
 - `name = expr`
 - `obj.field = expr`
 - `obj[index] = expr`
+- `name := expr`
+- `obj.field := expr`
+- `obj[index] := expr`
 
 Slice assignment is not allowed (`obj[a..b] = ...` errors).
+
+Notes:
+
+- `:=` returns the assigned value, so it can be used in larger expressions.
+- Named call arguments still use `=` (`fn(x=1)`), not `:=`.
 
 ## 6. Import Syntax
 

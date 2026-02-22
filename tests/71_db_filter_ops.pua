@@ -1,0 +1,111 @@
+from lib.test import assert_eq, assert_true, expect_error
+
+os = import os
+types = import lib.types
+db_mod = import lib.db
+
+base = "tests/tmp_db_filter_ops"
+os.remove(base + "_users.db")
+os.remove(base + "_users__idx_email.db")
+os.remove(base + "_users__idx_team.db")
+
+User = types.Record {
+  id = types.String,
+  name = types.String,
+  email = types.String,
+  team = types.String,
+  age = types.Integer
+}
+User.__name = "users"
+User.__indexes = {
+  {field = "email", unique = true},
+  "team",
+  "age"
+}
+
+db = db_mod.open(base)
+users = db.create_table(User)
+
+db.add(User {name = "Ana", email = "ana@example.com", team = "red", age = 31})
+db.add(User {name = "Bob", email = "bob@example.com", team = "red", age = 24})
+db.add(User {name = "Cid", email = "cid@example.com", team = "blue", age = 17})
+
+assert_eq(#users.filter(email__startswith = "a"), 1)
+assert_eq(#users.filter(age__gte = 24), 2)
+assert_eq(#users.filter(age__gt = 24), 1)
+assert_eq(#users.filter(age__lt = 24), 1)
+assert_eq(#users.filter(age__lte = 24), 2)
+assert_eq(#users.filter(age__lt = 32, team = "red"), 2)
+
+asc = users.filter(order_by = "age")
+assert_eq(asc[1].age, 17)
+assert_eq(asc[2].age, 24)
+assert_eq(asc[3].age, 31)
+
+desc = users.filter(order_by = "-age")
+assert_eq(desc[1].age, 31)
+assert_eq(desc[2].age, 24)
+assert_eq(desc[3].age, 17)
+
+paged = users.filter(order_by = "age", offset = 1, limit = 1)
+assert_eq(#paged, 1)
+assert_eq(paged[1].age, 24)
+
+projected = users.filter(team = "red", order_by = "age", select = {"id", "name"})
+assert_eq(#projected, 2)
+assert_true(projected[1].id != nil)
+assert_eq(projected[1].name, "Bob")
+assert_true(projected[1].team == nil)
+
+bad_offset = expect_error(fn()
+  users.filter(offset = -1)
+)
+assert_true(bad_offset has "offset")
+
+bad_select = expect_error(fn()
+  users.filter(select = {1})
+)
+assert_true(bad_select has "select")
+
+cid_before = users.first(name = "Cid")
+
+updated_red = users.update_where({team = "red"}, {team = "green"})
+assert_eq(updated_red, 2)
+assert_eq(users.count(team = "green"), 2)
+
+updated_minor = users.update_where({age__lt = 18}, fn(row)
+  return {
+    team = "young",
+    name = row.name + " Jr"
+  }
+)
+assert_eq(updated_minor, 1)
+cid_after = users.first(email = "cid@example.com")
+assert_eq(cid_after.team, "young")
+assert_eq(cid_after.name, "Cid Jr")
+assert_eq(cid_after.id, cid_before.id)
+
+bad_patch = expect_error(fn()
+  users.update_where({team = "young"}, 123)
+)
+assert_true(bad_patch has "patch")
+
+deleted_red = users.delete_where(team = "red")
+assert_eq(deleted_red, 0)
+assert_eq(users.count(), 3)
+
+deleted_green = users.delete_where(team = "green")
+assert_eq(deleted_green, 2)
+assert_eq(users.count(), 1)
+assert_true(users.first().name == "Cid Jr")
+
+deleted_none = users.delete_where(team = "red")
+assert_eq(deleted_none, 0)
+
+db.close()
+gc
+os.remove(base + "_users.db")
+os.remove(base + "_users__idx_email.db")
+os.remove(base + "_users__idx_team.db")
+
+print "db filter ops ok"

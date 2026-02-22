@@ -50,8 +50,16 @@ Other:
 ## Assignment
 
 - Basic: `x = expr`
+- Expression assignment (walrus): `x := expr`
 - Multi-target: `a, b = expr1, expr2`
 - Compound: `+=`, `-=`, `*=`, `/=`, `%=`
+
+Walrus returns the assigned value, so it can be used inside larger expressions:
+
+```pua
+v = (x := 10)
+ok = (x := x + 1) > 10
+```
 
 ## Tables
 

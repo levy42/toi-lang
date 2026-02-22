@@ -806,6 +806,7 @@ void register_string(VM* vm) {
         {"toupper", mutable_toupper},
         {"tolower", mutable_tolower},
         {"value", mutable_value},
+        {"__str", mutable_value},
         {"len", mutable_len},
         {NULL, NULL}
     };

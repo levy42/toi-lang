@@ -33,6 +33,7 @@ Available native modules:
 - `struct`
 - `btree`
 - `uuid`
+- `gzip` (optional; only when built with zlib)
 
 Global core functions are documented in `docs/stdlib/core.md`.
 

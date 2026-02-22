@@ -816,15 +816,20 @@ void named_variable(Token name, int can_assign) {
         set_op = OP_SET_GLOBAL;
     }
 
-    if (can_assign && match(TOKEN_EQUALS)) {
+    if (can_assign && (match(TOKEN_EQUALS) || match(TOKEN_WALRUS))) {
+        TokenType assign_tok = parser.previous.type;
         int start_line = parser.current.line;
-        if (rhs_has_top_level_comma(start_line)) {
+        if (assign_tok == TOKEN_EQUALS && rhs_has_top_level_comma(start_line)) {
             parse_array_literal_from_comma_list();
         } else {
             expression();
         }
         uint8_t rhs_type = type_pop();
-        emit_assignment_store(name, get_op, set_op, arg, rhs_type);
+        if (assign_tok == TOKEN_WALRUS && set_op == OP_SET_GLOBAL) {
+            emit_bytes(OP_SET_GLOBAL, (uint8_t)arg);
+        } else {
+            emit_assignment_store(name, get_op, set_op, arg, rhs_type);
+        }
         type_push(rhs_type);
         return;
     }
@@ -968,10 +973,11 @@ static void dot(int can_assign) {
     consume_property_name_after_dot();
     uint8_t name = identifier_constant(&parser.previous);
     
-    if (can_assign && match(TOKEN_EQUALS)) {
+    if (can_assign && (match(TOKEN_EQUALS) || match(TOKEN_WALRUS))) {
+        TokenType assign_tok = parser.previous.type;
         emit_bytes(OP_CONSTANT, name);
         int start_line = parser.current.line;
-        if (rhs_has_top_level_comma(start_line)) {
+        if (assign_tok == TOKEN_EQUALS && rhs_has_top_level_comma(start_line)) {
             parse_array_literal_from_comma_list();
         } else {
             expression();
@@ -1016,7 +1022,7 @@ static void subscript(int can_assign) {
             emit_constant(NUMBER_VAL(1));
         }
         consume(TOKEN_RIGHT_BRACKET, "Expect ']' after slice.");
-        if (can_assign && match(TOKEN_EQUALS)) {
+        if (can_assign && (match(TOKEN_EQUALS) || match(TOKEN_WALRUS))) {
             error("Can't assign to a slice.");
             expression();
         }
@@ -1030,9 +1036,10 @@ static void subscript(int can_assign) {
 
     consume(TOKEN_RIGHT_BRACKET, "Expect ']' after index.");
 
-    if (can_assign && match(TOKEN_EQUALS)) {
+    if (can_assign && (match(TOKEN_EQUALS) || match(TOKEN_WALRUS))) {
+        TokenType assign_tok = parser.previous.type;
         int start_line = parser.current.line;
-        if (rhs_has_top_level_comma(start_line)) {
+        if (assign_tok == TOKEN_EQUALS && rhs_has_top_level_comma(start_line)) {
             parse_array_literal_from_comma_list();
         } else {
             expression();
@@ -1706,6 +1713,7 @@ ParseRule rules[] = {
     [TOKEN_HASH]          = {unary,    NULL,   PREC_NONE},
     [TOKEN_QUESTION]      = {NULL,     ternary, PREC_TERNARY},
     [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_WALRUS]        = {NULL,     NULL,   PREC_NONE},
     [TOKEN_PLUS_EQUAL]    = {NULL,     NULL,   PREC_NONE},
     [TOKEN_MINUS_EQUAL]   = {NULL,     NULL,   PREC_NONE},
     [TOKEN_STAR_EQUAL]    = {NULL,     NULL,   PREC_NONE},
@@ -1779,7 +1787,7 @@ static void parse_precedence(Precedence precedence) {
     }
     if (can_assign) {
         TokenType ignored;
-        if (match(TOKEN_EQUALS) || match_compound_assign(&ignored)) {
+        if (match(TOKEN_EQUALS) || match(TOKEN_WALRUS) || match_compound_assign(&ignored)) {
             error("Invalid assignment target.");
         }
     }

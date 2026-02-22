@@ -1327,12 +1327,15 @@ static int atom_to_value(const BTreeAtom* atom, Value* out) {
 
 static int btree_collect_range(VM* vm, BTreeDb* db, uint32_t page_id,
                                const BTreeAtom* min, const BTreeAtom* max,
-                               ObjTable* out, int* index) {
+                               ObjTable* out, int* index, int limit) {
+    if (limit >= 0 && (*index - 1) >= limit) return 1;
+
     NodeData node;
     if (!node_load(db, page_id, &node)) return 0;
 
     if (node.type == BTREE_PAGE_TYPE_LEAF) {
         for (uint16_t i = 0; i < node.nkeys; i++) {
+            if (limit >= 0 && (*index - 1) >= limit) break;
             LeafEntry* entry = &node.leaf_entries[i];
 
             if (min != NULL && atom_compare(&entry->key, min) < 0) continue;
@@ -1367,13 +1370,14 @@ static int btree_collect_range(VM* vm, BTreeDb* db, uint32_t page_id,
         return 1;
     }
 
-    if (!btree_collect_range(vm, db, node.left_child, min, max, out, index)) {
+    if (!btree_collect_range(vm, db, node.left_child, min, max, out, index, limit)) {
         node_data_free(&node);
         return 0;
     }
 
     for (uint16_t i = 0; i < node.nkeys; i++) {
-        if (!btree_collect_range(vm, db, node.internal_entries[i].child, min, max, out, index)) {
+        if (limit >= 0 && (*index - 1) >= limit) break;
+        if (!btree_collect_range(vm, db, node.internal_entries[i].child, min, max, out, index, limit)) {
             node_data_free(&node);
             return 0;
         }
@@ -1498,8 +1502,8 @@ static int btree_close_native(VM* vm, int arg_count, Value* args) {
 
 static int btree_range_native(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
-    if (arg_count > 3) {
-        vm_runtime_error(vm, "btree.range() expects at most 2 arguments.");
+    if (arg_count > 4) {
+        vm_runtime_error(vm, "btree.range() expects at most 3 arguments.");
         return 0;
     }
     ASSERT_USERDATA(0);
@@ -1510,6 +1514,7 @@ static int btree_range_native(VM* vm, int arg_count, Value* args) {
     BTreeAtom min_key, max_key;
     BTreeAtom* min = NULL;
     BTreeAtom* max = NULL;
+    int limit = -1;
     atom_init(&min_key);
     atom_init(&max_key);
 
@@ -1531,8 +1536,31 @@ static int btree_range_native(VM* vm, int arg_count, Value* args) {
         max = &max_key;
     }
 
+    if (arg_count >= 4 && !IS_NIL(args[3])) {
+        if (!IS_NUMBER(args[3])) {
+            atom_free(&min_key);
+            atom_free(&max_key);
+            vm_runtime_error(vm, "btree.range limit must be a non-negative integer.");
+            return 0;
+        }
+        double n = AS_NUMBER(args[3]);
+        if (n < 0 || floor(n) != n) {
+            atom_free(&min_key);
+            atom_free(&max_key);
+            vm_runtime_error(vm, "btree.range limit must be a non-negative integer.");
+            return 0;
+        }
+        limit = (int)n;
+    }
+
     ObjTable* out = new_table();
     push(vm, OBJ_VAL(out));
+
+    if (limit == 0) {
+        atom_free(&min_key);
+        atom_free(&max_key);
+        RETURN_VAL(pop(vm));
+    }
 
     if (min != NULL && max != NULL && atom_compare(min, max) > 0) {
         atom_free(&min_key);
@@ -1541,7 +1569,7 @@ static int btree_range_native(VM* vm, int arg_count, Value* args) {
     }
 
     int index = 1;
-    int ok = btree_collect_range(vm, db, db->root_page, min, max, out, &index);
+    int ok = btree_collect_range(vm, db, db->root_page, min, max, out, &index, limit);
     atom_free(&min_key);
     atom_free(&max_key);
     if (!ok) {

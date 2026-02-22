@@ -1,8 +1,7 @@
-from lib.test import assert_eq, assert_true
+from lib.test import assert_eq, assert_true, expect_error
 
 os = import os
 types = import lib.types
-records = import lib.records
 db_mod = import lib.db
 
 base = "tests/tmp_db"
@@ -10,44 +9,90 @@ os.remove(base + "_users.db")
 os.remove(base + "_users__idx_email.db")
 os.remove(base + "_users__idx_team.db")
 
-User = records.configure(types.Record {
-  id = types.Integer,
+User = types.Record {
+  id = types.String,
   name = types.String,
   email = types.String,
-  team = types.String
-}, "users", {
-  primary_key = "id",
-  indexes = {"email", "team"}
-})
+  team = types.String,
+  age = types.Integer
+}
+User.__name = "users"
+User.__indexes = {
+  {field = "email", unique = true},
+  "team"
+}
 
 db = db_mod.open(base)
 users = db.create_table(User)
 
-u1 = User {id = 1, name = "Ana", email = "ana@example.com", team = "red"}
-u2 = User {id = 2, name = "Bob", email = "bob@example.com", team = "red"}
+u1 = User {name = "Ana", email = "ana@example.com", team = "red", age = 31}
+u2 = User {name = "Bob", email = "bob@example.com", team = "red", age = 24}
+u3 = User {name = "Cid", email = "cid@example.com", team = "blue", age = 17}
 
-db.add(u1)
-db.add(u2)
+u1_saved = db.add(u1)
+u2_saved = db.add(u2)
+u3_saved = db.add(u3)
 
-row1 = db.users.get(1)
+row1 = db.users.get(u1_saved.id)
 assert_eq(row1.name, "Ana")
 assert_eq(row1.email, "ana@example.com")
 
-by_email = db.users.find_by("email", "ana@example.com")
+by_email = db.users.filter(email = "ana@example.com")
 assert_eq(#by_email, 1)
-assert_eq(by_email[1].id, 1)
+assert_eq(by_email[1].id, u1_saved.id)
 
-by_team = users.find_by("team", "red")
+by_team = users.filter(team = "red")
 assert_eq(#by_team, 2)
+assert_eq(users.count(team = "red"), 2)
+assert_true(users.exists(name = "Ana"))
+assert_true(users.exists(name = "Nobody") == false)
+assert_eq(users.first(team = "red").team, "red")
+assert_eq(#users.filter(age__gt = 20), 2)
+assert_eq(#users.filter(age__lte = 24), 2)
+assert_eq(#users.filter(name__startswith = "A"), 1)
+assert_eq(#users.filter(email__contains = "@example.com"), 3)
+assert_eq(#users.filter(id__ne = u1_saved.id), 2)
+assert_eq(#users.filter(team__in = {"red", "blue"}), 3)
+
+q_any = users.filter({
+  any = {
+    {name = "Ana"},
+    {age__lt = 18}
+  }
+})
+assert_eq(#q_any, 2)
+
+q_all = users.filter({
+  all = {
+    {team = "red"},
+    {age__gte = 24}
+  }
+})
+assert_eq(#q_all, 2)
+
+q_nested = users.filter({
+  any = {
+    {team = "blue"},
+    {all = {{team = "red"}, {age__lt = 25}}}
+  }
+})
+assert_eq(#q_nested, 2)
+
+dup_err = expect_error(fn()
+  db.add(User {name = "Ana2", email = "ana@example.com", team = "red", age = 22})
+)
+assert_true(dup_err has "unique index")
 
 -- upsert should refresh secondary indexes
-users.put(User {id = 1, name = "Ana", email = "ana@example.com", team = "blue"})
-assert_eq(#db.users.find_by("team", "red"), 1)
-assert_eq(#db.users.find_by("team", "blue"), 1)
+users.put(User {id = u1_saved.id, name = "Ana", email = "ana@example.com", team = "blue", age = 32})
+assert_eq(#db.users.filter(team = "red"), 1)
+assert_eq(#db.users.filter(team = "blue"), 2)
+assert_eq(#db.users.filter(name = "Ana", team = "blue"), 1)
 
-assert_true(db.users.delete(2))
-assert_true(db.users.get(2) == nil)
-assert_eq(#db.users.find_by("team", "red"), 0)
+assert_true(db.users.delete(u2_saved.id))
+assert_true(db.users.get(u2_saved.id) == nil)
+assert_eq(#db.users.filter(team = "red"), 0)
+assert_eq(db.users.get(u3_saved.id).name, "Cid")
 
 db.close()
 
@@ -55,10 +100,10 @@ db.close()
 reopen = db_mod.open(base)
 reopen.create_table(User)
 
-u1b = reopen.users.get(1)
+u1b = reopen.users.get(u1_saved.id)
 assert_eq(u1b.team, "blue")
-assert_eq(#reopen.users.find_by("email", "ana@example.com"), 1)
-assert_eq(#reopen.users.find_by("team", "red"), 0)
+assert_eq(#reopen.users.filter(email = "ana@example.com"), 1)
+assert_eq(#reopen.users.filter(team = "red"), 0)
 reopen.close()
 
 os.remove(base + "_users.db")

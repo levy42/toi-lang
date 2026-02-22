@@ -1,0 +1,14 @@
+from lib.test import assert_eq, assert_true
+
+T = {check = fn(self, s) return s != nil}
+T.__index = T
+
+obj = {}
+setmetatable(obj, T)
+
+s = str(T)
+assert_true(not (s has "__index"))
+assert_true(s has "check")
+assert_true(not (str(obj) has "__index"))
+
+print "print skips __index ok"

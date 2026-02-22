@@ -54,6 +54,9 @@ fn f()
 - Named args: `f(a=1, b=2)`
 - Spread args: `f(*arr)`
 
+Note: named call arguments use `=`.
+Expression assignment uses `:=` (walrus), for example: `x := expr`.
+
 ## Multiple Return Values
 
 ```pua

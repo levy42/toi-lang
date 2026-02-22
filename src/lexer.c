@@ -329,7 +329,9 @@ Token scan_token(Lexer* lexer) {
             return make_token(lexer, TOKEN_PERCENT);
         case '#': return make_token(lexer, TOKEN_HASH);
         case '?': return make_token(lexer, TOKEN_QUESTION);
-        case ':': return make_token(lexer, TOKEN_COLON);
+        case ':':
+            if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_WALRUS); }
+            return make_token(lexer, TOKEN_COLON);
         case '@': return make_token(lexer, TOKEN_AT);
         case '=':
             if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_EQUAL_EQUAL); }

@@ -225,6 +225,10 @@ static void print_table(ObjTable* table, int depth) {
     for (int i = 0; i < table->table.capacity; i++) {
         Entry* entry = &table->table.entries[i];
         if (entry->key != NULL && !IS_NIL(entry->value)) {
+            if (entry->key->length == 7 &&
+                memcmp(entry->key->chars, "__index", 7) == 0) {
+                continue;
+            }
             if (count > 0) printf(", ");
             printf("%s: ", entry->key->chars);
             print_value_rec(entry->value, depth + 1);

@@ -280,6 +280,10 @@ static void format_value(VM* vm, Value val, StringBuilder* sb, int depth) {
         for (int i = 0; i < table->table.capacity; i++) {
             Entry* entry = &table->table.entries[i];
             if (entry->key != NULL && !IS_NIL(entry->value)) {
+                if (entry->key->length == 7 &&
+                    memcmp(entry->key->chars, "__index", 7) == 0) {
+                    continue;
+                }
                 if (count > 0) sb_append(sb, ", ", 2);
                 
                 sb_append(sb, entry->key->chars, entry->key->length);
@@ -351,29 +355,36 @@ int core_tostring(VM* vm, int arg_count, Value* args) {
         RETURN_OBJ(AS_STRING(val));
     }
 
-    // Check for __str on table first (top level)
+    // Check for __str on table/userdata first (top level).
+    ObjTable* metatable = NULL;
     if (IS_TABLE(val)) {
-        ObjTable* table = AS_TABLE(val);
-        if (table->metatable != NULL) {
-            Value str_method;
-            ObjString* str_key = copy_string("__str", 5);
-            if (table_get(&table->metatable->table, str_key, &str_method) && IS_CLOSURE(str_method)) {
-                int saved_frame_count = vm_current_thread(vm)->frame_count;
+        metatable = AS_TABLE(val)->metatable;
+    } else if (IS_USERDATA(val)) {
+        metatable = AS_USERDATA(val)->metatable;
+    }
+    if (metatable != NULL) {
+        Value str_method;
+        ObjString* str_key = vm->mm_str;
+        if (table_get(&metatable->table, str_key, &str_method) &&
+            (IS_CLOSURE(str_method) || IS_NATIVE(str_method))) {
+            int saved_frame_count = vm_current_thread(vm)->frame_count;
+            CallFrame* frame = &vm_current_thread(vm)->frames[saved_frame_count - 1];
+            uint8_t* ip = frame->ip;
 
-                push(vm, str_method);
-                push(vm, val);
+            push(vm, str_method);
+            push(vm, val);
 
-                if (!call(vm, AS_CLOSURE(str_method), 1)) {
-                    RETURN_STRING("<table>", 7);
-                }
+            if (!call_value(vm, str_method, 1, &frame, &ip)) {
+                RETURN_STRING("<error>", 7);
+            }
 
+            if (IS_CLOSURE(str_method)) {
                 InterpretResult result = vm_run(vm, saved_frame_count);
-
                 if (result != INTERPRET_OK) {
                     RETURN_STRING("<error>", 7);
                 }
-                return 1;
             }
+            return 1;
         }
     }
 

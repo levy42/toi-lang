@@ -1,0 +1,52 @@
+from lib.test import assert_eq, assert_true
+
+-- Basic expression assignment.
+x = 0
+v1 = (x := 3)
+assert_eq(v1, 3)
+assert_eq(x, 3)
+
+-- Walrus inside expression context.
+yv = (y := 10)
+assert_true(yv > 5)
+assert_eq(y, 10)
+
+-- Property assignment via walrus.
+obj = {a = 1}
+v2 = (obj.a := 42)
+assert_eq(v2, 42)
+assert_eq(obj.a, 42)
+
+-- Subscript assignment via walrus.
+t = {1, 2, 3}
+v3 = (t[2] := 99)
+assert_eq(v3, 99)
+assert_eq(t[2], 99)
+
+-- Loop condition usage.
+i = 0
+sum = 0
+while ((i := i + 1) <= 3)
+  sum = sum + i
+assert_eq(sum, 6)
+assert_eq(i, 4)
+
+-- If/else condition usage with predeclared targets.
+k = nil
+if (k := 3) == 3
+  assert_eq(k, 3)
+else
+  assert_true(false)
+
+m = nil
+if (m := 0)
+  assert_true(false)
+else
+  assert_eq(m, 0)
+
+-- Named arguments still use '=' and are unaffected.
+fn sum_opts(a = 0, b = 0)
+  return a + b
+assert_eq(sum_opts(a = 2, b = 5), 7)
+
+print "walrus ok"

@@ -11,11 +11,25 @@ else
   ...
 ```
 
+Walrus (`:=`) can be used in conditions:
+
+```pua
+k = nil
+if (k := 3) == 3
+  print k
+```
+
 ## While Loop
 
 ```pua
 while cond
   ...
+```
+
+```pua
+i = 0
+while ((i := i + 1) <= 10)
+  print i
 ```
 
 ## For Loop

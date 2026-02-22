@@ -49,6 +49,14 @@ assert_eq(num_rows[1].value, 800)
 assert_eq(num_rows[5].key, 84)
 assert_eq(num_rows[5].value, 840)
 
+-- range query with native limit
+num_rows_limited = db.range(80, 84, 2)
+assert_eq(#num_rows_limited, 2)
+assert_eq(num_rows_limited[1].key, 80)
+assert_eq(num_rows_limited[2].key, 81)
+
+assert_eq(#db.range(80, 84, 0), 0)
+
 -- range query with open bounds
 prefix_rows = db.range("name", nil)
 assert_true(#prefix_rows >= 1)

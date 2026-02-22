@@ -136,6 +136,7 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 - `regex`: POSIX regex wrapper (`match`, `search`, `replace`, `split`)
 - `fnmatch`: POSIX glob wrapper (`match`)
 - `glob`: POSIX pathname expansion wrapper (`match`)
+- `gzip` (optional): zlib-backed gzip wrapper (`compress`, `decompress`)
 
 ## Pua libraries (`lib/*.pua`)
 

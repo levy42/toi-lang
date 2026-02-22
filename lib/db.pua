@@ -1,6 +1,7 @@
 btree = import btree
 binary = import binary
 string = import string
+uuid = import uuid
 
 SEP = string.char(31)
 HI = string.char(255)
@@ -21,6 +22,10 @@ fn secondary_min(index_value)
 
 fn secondary_max(index_value)
   return encode_key_part(index_value, "index key") + SEP + HI
+
+fn is_index_atom(value)
+  t = type(value)
+  return t == "number" or t == "string"
 
 fn open(base_path)
   if type(base_path) != "string" or #base_path == 0
@@ -56,24 +61,43 @@ fn open(base_path)
       error("db.create_table: expected Record schema table")
     if type(schema.__name) != "string" or #schema.__name == 0
       error("db.create_table: schema must define __name")
+    if schema.schema.id == nil
+      error("db.create_table: schema must define id field")
     if schema.__indexes == nil
       schema.__indexes = {}
     if type(schema.__indexes) != "table"
       error("db.create_table: schema.__indexes must be table")
 
-    primary_key = schema.__primary_key
-    if primary_key == nil
-      primary_key = "id"
-    if type(primary_key) != "string"
-      error("db.create_table: schema.__primary_key must be string")
-    if schema.schema[primary_key] == nil
-      error("db.create_table: primary key '" + primary_key + "' missing in schema '" + schema.__name + "'")
+    normalized_indexes = {}
+    for idx in schema.__indexes
+      if type(idx) == "string"
+        normalized_indexes[#normalized_indexes + 1] = {name = idx, field = idx, unique = false}
+      elif type(idx) == "table"
+        idx_field = idx.field
+        if idx_field == nil
+          idx_field = idx.name
+        if type(idx_field) != "string" or #idx_field == 0
+          error("db.create_table: index field must be string on table '" + schema.__name + "'")
+
+        idx_name = idx.name
+        if idx_name == nil
+          idx_name = idx_field
+        if type(idx_name) != "string" or #idx_name == 0
+          error("db.create_table: index name must be string on table '" + schema.__name + "'")
+
+        normalized_indexes[#normalized_indexes + 1] = {
+          name = idx_name,
+          field = idx_field,
+          unique = idx.unique == true
+        }
+      else
+        error("db.create_table: schema.__indexes entries must be string or table")
 
     return {
       name = schema.__name,
       model = schema,
-      primary_key = primary_key,
-      indexes = schema.__indexes
+      primary_key = "id",
+      indexes = normalized_indexes
     }
 
   fn save_secondary_indexes(table_state, row)
@@ -94,6 +118,359 @@ fn open(base_path)
         k = secondary_key(idx_value, pk_value)
         idx_state.tree.delete(k)
 
+  fn load_by_index_value(table_state, idx_state, index_value, limit = nil)
+    rows = nil
+    if limit == nil
+      rows = idx_state.tree.range(secondary_min(index_value), secondary_max(index_value))
+    else
+      rows = idx_state.tree.range(secondary_min(index_value), secondary_max(index_value), limit)
+    out = {}
+    for entry in rows
+      pk = entry.value
+      blob = table_state.primary.get(pk)
+      if blob != nil
+        out[#out + 1] = decode_record(blob)
+    return out
+
+  fn load_by_index_range(table_state, idx_state, min_key, max_key, limit = nil)
+    rows = nil
+    if limit == nil
+      rows = idx_state.tree.range(min_key, max_key)
+    else
+      rows = idx_state.tree.range(min_key, max_key, limit)
+    out = {}
+    for entry in rows
+      pk = entry.value
+      blob = table_state.primary.get(pk)
+      if blob != nil
+        out[#out + 1] = decode_record(blob)
+    return out
+
+  fn enforce_unique_indexes(table_state, row, exclude_pk = nil)
+    for idx_name, idx_state in table_state.indexes
+      if idx_state.spec.unique == true
+        idx_value = row[idx_state.spec.field]
+        if idx_value == nil
+          continue
+
+        rows = idx_state.tree.range(secondary_min(idx_value), secondary_max(idx_value), 2)
+        for entry in rows
+          existing_pk = entry.value
+          if exclude_pk == nil or existing_pk != exclude_pk
+            error("db.put: unique index '" + idx_name + "' violation on table '" + table_state.name + "'")
+
+  fn get_index_for_field(table_state, field_name)
+    idx_state = table_state.indexes[field_name]
+    if idx_state != nil
+      return idx_state
+
+    for idx_name, idx in table_state.indexes
+      if idx.spec.field == field_name
+        return idx
+    return nil
+
+  fn parse_condition_key(key)
+    pos = string.find(key, "__")
+    if pos == nil
+      return {field = key, op = "eq"}
+
+    split_start = pos
+    if string.sub(key, pos, pos + 1) != "__"
+      split_start = pos - 1
+
+    return {
+      field = string.sub(key, 1, split_start - 1),
+      op = string.sub(key, split_start + 2)
+    }
+
+  fn is_query_option_key(key)
+    return key == "order_by" or key == "limit" or key == "offset" or key == "select"
+
+  fn list_contains(values, wanted)
+    if type(values) != "table"
+      return false
+    for v in values
+      if v == wanted
+        return true
+    return false
+
+  fn eval_condition(actual, op, expected)
+    if op == "eq"
+      return actual == expected
+    if op == "ne"
+      return actual != expected
+    if op == "gt"
+      return actual != nil and expected != nil and actual > expected
+    if op == "gte"
+      return actual != nil and expected != nil and actual >= expected
+    if op == "lt"
+      return actual != nil and expected != nil and actual < expected
+    if op == "lte"
+      return actual != nil and expected != nil and actual <= expected
+    if op == "startswith"
+      return type(actual) == "string" and type(expected) == "string" and #expected <= #actual and string.sub(actual, 1, #expected) == expected
+    if op == "contains"
+      return type(actual) == "string" and type(expected) == "string" and string.find(actual, expected) != nil
+    if op == "in"
+      return list_contains(expected, actual)
+    error("db.filter: unsupported operator '__" + op + "'")
+
+  fn row_matches_query(row, query)
+    for k, expected in query
+      if k != "all" and k != "any" and not is_query_option_key(k)
+        if type(k) != "string"
+          error("db.filter: criteria keys must be field names (string)")
+        parsed = parse_condition_key(k)
+        if parsed.field == nil or #parsed.field == 0
+          error("db.filter: invalid filter key '" + k + "'")
+        if not eval_condition(row[parsed.field], parsed.op, expected)
+          return false
+
+    if query.all != nil
+      if type(query.all) != "table"
+        error("db.filter: all must be a table of clauses")
+      for clause in query.all
+        if type(clause) != "table"
+          error("db.filter: all clauses must be tables")
+        if not row_matches_query(row, clause)
+          return false
+
+    if query.any != nil
+      if type(query.any) != "table"
+        error("db.filter: any must be a table of clauses")
+      any_ok = false
+      for clause in query.any
+        if type(clause) != "table"
+          error("db.filter: any clauses must be tables")
+        if row_matches_query(row, clause)
+          any_ok = true
+          break
+      if not any_ok
+        return false
+
+    return true
+
+  fn intersect_rows(left, right)
+    if left == nil
+      return right
+
+    keep = {}
+    for row in right
+      keep[row.id] = true
+
+    out = {}
+    for row in left
+      if keep[row.id] == true
+        out[#out + 1] = row
+    return out
+
+  fn union_rows(left, right)
+    if left == nil
+      return right
+    if right == nil
+      return left
+
+    seen = {}
+    out = {}
+    for row in left
+      seen[row.id] = true
+      out[#out + 1] = row
+    for row in right
+      if seen[row.id] != true
+        seen[row.id] = true
+        out[#out + 1] = row
+    return out
+
+  fn compare_values(a, b)
+    if a == b
+      return 0
+    if a == nil
+      return -1
+    if b == nil
+      return 1
+    ta = type(a)
+    tb = type(b)
+    if ta == "number" and tb == "number"
+      return a < b ? -1 : 1
+    if ta == "string" and tb == "string"
+      return a < b ? -1 : 1
+    sa = str(a)
+    sb = str(b)
+    if sa == sb
+      return 0
+    return sa < sb ? -1 : 1
+
+  fn sort_rows(rows, order_by)
+    if order_by == nil
+      return rows
+    if type(order_by) != "string" or #order_by == 0
+      error("db.filter: order_by must be non-empty string")
+
+    desc = string.sub(order_by, 1, 1) == "-"
+    field = desc ? string.sub(order_by, 2) : order_by
+    if #field == 0
+      error("db.filter: order_by field is empty")
+
+    n = #rows
+    i = 2
+    while i <= n
+      cur = rows[i]
+      j = i - 1
+      while j >= 1
+        cmp = compare_values(rows[j][field], cur[field])
+        swap = desc ? cmp < 0 : cmp > 0
+        if not swap
+          break
+        rows[j + 1] = rows[j]
+        j = j - 1
+      rows[j + 1] = cur
+      i = i + 1
+    return rows
+
+  fn apply_offset_limit(rows, offset = nil, limit = nil)
+    start = 0
+    if offset != nil
+      if type(offset) != "number" or offset % 1 != 0 or offset < 0
+        error("db.filter: offset must be non-negative integer")
+      start = int(offset)
+
+    max_count = nil
+    if limit != nil
+      if type(limit) != "number" or limit % 1 != 0 or limit < 0
+        error("db.filter: limit must be non-negative integer")
+      max_count = int(limit)
+
+    out = {}
+    i = start + 1
+    copied = 0
+    while i <= #rows
+      if max_count != nil and copied >= max_count
+        break
+      out[#out + 1] = rows[i]
+      copied = copied + 1
+      i = i + 1
+    return out
+
+  fn apply_select(rows, select)
+    if select == nil
+      return rows
+    if type(select) != "table"
+      error("db.filter: select must be table of field names")
+
+    out = {}
+    for row in rows
+      projected = {}
+      for field_name in select
+        if type(field_name) != "string" or #field_name == 0
+          error("db.filter: select fields must be non-empty strings")
+        projected[field_name] = row[field_name]
+      out[#out + 1] = projected
+    return out
+
+  fn can_use_index_for_condition(op, expected)
+    if op == "eq"
+      return is_index_atom(expected)
+    if op == "in"
+      if type(expected) != "table"
+        return false
+      for v in expected
+        if not is_index_atom(v)
+          return false
+      return true
+    if op == "gte" or op == "gt" or op == "lte"
+      return is_index_atom(expected)
+    if op == "lt"
+      return type(expected) == "number"
+    if op == "startswith"
+      return type(expected) == "string"
+    return false
+
+  fn index_rows_for_condition(table_state, idx_state, op, expected)
+    if op == "eq"
+      return load_by_index_value(table_state, idx_state, expected)
+
+    if op == "in"
+      unioned = nil
+      for v in expected
+        rows = load_by_index_value(table_state, idx_state, v)
+        unioned = union_rows(unioned, rows)
+      if unioned == nil
+        return {}
+      return unioned
+
+    if op == "gte"
+      return load_by_index_range(table_state, idx_state, secondary_min(expected), nil)
+    if op == "gt"
+      return load_by_index_range(table_state, idx_state, secondary_max(expected), nil)
+    if op == "lte"
+      return load_by_index_range(table_state, idx_state, nil, secondary_max(expected))
+    if op == "lt"
+      return load_by_index_range(table_state, idx_state, nil, secondary_min(expected))
+    if op == "startswith"
+      prefix = "s:" + expected
+      return load_by_index_range(table_state, idx_state, prefix, prefix + HI)
+
+    return nil
+
+  fn build_query_plan(table_state, query)
+    plan = {
+      used_indexes = {},
+      post_filters = {},
+      has_group_logic = query.any != nil or query.all != nil,
+      full_scan = false,
+      index_accelerated = false,
+      order_by = query.order_by,
+      limit = query.limit,
+      offset = query.offset,
+      select = query.select
+    }
+
+    if plan.has_group_logic
+      plan.full_scan = true
+      return plan
+
+    for k, expected in query
+      if k != "all" and k != "any" and not is_query_option_key(k)
+        if type(k) != "string"
+          continue
+        parsed = parse_condition_key(k)
+        idx_state = get_index_for_field(table_state, parsed.field)
+        if idx_state != nil and expected != nil and can_use_index_for_condition(parsed.op, expected)
+          plan.used_indexes[#plan.used_indexes + 1] = {
+            field = parsed.field,
+            op = parsed.op,
+            index = idx_state.name
+          }
+        else
+          plan.post_filters[#plan.post_filters + 1] = {
+            field = parsed.field,
+            op = parsed.op
+          }
+
+    plan.index_accelerated = #plan.used_indexes > 0
+    plan.full_scan = not plan.index_accelerated
+    return plan
+
+  fn pick_index_candidates(table_state, query)
+    if query.any != nil or query.all != nil
+      return nil
+
+    candidates = nil
+    for k, expected in query
+      if k != "all" and k != "any" and not is_query_option_key(k)
+        if type(k) != "string"
+          continue
+        parsed = parse_condition_key(k)
+        idx_state = get_index_for_field(table_state, parsed.field)
+        if idx_state == nil or expected == nil
+          continue
+        if not can_use_index_for_condition(parsed.op, expected)
+          continue
+        rows = index_rows_for_condition(table_state, idx_state, parsed.op, expected)
+        if rows != nil
+          candidates = intersect_rows(candidates, rows)
+    return candidates
+
   fn make_table_proxy(self, table_state)
     proxy = {
       name = table_state.name,
@@ -112,6 +489,7 @@ fn open(base_path)
       encode_key_part(pk_value, "primary key")
 
       old_blob = table_state.primary.get(pk_value)
+      enforce_unique_indexes(table_state, clean, pk_value)
       if old_blob != nil
         old_row = decode_record(old_blob)
         remove_secondary_indexes(table_state, old_row)
@@ -139,20 +517,90 @@ fn open(base_path)
       table_state.primary.delete(primary_key)
       return true
 
-    proxy.find_by = fn(index_name, index_value)
+    proxy.filter = fn(opts = nil)
       ensure_open(self)
-      idx_state = table_state.indexes[index_name]
-      if idx_state == nil
-        error("db.find_by: unknown index '" + str(index_name) + "' on table '" + table_state.name + "'")
+      if opts == nil
+        opts = {}
+      if type(opts) != "table"
+        error("db.filter: opts must be table")
 
-      rows = idx_state.tree.range(secondary_min(index_value), secondary_max(index_value))
+      candidates = pick_index_candidates(table_state, opts)
+
+      if candidates == nil
+        entries = table_state.primary.range(nil, nil)
+        candidates = {}
+        for entry in entries
+          candidates[#candidates + 1] = decode_record(entry.value)
+
       out = {}
-      for entry in rows
-        pk = entry.value
-        blob = table_state.primary.get(pk)
-        if blob != nil
-          out[#out + 1] = decode_record(blob)
+      for row in candidates
+        if row_matches_query(row, opts)
+          out[#out + 1] = row
+      out = sort_rows(out, opts.order_by)
+      out = apply_offset_limit(out, opts.offset, opts.limit)
+      out = apply_select(out, opts.select)
       return out
+
+    proxy.first = fn(opts = nil)
+      rows = proxy.filter(opts)
+      if #rows == 0
+        return nil
+      return rows[1]
+
+    proxy.count = fn(opts = nil)
+      return #proxy.filter(opts)
+
+    proxy.exists = fn(opts = nil)
+      return proxy.first(opts) != nil
+
+    proxy.explain = fn(opts = nil)
+      ensure_open(self)
+      if opts == nil
+        opts = {}
+      if type(opts) != "table"
+        error("db.explain: opts must be table")
+      return build_query_plan(table_state, opts)
+
+    proxy.delete_where = fn(opts = nil)
+      ensure_open(self)
+      rows = proxy.filter(opts)
+      deleted = 0
+      for row in rows
+        if row != nil and row.id != nil and proxy.delete(row.id)
+          deleted = deleted + 1
+      return deleted
+
+    proxy.update_where = fn(opts, patch)
+      ensure_open(self)
+      if type(patch) != "table" and type(patch) != "function"
+        error("db.update_where: patch must be table or function")
+
+      rows = proxy.filter(opts)
+      updated = 0
+      for row in rows
+        if row == nil or row.id == nil
+          continue
+
+        delta = patch
+        if type(patch) == "function"
+          delta = patch(row)
+          if delta == nil
+            continue
+          if type(delta) != "table"
+            error("db.update_where: patch function must return table or nil")
+
+        next_row = {}
+        for k, v in row
+          next_row[k] = v
+        for k, v in delta
+          if k != "id"
+            next_row[k] = v
+        next_row.id = row.id
+
+        proxy.put(next_row)
+        updated = updated + 1
+
+      return updated
 
     return proxy
 
@@ -184,6 +632,7 @@ fn open(base_path)
       idx_name = idx.name == nil ? idx.field : idx.name
       idx_path = self.base_path + "_" + table_name + "__idx_" + idx_name + ".db"
       table_state.indexes[idx_name] = {
+        name = idx_name,
         spec = idx,
         tree = btree.open(idx_path)
       }
@@ -207,7 +656,11 @@ fn open(base_path)
       error("db.add: record model must define __name")
 
     proxy = self.create_table(schema)
-    return proxy.put(record)
+    row = {}
+    for k, v in record
+      row[k] = v
+    row.id = uuid.uid()
+    return proxy.put(row)
 
   -- Backward-compatible API
   db.put = fn(self, table_name, row)
@@ -227,12 +680,6 @@ fn open(base_path)
     if state == nil
       error("db.delete: unknown table '" + str(table_name) + "'")
     return state.proxy.delete(primary_key)
-
-  db.find_by_index = fn(self, table_name, index_name, index_value)
-    state = self.tables[table_name]
-    if state == nil
-      error("db.find_by_index: unknown table '" + str(table_name) + "'")
-    return state.proxy.find_by(index_name, index_value)
 
   db.close = fn(self)
     if self.closed return true

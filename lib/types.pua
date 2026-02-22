@@ -63,6 +63,19 @@ fn run_check(type_def, value, path = nil, opts = nil)
 
   return checker(value, path, opts)
 
+fn resolve_field_default(type_def)
+  if type(type_def) != "table"
+    return nil
+  if type(type_def.opts) != "table"
+    return nil
+
+  raw = type_def.opts.default
+  if raw == nil
+    return nil
+  if type(raw) == "function"
+    return raw()
+  return raw
+
 -- Primitives
 
 fn check_string(self, value, path = nil, opts = nil)
@@ -303,6 +316,14 @@ fn check_constraints_type(self, value, path = nil, opts = nil)
   return v
 ConstraintsType.check = check_constraints_type
 
+fn type_call(self, opts = nil)
+  if opts == nil
+    return self
+  if type(opts) != "table"
+    error("Type options must be table")
+  return ConstraintsType(self, opts)
+Type.__call = type_call
+
 -- RecordType (nested)
 RecordType = {}
 RecordType.__index = RecordType
@@ -366,6 +387,8 @@ fn check_record_type(self, value = nil, path = nil, opts = nil)
 
   for k, type_def in model.schema
     val = target[k]
+    if val == nil
+      val = resolve_field_default(type_def)
     out[k] = run_check(type_def, val, child_path(path, k), opts)
 
   if model.allow_extra == false
@@ -398,9 +421,12 @@ fn from_hint(type_name)
 -- Export
 return {
   String = String,
+  Str = String,
   Number = Number,
   Boolean = Boolean,
+  Bool = Boolean,
   Integer = Integer,
+  Int = Integer,
   List = List,
   Optional = Optional,
   Literal = LiteralType,
