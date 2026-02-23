@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 http = import http
 ```
 

@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 stat = import stat
 ```
 

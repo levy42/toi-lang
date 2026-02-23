@@ -1,0 +1,455 @@
+string = import string
+table = import table
+
+fn append_escaped_char(out, ch)
+  out <+ string.escape_html(ch)
+
+fn clear(values)
+  while #values > 0
+    values[#values] = nil
+
+fn rewrite_link_href(href)
+  if href == nil or href == ""
+    return href
+  if string.starts_with(href, "#")
+    return href
+  if href.find("://")
+    return href
+  if string.starts_with(string.lower(href), "mailto:")
+    return href
+
+  local hash_i = string.find(href, "#")
+  base = href
+  frag = ""
+  if hash_i
+    base = string.sub(href, 1, hash_i - 1)
+    frag = string.sub(href, hash_i)
+
+  if string.ends_with(string.lower(base), ".md")
+    base = string.sub(base, 1, #base - 3) + ".html"
+
+  return base + frag
+
+fn heading_slug(text)
+  s = string.lower(text or "")
+  out = {}
+  prev_dash = false
+  for ch in s
+    if string.is_alnum(ch)
+      out <+ ch
+      prev_dash = false
+    else
+      if not prev_dash
+        out <+ "-"
+        prev_dash = true
+  slug = table.concat(out, "")
+  while string.starts_with(slug, "-")
+    slug = slug[2..]
+  while #slug > 0 and slug[#slug] == "-"
+    slug = string.sub(slug, 1, #slug - 1)
+  if slug == ""
+    return "section"
+  return slug
+
+fn parse_inline(text)
+  if text == nil or #text == 0 return ""
+
+  local out = {}
+  local i = 1
+  while i <= #text
+    local ch = text[i]
+    local handled = false
+
+    if ch == "`"
+      local j = i + 1
+      while j <= #text and text[j] != "`"
+        j = j + 1
+      if j <= #text
+        out <+ "<code>"
+        local k = i + 1
+        while k < j
+          append_escaped_char(out, text[k])
+          k = k + 1
+        out <+ "</code>"
+        i = j + 1
+        handled = true
+
+    if not handled and ch == "*" and i < #text and text[i + 1] == "*"
+      local j = i + 2
+      while j < #text
+        if text[j] == "*" and text[j + 1] == "*"
+          break
+        j = j + 1
+      if j < #text
+        out <+ "<strong>"
+        local k = i + 2
+        while k < j
+          append_escaped_char(out, text[k])
+          k = k + 1
+        out <+ "</strong>"
+        i = j + 2
+        handled = true
+
+    if not handled and ch == "*"
+      local j = i + 1
+      while j <= #text and text[j] != "*"
+        j = j + 1
+      if j <= #text
+        out <+ "<em>"
+        local k = i + 1
+        while k < j
+          append_escaped_char(out, text[k])
+          k = k + 1
+        out <+ "</em>"
+        i = j + 1
+        handled = true
+
+    if not handled and ch == "["
+      local j = i + 1
+      while j <= #text and text[j] != "]"
+        j = j + 1
+      if j <= #text and j + 2 <= #text and text[j + 1] == "("
+        local k = j + 2
+        while k <= #text and text[k] != ")"
+          k = k + 1
+        if k <= #text
+          label = string.sub(text, i + 1, j - 1)
+          href = rewrite_link_href(string.sub(text, j + 2, k - 1))
+          html_label = parse_inline(label)
+          out <+ f"<a href=\"{string.escape_html(href)}\">{html_label}</a>"
+          i = k + 1
+          handled = true
+
+    if not handled
+      append_escaped_char(out, ch)
+      i = i + 1
+
+  return table.concat(out, "")
+
+fn flush_paragraph(out, paragraph_lines)
+  if #paragraph_lines == 0
+    return nil
+  local s = parse_inline(table.concat(paragraph_lines, " "))
+  out <+ f"<p>{s}</p>"
+  clear(paragraph_lines)
+
+fn flush_code_block(out, code_lines, code_lang)
+  local class_attr = ""
+  if code_lang and #code_lang > 0
+    class_attr = f" class=\"language-{string.escape_html(code_lang)}\""
+  normalized_lines = {}
+  for line in code_lines
+    normalized_lines <+ str(line)
+  local code = string.escape_html(table.concat(normalized_lines, "\n"))
+  out <+ f"<pre><code{class_attr}>{code}</code></pre>"
+  clear(code_lines)
+
+fn flush_blockquote(out, quote_lines)
+  if #quote_lines == 0
+    return nil
+  local s = parse_inline(table.concat(quote_lines, " "))
+  out <+ "<blockquote>"
+  out <+ f"<p>{s}</p>"
+  out <+ "</blockquote>"
+  clear(quote_lines)
+
+fn is_horizontal_rule(line)
+  s = string.trim(line or "")
+  if #s < 3
+    return false
+  ch = s[1]
+  if ch != "-" and ch != "*" and ch != "_"
+    return false
+  count = 0
+  for c in s
+    if c != ch and c != " "
+      return false
+    if c == ch
+      count = count + 1
+  return count >= 3
+
+fn parse_heading(line)
+  s = string.ltrim(line)
+  if s == ""
+    return nil
+  i = 1
+  while i <= #s and s[i] == "#"
+    i = i + 1
+  count = i - 1
+  if count < 1 or count > 6
+    return nil
+  if i > #s or s[i] != " "
+    return nil
+  text = string.trim(string.sub(s, i + 1))
+  return {level = count, text = text}
+
+fn parse_unordered_item(line)
+  s = string.ltrim(line)
+  if #s < 2
+    return nil
+  marker = s[1]
+  if marker != "-" and marker != "*" and marker != "+"
+    return nil
+  if s[2] != " "
+    return nil
+  return string.trim(s[3..])
+
+fn parse_ordered_item(line)
+  s = string.ltrim(line)
+  if s == ""
+    return nil
+  i = 1
+  while i <= #s and string.is_digit(s[i])
+    i = i + 1
+  if i == 1
+    return nil
+  if i + 1 > #s
+    return nil
+  if s[i] != "." or s[i + 1] != " "
+    return nil
+  return string.trim(string.sub(s, i + 2))
+
+fn leading_indent(line)
+  if line == nil or line == ""
+    return 0
+  col = 0
+  idx = 1
+  while idx <= #line
+    ch = line[idx]
+    if ch == " "
+      col = col + 1
+    elif ch == "\t"
+      col = col + 2
+    else
+      break
+    idx = idx + 1
+  return col
+
+fn parse_list_item(line)
+  ul = parse_unordered_item(line)
+  if ul
+    return {kind = "ul", indent = leading_indent(line), text = ul}
+  ol = parse_ordered_item(line)
+  if ol
+    return {kind = "ol", indent = leading_indent(line), text = ol}
+  return nil
+
+fn close_list_stack(out, stack)
+  while #stack > 0
+    top = stack[#stack]
+    if top.li_open
+      out <+ "</li>"
+    out <+ f"</{top.kind}>"
+    stack[#stack] = nil
+
+fn emit_list_item(out, stack, item)
+  while #stack > 0 and item.indent < stack[#stack].indent
+    top = stack[#stack]
+    if top.li_open
+      out <+ "</li>"
+    out <+ f"</{top.kind}>"
+    stack[#stack] = nil
+
+  while #stack > 0 and item.indent == stack[#stack].indent and item.kind != stack[#stack].kind
+    top = stack[#stack]
+    if top.li_open
+      out <+ "</li>"
+    out <+ f"</{top.kind}>"
+    stack[#stack] = nil
+
+  if #stack == 0
+    out <+ f"<{item.kind}>"
+    stack <+ {kind = item.kind, indent = item.indent, li_open = false}
+  elif item.indent > stack[#stack].indent
+    out <+ f"<{item.kind}>"
+    stack <+ {kind = item.kind, indent = item.indent, li_open = false}
+
+  top = stack[#stack]
+  if top.li_open
+    out <+ "</li>"
+  text = parse_inline(item.text)
+  out <+ f"<li>{text}"
+  top.li_open = true
+  stack[#stack] = top
+
+fn split_table_cells(line)
+  raw = string.trim(line or "")
+  if raw == ""
+    return {}
+  if string.starts_with(raw, "|")
+    raw = raw[2..]
+  if #raw > 0 and raw[#raw] == "|"
+    raw = string.sub(raw, 1, #raw - 1)
+  return {string.trim(p or "") for p in string.split(raw, "|")}
+
+fn is_table_candidate(line)
+  s = string.trim(line or "")
+  if s == ""
+    return false
+  return s.find("|") != nil
+
+fn is_table_separator_line(line)
+  cells = split_table_cells(line)
+  if #cells == 0
+    return false
+  for cell in cells
+    token = string.trim(cell)
+    if token == ""
+      return false
+    dashes = 0
+    idx = 1
+    while idx <= #token
+      ch = token[idx]
+      if ch != "-" and ch != ":" and ch != " "
+        return false
+      if ch == "-"
+        dashes = dashes + 1
+      idx = idx + 1
+    if dashes < 3
+      return false
+  return true
+
+fn to_html(markdown)
+  markdown = markdown == nil ? "" : str(markdown)
+
+  local lines = string.split(markdown, "\n")
+  local out = {}
+  local paragraph_lines = {}
+  local code_lines = {}
+  local quote_lines = {}
+  local list_stack = {}
+
+  local in_code_block = false
+  local code_lang = nil
+  local pending_table_header = nil
+  local in_table = false
+
+  for line in lines
+    if #line > 0 and line[#line] == "\r"
+      line = string.sub(line, 1, #line - 1)
+
+    if in_code_block
+      if string.starts_with(line, "```")
+        flush_code_block(out, code_lines, code_lang)
+        in_code_block = false
+        code_lang = nil
+      else
+        code_lines <+ line
+      continue
+
+    if string.starts_with(line, "```")
+      flush_paragraph(out, paragraph_lines)
+      flush_blockquote(out, quote_lines)
+      close_list_stack(out, list_stack)
+      if in_table
+        out <+ "</tbody>"
+        out <+ "</table>"
+        in_table = false
+      pending_table_header = nil
+      in_code_block = true
+      code_lang = string.trim(line[4..])
+      continue
+
+    if in_table
+      if is_table_candidate(line)
+        cells = split_table_cells(line)
+        out <+ "<tr>"
+        for c in cells
+          out <+ f"<td>{parse_inline(c)}</td>"
+        out <+ "</tr>"
+        continue
+      out <+ "</tbody>"
+      out <+ "</table>"
+      in_table = false
+
+    if pending_table_header
+      if is_table_separator_line(line)
+        flush_paragraph(out, paragraph_lines)
+        flush_blockquote(out, quote_lines)
+        close_list_stack(out, list_stack)
+        headers = split_table_cells(pending_table_header)
+        out <+ "<table>"
+        out <+ "<thead>"
+        out <+ "<tr>"
+        for h in headers
+          out <+ f"<th>{parse_inline(h)}</th>"
+        out <+ "</tr>"
+        out <+ "</thead>"
+        out <+ "<tbody>"
+        pending_table_header = nil
+        in_table = true
+        continue
+      paragraph_lines <+ pending_table_header
+      pending_table_header = nil
+
+    if string.trim(line) == ""
+      flush_paragraph(out, paragraph_lines)
+      flush_blockquote(out, quote_lines)
+      close_list_stack(out, list_stack)
+      continue
+
+    trimmed = string.ltrim(line)
+    if string.starts_with(trimmed, ">")
+      flush_paragraph(out, paragraph_lines)
+      close_list_stack(out, list_stack)
+      q = trimmed[2..]
+      if string.starts_with(q, " ")
+        q = q[2..]
+      quote_lines <+ q
+      continue
+    else
+      flush_blockquote(out, quote_lines)
+
+    if is_horizontal_rule(line)
+      flush_paragraph(out, paragraph_lines)
+      close_list_stack(out, list_stack)
+      out <+ "<hr />"
+      continue
+
+    heading = parse_heading(line)
+    if heading
+      flush_paragraph(out, paragraph_lines)
+      close_list_stack(out, list_stack)
+      id = heading_slug(heading.text)
+      level = str(heading.level)
+      text = parse_inline(heading.text)
+      out <+ f"<h{level} id=\"{string.escape_html(id)}\">{text}</h{level}>"
+      continue
+
+    item = parse_list_item(line)
+    if item
+      flush_paragraph(out, paragraph_lines)
+      flush_blockquote(out, quote_lines)
+      emit_list_item(out, list_stack, item)
+      continue
+
+    if is_table_candidate(line)
+      flush_paragraph(out, paragraph_lines)
+      flush_blockquote(out, quote_lines)
+      close_list_stack(out, list_stack)
+      pending_table_header = line
+      continue
+
+    close_list_stack(out, list_stack)
+    paragraph_lines <+ line
+
+  if pending_table_header
+    paragraph_lines <+ pending_table_header
+
+  flush_paragraph(out, paragraph_lines)
+  flush_blockquote(out, quote_lines)
+  close_list_stack(out, list_stack)
+
+  if in_table
+    out <+ "</tbody>"
+    out <+ "</table>"
+
+  if in_code_block
+    flush_code_block(out, code_lines, code_lang)
+
+  return table.concat(out, "\n")
+
+return {
+  to_html = to_html,
+  parse = to_html,
+}

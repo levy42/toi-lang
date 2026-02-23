@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 uuid = import uuid
 ```
 

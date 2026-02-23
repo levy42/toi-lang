@@ -1,6 +1,6 @@
-# Pua Documentation
+# Toi Documentation
 
-This directory contains user-facing docs for the Pua language and standard library.
+This directory contains user-facing docs for the Toi language and standard library.
 
 ## Start Here
 
@@ -44,4 +44,4 @@ This directory contains user-facing docs for the Pua language and standard libra
 - `docs/stdlib/coroutine.md`
 - `docs/stdlib/thread.md`
 - `docs/stdlib/socket.md`
-- `docs/stdlib/pua-libraries.md`
+- `docs/stdlib/toi-libraries.md`

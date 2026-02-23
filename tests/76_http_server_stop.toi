@@ -1,0 +1,34 @@
+from lib.test import assert_eq, assert_true
+
+http_server = import lib.http_server
+thread = import thread
+
+fn wait_until_running(app, timeout_sec = 1.0)
+  elapsed = 0.0
+  while elapsed < timeout_sec
+    if app.is_running()
+      return true
+    thread.sleep(0.01)
+    elapsed = elapsed + 0.01
+  return app.is_running()
+
+fn run_and_stop(host, port, worker_threads = 0)
+  app = http_server(port=port, host=host, worker_threads=worker_threads)
+  local h, spawn_err = thread.spawn(fn()
+    return app.run()
+  )
+  assert_true(h != nil)
+
+  assert_true(wait_until_running(app))
+  assert_true(app.is_running() == true)
+
+  assert_true(app.stop(0.1) == true)
+
+  result = thread.join(h)
+  assert_eq(result, "stopped")
+  assert_true(app.is_running() == false)
+
+run_and_stop("127.0.0.1", 0, 0)
+run_and_stop("127.0.0.1", 0, 2)
+
+print "http server stop ok"

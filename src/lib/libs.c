@@ -7,11 +7,11 @@
 // Forward declarations for individual library registration functions
 void register_core(VM* vm);
 void register_math(VM* vm);
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 void register_time(VM* vm);
 #endif
 void register_io(VM* vm);
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 void register_os(VM* vm);
 void register_stat(VM* vm);
 void register_dir(VM* vm);
@@ -22,7 +22,7 @@ void register_poll(VM* vm);
 void register_coroutine(VM* vm);
 void register_string(VM* vm);
 void register_table(VM* vm);
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 void register_socket(VM* vm);
 void register_thread(VM* vm);
 #endif
@@ -30,7 +30,7 @@ void register_json(VM* vm);
 void register_template(VM* vm);
 void register_http(VM* vm);
 void register_inspect(VM* vm);
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 void register_regex(VM* vm);
 void register_fnmatch(VM* vm);
 void register_glob(VM* vm);
@@ -38,10 +38,10 @@ void register_glob(VM* vm);
 void register_binary(VM* vm);
 void register_struct(VM* vm);
 void register_btree(VM* vm);
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 void register_uuid(VM* vm);
 #endif
-#ifdef PUA_HAS_ZLIB
+#ifndef TOI_WASM
 void register_gzip(VM* vm);
 #endif
 
@@ -64,11 +64,11 @@ static int load_registered_module(VM* vm, const char* name, void (*register_fn)(
 
 // Module loader wrappers - each loads its module and pushes it onto the stack
 static int load_math(VM* vm) { return load_registered_module(vm, "math", register_math); }
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 static int load_time(VM* vm) { return load_registered_module(vm, "time", register_time); }
 #endif
 static int load_io(VM* vm) { return load_registered_module(vm, "io", register_io); }
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 static int load_os(VM* vm) { return load_registered_module(vm, "os", register_os); }
 static int load_stat(VM* vm) { return load_registered_module(vm, "stat", register_stat); }
 static int load_dir(VM* vm) { return load_registered_module(vm, "dir", register_dir); }
@@ -79,7 +79,7 @@ static int load_poll(VM* vm) { return load_registered_module(vm, "poll", registe
 static int load_coroutine(VM* vm) { return load_registered_module(vm, "coroutine", register_coroutine); }
 static int load_string(VM* vm) { return load_registered_module(vm, "string", register_string); }
 static int load_table(VM* vm) { return load_registered_module(vm, "table", register_table); }
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 static int load_socket(VM* vm) { return load_registered_module(vm, "socket", register_socket); }
 static int load_thread(VM* vm) { return load_registered_module(vm, "thread", register_thread); }
 #endif
@@ -87,7 +87,7 @@ static int load_json(VM* vm) { return load_registered_module(vm, "json", registe
 static int load_template(VM* vm) { return load_registered_module(vm, "template", register_template); }
 static int load_http(VM* vm) { return load_registered_module(vm, "http", register_http); }
 static int load_inspect(VM* vm) { return load_registered_module(vm, "inspect", register_inspect); }
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 static int load_regex(VM* vm) { return load_registered_module(vm, "regex", register_regex); }
 static int load_fnmatch(VM* vm) { return load_registered_module(vm, "fnmatch", register_fnmatch); }
 static int load_glob(VM* vm) { return load_registered_module(vm, "glob", register_glob); }
@@ -95,21 +95,21 @@ static int load_glob(VM* vm) { return load_registered_module(vm, "glob", registe
 static int load_binary(VM* vm) { return load_registered_module(vm, "binary", register_binary); }
 static int load_struct(VM* vm) { return load_registered_module(vm, "struct", register_struct); }
 static int load_btree(VM* vm) { return load_registered_module(vm, "btree", register_btree); }
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 static int load_uuid(VM* vm) { return load_registered_module(vm, "uuid", register_uuid); }
 #endif
-#ifdef PUA_HAS_ZLIB
+#ifndef TOI_WASM
 static int load_gzip(VM* vm) { return load_registered_module(vm, "gzip", register_gzip); }
 #endif
 
 // Native module registry - modules that can be imported on demand
 static const ModuleReg native_modules[] = {
     {"math", load_math},
-#ifndef PUA_WASM
+#ifndef TOI_WASM
     {"time", load_time},
 #endif
     {"io", load_io},
-#ifndef PUA_WASM
+#ifndef TOI_WASM
     {"os", load_os},
     {"stat", load_stat},
     {"dir", load_dir},
@@ -120,7 +120,7 @@ static const ModuleReg native_modules[] = {
     {"coroutine", load_coroutine},
     {"string", load_string},
     {"table", load_table},
-#ifndef PUA_WASM
+#ifndef TOI_WASM
     {"socket", load_socket},
     {"thread", load_thread},
 #endif
@@ -128,7 +128,7 @@ static const ModuleReg native_modules[] = {
     {"template", load_template},
     {"http", load_http},
     {"inspect", load_inspect},
-#ifndef PUA_WASM
+#ifndef TOI_WASM
     {"regex", load_regex},
     {"fnmatch", load_fnmatch},
     {"glob", load_glob},
@@ -136,10 +136,10 @@ static const ModuleReg native_modules[] = {
     {"binary", load_binary},
     {"struct", load_struct},
     {"btree", load_btree},
-#ifndef PUA_WASM
+#ifndef TOI_WASM
     {"uuid", load_uuid},
 #endif
-#ifdef PUA_HAS_ZLIB
+#ifndef TOI_WASM
     {"gzip", load_gzip},
 #endif
     {NULL, NULL}  // Sentinel

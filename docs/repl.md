@@ -3,7 +3,7 @@
 Start interactive mode:
 
 ```bash
-./pua
+./toi
 ```
 
 ## Behavior

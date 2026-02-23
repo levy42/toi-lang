@@ -1,0 +1,49 @@
+import os
+
+fn assert_true(cond, msg = nil)
+  if not cond
+    error(msg == nil ? "assert_true failed" : msg)
+
+fn assert_eq(actual, expected, msg = nil)
+  if actual != expected
+    error(msg == nil ? "assert_eq failed" : msg)
+
+fn expect_error(fn_)
+  err = nil
+  try
+    fn_()
+  except e
+    err = e
+  if not err
+    error("expect_error failed")
+  if type(err) == "table" and type(err.msg) == "string"
+    return err.msg
+  return err
+
+
+
+TimeIt = {
+  _start_time = 0
+  msg = ""
+  echo = false
+
+  __enter = fn(self)
+    self._start_time = os.clock()
+    if self.echo print f"-- Started {self.msg}"
+
+  __exit = fn(self, ex)
+    elapsed = os.clock() - self._start_time
+    if self.echo print f"-- {self.msg} finished in {elapsed}s"
+}
+TimeIt.__index = TimeIt
+
+fn timeit(msg = "timer", echo=false)
+  return TimeIt {msg = msg, _start_time = 0, echo = echo}
+
+return {
+  assert_true = assert_true,
+  assert_eq = assert_eq,
+  expect_error = expect_error,
+  timeit = timeit,
+  TimeIt = TimeIt,
+}

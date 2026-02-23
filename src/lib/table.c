@@ -60,6 +60,57 @@ static int call_unary_lookup(VM* vm, Value fn, Value arg, Value* out) {
     return 0;
 }
 
+static int call_binary_less(VM* vm, Value fn, Value a, Value b, int* out_less) {
+    Value result = NIL_VAL;
+
+    if (IS_CLOSURE(fn)) {
+        int saved_frame_count = vm_current_thread(vm)->frame_count;
+
+        push(vm, fn);
+        push(vm, a);
+        push(vm, b);
+
+        if (!call(vm, AS_CLOSURE(fn), 2)) {
+            return 0;
+        }
+
+        InterpretResult run_result = vm_run(vm, saved_frame_count);
+        if (run_result != INTERPRET_OK) {
+            return 0;
+        }
+
+        result = pop(vm);
+    } else if (IS_NATIVE(fn)) {
+        push(vm, fn);
+        push(vm, a);
+        push(vm, b);
+
+        Value* call_args = vm_current_thread(vm)->stack_top - 2;
+        vm_current_thread(vm)->stack_top -= 3;
+
+        if (!AS_NATIVE(fn)(vm, 2, call_args)) {
+            return 0;
+        }
+
+        result = pop(vm);
+    } else {
+        vm_runtime_error(vm, "table.sort: comparator must be a function.");
+        return 0;
+    }
+
+    if (IS_BOOL(result)) {
+        *out_less = AS_BOOL(result) ? 1 : 0;
+        return 1;
+    }
+    if (IS_NUMBER(result)) {
+        *out_less = AS_NUMBER(result) < 0 ? 1 : 0;
+        return 1;
+    }
+
+    vm_runtime_error(vm, "table.sort: comparator must return bool or number.");
+    return 0;
+}
+
 // table.remove(t, pos) - removes element at pos and shifts down
 static int table_remove(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
@@ -264,8 +315,34 @@ static int table_sort(VM* vm, int arg_count, Value* args) {
         table_get_array(&table->table, i + 1, &arr[i]);
     }
 
-    // Sort (using default comparison for now - custom comparator is complex)
-    qsort(arr, len, sizeof(Value), compare_values);
+    if (arg_count >= 2 && !IS_NIL(args[1])) {
+        Value cmp = args[1];
+        if (!IS_CLOSURE(cmp) && !IS_NATIVE(cmp)) {
+            free(arr);
+            vm_runtime_error(vm, "table.sort: comparator must be a function.");
+            return 0;
+        }
+
+        // Stable insertion sort using user comparator.
+        for (int i = 1; i < len; i++) {
+            Value key = arr[i];
+            int j = i - 1;
+
+            while (j >= 0) {
+                int less = 0;
+                if (!call_binary_less(vm, cmp, key, arr[j], &less)) {
+                    free(arr);
+                    return 0;
+                }
+                if (!less) break;
+                arr[j + 1] = arr[j];
+                j--;
+            }
+            arr[j + 1] = key;
+        }
+    } else {
+        qsort(arr, len, sizeof(Value), compare_values);
+    }
 
     // Copy back
     for (int i = 0; i < len; i++) {

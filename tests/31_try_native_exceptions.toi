@@ -1,0 +1,36 @@
+from lib.test import assert_true
+
+caught_int = false
+try
+  int("nope")
+except e
+  caught_int = true
+  assert_true(type(e) == "table")
+  assert_true(e.type == "ValueError")
+  assert_true(e.code == "E_INT_PARSE")
+  assert_true(e.msg has "int() expects")
+assert_true(caught_int)
+
+caught_float = false
+try
+  float("bad")
+except e
+  caught_float = true
+  assert_true(type(e) == "table")
+  assert_true(e.type == "ValueError")
+  assert_true(e.code == "E_FLOAT_PARSE")
+  assert_true(e.msg has "float() expects")
+assert_true(caught_float)
+
+caught_error = false
+try
+  error("boom", "E_OOPS", "UserError")
+except e
+  caught_error = true
+  assert_true(type(e) == "table")
+  assert_true(e.type == "UserError")
+  assert_true(e.code == "E_OOPS")
+  assert_true(e.msg == "boom")
+assert_true(caught_error)
+
+print "try native exceptions ok"

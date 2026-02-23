@@ -28,6 +28,14 @@ static Value maybe_bind_self_local(Value receiver, Value result) {
     return result;
 }
 
+static Value bind_self_for_meta_local(Value receiver, Value result) {
+    if (IS_BOUND_METHOD(result)) return result;
+    if (IS_CLOSURE(result) || IS_NATIVE(result)) {
+        return OBJ_VAL(new_bound_method(receiver, AS_OBJ(result)));
+    }
+    return result;
+}
+
 static int handle_index_metamethod_local(
     VM* vm, ObjTable* t, Value table_val, Value key, Value* result, CallFrame** frame, uint8_t** ip) {
     if (!t->metatable) return 0;
@@ -304,6 +312,31 @@ static int handle_new_index_metamethod_local(
         return 1;
     }
     return 0;
+}
+
+int vm_handle_op_get_meta_table(VM* vm) {
+    Value key = pop(vm);
+    Value receiver = pop(vm);
+    Value result = NIL_VAL;
+
+    if (IS_STRING(key)) {
+        ObjString* key_str = AS_STRING(key);
+        if (IS_TABLE(receiver)) {
+            ObjTable* t = AS_TABLE(receiver);
+            if (t->metatable && table_get(&t->metatable->table, key_str, &result)) {
+                result = bind_self_for_meta_local(receiver, result);
+            }
+        } else if (IS_USERDATA(receiver)) {
+            ObjUserdata* udata = AS_USERDATA(receiver);
+            if (udata->metatable && table_get(&udata->metatable->table, key_str, &result)) {
+                result = bind_self_for_meta_local(receiver, result);
+            }
+        }
+    }
+
+    push(vm, result);
+    maybe_collect_garbage(vm);
+    return 1;
 }
 
 int vm_handle_op_set_table(VM* vm, CallFrame** frame, uint8_t** ip) {

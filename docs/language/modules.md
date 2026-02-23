@@ -2,7 +2,7 @@
 
 ## Import Expression
 
-```pua
+```toi
 math = import math
 ```
 
@@ -10,24 +10,24 @@ math = import math
 
 ## Import Statement
 
-```pua
+```toi
 import math
 ```
 
 ## Dotted Module Paths
 
-```pua
+```toi
 import lib.http_server
 srv = import lib.http_server
 ```
 
 ## From Import
 
-```pua
+```toi
 from lib.test import assert_eq, assert_true
 from pkg.mod import *
 ```
 
 ## Module Resolution
 
-Pua supports native modules (registered in VM) and `.pua` source modules.
+Toi supports native modules (registered in VM) and `.toi` source modules.

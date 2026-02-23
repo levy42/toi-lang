@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 regex = import regex
 ```
 
@@ -12,8 +12,10 @@ POSIX `regex.h` wrapper (extended regular expressions).
 
 - `regex.match(pattern, text, [flags]) -> bool`
 - `regex.search(pattern, text, [flags]) -> table|nil`
+- `regex.finditer(pattern, text, [flags]) -> table`
 - `regex.replace(pattern, text, repl, [count], [flags]) -> string`
 - `regex.split(pattern, text, [maxsplit], [flags]) -> table`
+- `regex.compile(pattern, [flags]) -> regex.compiled`
 
 ## Flags
 
@@ -32,3 +34,15 @@ When found, returns:
 - `end`: 1-based inclusive end index
 - `match`: full matched substring
 - `groups`: captures table (`groups[1]`, `groups[2]`, ...)
+
+## `finditer` Result
+
+Returns an array table of `search`-style match objects, in order.
+
+## Compiled Regex
+
+`regex.compile(...)` returns a compiled regex object with methods:
+
+- `re.match(text) -> bool`
+- `re.search(text) -> table|nil`
+- `re.finditer(text) -> table`

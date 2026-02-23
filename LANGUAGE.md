@@ -1,4 +1,4 @@
-# Pua Language Manifest
+# Toi Language Manifest
 
 This document describes the syntax accepted by the current compiler/runtime in `src/lexer.c` and `src/compiler.c`.
 
@@ -32,7 +32,7 @@ This document describes the syntax accepted by the current compiler/runtime in `
 
 Examples:
 
-```pua
+```toi
 1
 10_000
 3.14
@@ -145,7 +145,7 @@ iterator_exprs := expression ("," expression ("," expression)?)?
 
 Accepted patterns:
 
-```pua
+```toi
 for v in table_expr
 for i#, v in table_expr
 for k, v in table_expr
@@ -177,7 +177,7 @@ access_chain := ("." IDENT | "[" expression "]")+
 
 `try` forms supported:
 
-```pua
+```toi
 try
   risky()
 except
@@ -203,7 +203,7 @@ finally
 
 Examples:
 
-```pua
+```toi
 try
   risky()
 except e
@@ -335,19 +335,19 @@ Two forms:
 
 1. Expression form (usable anywhere expressions are allowed):
 
-```pua
+```toi
 m = import lib.types
 ```
 
 2. Declaration form (binds module to last path component):
 
-```pua
+```toi
 import lib.types   -- binds local/global variable: types
 ```
 
 3. From-import form:
 
-```pua
+```toi
 from lib.types import String, Integer
 from tests.star_exports_mod import *
 ```
@@ -361,10 +361,10 @@ module_path := IDENT ("." IDENT)*
 Module resolution order for `import a.b`:
 
 1. native module `a.b`
-2. `a/b.pua`
-3. `a/b/__.pua`
-4. `lib/a/b.pua`
-5. `lib/a/b/__.pua`
+2. `a/b.toi`
+3. `a/b/__.toi`
+4. `lib/a/b.toi`
+5. `lib/a/b/__.toi`
 
 ## 7. Runtime-Visible Syntax Semantics
 
@@ -380,7 +380,7 @@ Decorator lowering semantics:
 - Decorators apply to function declarations only.
 - Multiple decorators apply bottom-to-top:
 
-```pua
+```toi
 @a
 @b
 fn f() ...
@@ -388,7 +388,7 @@ fn f() ...
 
 is equivalent to:
 
-```pua
+```toi
 fn f() ...
 f = a(b(f))
 ```

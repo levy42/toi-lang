@@ -1,0 +1,526 @@
+inspect = import inspect
+io = import io
+os = import os
+string = import string
+table = import table
+types = import lib.types
+thread = nil
+try
+  thread = import thread
+except e
+  thread = nil
+
+ESC = string.char(27)
+ANSI = {
+  reset = ESC + "[0m",
+  black = ESC + "[30m",
+  red = ESC + "[31m",
+  green = ESC + "[32m",
+  yellow = ESC + "[33m",
+  blue = ESC + "[34m",
+  magenta = ESC + "[35m",
+  cyan = ESC + "[36m",
+  white = ESC + "[37m",
+  bold = ESC + "[1m",
+  dim = ESC + "[2m",
+  underline = ESC + "[4m"
+}
+
+fn _tag_code(tag)
+  if tag == "/" or tag == "reset"
+    return ANSI.reset
+
+  codes = {}
+  token = ""
+  for ch in tag
+    if ch == "+" or ch == "," or ch == "|" or ch == " "
+      if token != ""
+        code = ANSI[token]
+        if code == nil
+          return nil
+        codes <+ code
+        token = ""
+    else
+      token = token + ch
+
+  if token != ""
+    code = ANSI[token]
+    if code == nil
+      return nil
+    codes <+ code
+
+  if #codes == 0
+    return nil
+  return table.concat(codes, "")
+
+fn _format(text)
+  if text == nil return ""
+  if type(text) != "string"
+    text = str(text)
+
+  out = {}
+  used_color = false
+  i = 1
+  while i <= #text
+    consumed = false
+    c = text[i]
+    if c == "["
+      -- Escape: [[ => literal [
+      if i < #text and text[i + 1] == "["
+        out <+ "["
+        i = i + 1
+        consumed = true
+
+      close_i = string.find(text, "]", i + 1)
+      if close_i and close_i > i
+        tag = string.sub(text, i + 1, close_i - 1)
+        code = _tag_code(tag)
+        if code
+          out <+ code
+          used_color = true
+          i = close_i
+          consumed = true
+
+    if not consumed
+      out <+ c
+    i = i + 1
+
+  if used_color
+    out <+ ANSI.reset
+  return table.concat(out, "")
+
+fn printc(text)
+  print _format(text)
+
+_stdout_file = nil
+_stdout_failed = false
+
+fn _stdout()
+  if _stdout_failed
+    return nil
+  if _stdout_file == nil
+    try
+      _stdout_file = io.open("/dev/stdout", "w")
+    except e
+      _stdout_failed = true
+      _stdout_file = nil
+  return _stdout_file
+
+fn _term_write(s)
+  if type(s) != "string"
+    s = str(s)
+  f = _stdout()
+  if f
+    f.write(s)
+    return true
+  print s
+  return false
+
+fn _repeat_char(ch, n)
+  if n <= 0
+    return ""
+  out = ""
+  i = 1
+  while i <= n
+    out = out + ch
+    i = i + 1
+  return out
+
+fn _pad_right(text, target)
+  if #text >= target return text
+  return text + _repeat_char(" ", target - #text)
+
+fn _write_inline(obj, raw)
+  formatted = _format(raw)
+  out = "\r" + _pad_right(formatted, obj.last_len)
+  obj.last_len = #formatted
+  _term_write(out)
+  return obj
+
+fn _write_final(obj, raw)
+  _write_inline(obj, raw)
+  _term_write("\n")
+  obj.last_len = 0
+  return obj
+
+fn _auto_loop(step, obj, stop_ch, interval)
+  while true
+    local item, ok = stop_ch.tryrecv(stop_ch)
+    if ok
+      return true
+    step(obj)
+    thread.sleep(interval)
+
+fn _auto_start(obj, step, interval, fallback = nil)
+  obj.active = true
+  if thread == nil
+    if fallback
+      fallback(obj)
+    return false
+  if obj.auto_handle
+    return true
+
+  if interval == nil or interval <= 0
+    interval = 0.08
+  obj.auto_stop = thread.channel(1)
+  local h, err = thread.spawn(_auto_loop, step, obj, obj.auto_stop, interval)
+  if h == nil
+    obj.auto_stop = nil
+    if fallback
+      fallback(obj)
+    return false
+  obj.auto_handle = h
+  return true
+
+fn _auto_stop(obj)
+  if obj.auto_handle and obj.auto_stop
+    obj.auto_stop.send(obj.auto_stop, true)
+    thread.join(obj.auto_handle)
+    obj.auto_handle = nil
+    obj.auto_stop = nil
+  obj.active = false
+
+fn coerce_arg(raw, p)
+  t = p.type
+  if t == nil or t == "any"
+    return raw
+  if t == "table"
+    error("CLI does not support table parameter parsing yet")
+
+  type_def = types.from_hint(t)
+  if type_def == nil
+    return raw
+  return types.coerce(type_def, raw)
+
+fn usage_for(name, cmd)
+  parts = {}
+  parts <+ f"{name} {cmd.name}"
+  for p in cmd.sig.params
+    label = p.name == nil ? ("arg" + str(p.index)) : p.name
+    if p.variadic
+      parts <+ f"[{label} ...]"
+    elif p.has_default
+      parts <+ f"[{label}]"
+    else
+      parts <+ f"<{label}>"
+  return table.concat(parts, " ")
+
+App = {}
+App.__index = App
+
+fn app_new(cls, opts = nil)
+  if opts == nil
+    opts = {}
+  app = {
+    name = opts.name == nil ? "app" : opts.name,
+    commands = {},
+    order = {}
+  }
+  setmetatable(app, App)
+  return app
+
+AppMeta = {}
+AppMeta.__call = app_new
+setmetatable(App, AppMeta)
+
+fn register_command(self, name, fn_)
+  sig = inspect.signature(fn_)
+  cmd = {
+    name = name,
+    fn_ = fn_,
+    sig = sig
+  }
+  self.commands[name] = cmd
+  self.order <+ name
+
+fn command(self, name = nil)
+  if type(name) == "function"
+    cmd_name = inspect.signature(name).name
+    register_command(self, cmd_name == nil ? "cmd" : cmd_name, name)
+    return name
+
+  return fn(fn_)
+    cmd_name = name
+    if cmd_name == nil
+      cmd_name = inspect.signature(fn_).name
+      if cmd_name == nil
+        cmd_name = "cmd"
+    register_command(self, cmd_name, fn_)
+    return fn_
+App.command = command
+
+fn help(self)
+  lines = {}
+  lines <+ f"Usage: {self.name} <command> [args]"
+  lines <+ "Commands:"
+  for name in self.order
+    cmd = self.commands[name]
+    lines <+ f"  {usage_for(self.name, cmd)}"
+  return table.concat(lines, "\n")
+App.help = help
+
+fn build_args(cmd, raw_args)
+  params = cmd.sig.params
+  args = {}
+  param_count = #params
+
+  variadic = false
+  required = 0
+  if param_count > 0 and params[param_count].variadic
+    variadic = true
+
+  for p in params
+    if p.variadic
+      break
+    if not p.has_default
+      required = required + 1
+
+  min_needed = required
+  max_allowed = variadic ? nil : param_count
+
+  if #raw_args < min_needed
+    error("Not enough arguments for '" + cmd.name + "'")
+  if max_allowed != nil and #raw_args > max_allowed
+    error("Too many arguments for '" + cmd.name + "'")
+
+  fixed_count = variadic ? (param_count - 1) : param_count
+
+  if fixed_count > 0
+    for i in 1..fixed_count
+      p = params[i]
+      if i <= #raw_args
+        args <+ coerce_arg(raw_args[i], p)
+      elif p.has_default
+        -- Omit trailing defaults; function call will apply defaults.
+        break
+      else
+        error("Missing required argument '" + p.name + "'")
+  if variadic and fixed_count < #raw_args
+    for i in (fixed_count + 1)..#raw_args
+      args <+ raw_args[i]
+
+  return args
+
+fn run(self, argv = nil)
+  args = argv
+  if args == nil
+    args = os.argv
+
+  if args == nil or #args == 0
+    printc(self.help())
+    return nil
+
+  cmd_name = args[1]
+  if cmd_name == "-h" or cmd_name == "--help"
+    printc(self.help())
+    return nil
+
+  cmd = self.commands[cmd_name]
+  if cmd == nil
+    error("Unknown command: " + str(cmd_name))
+
+  raw = {}
+  if #args >= 2
+    for i in 2..#args
+      raw <+ args[i]
+  parsed = build_args(cmd, raw)
+  return cmd.fn_(*parsed)
+App.run = run
+
+Status = {}
+Status.__index = Status
+
+fn status_new(msg = "working", opts = nil)
+  if opts == nil
+    opts = {}
+  frames = opts.frames
+  if type(frames) != "table" or #frames == 0
+    frames = {"|", "/", "-", "\\"}
+  s = {
+    message = msg,
+    frames = frames,
+    frame_index = 1,
+    active = false,
+    last_len = 0,
+    auto_handle = nil,
+    auto_stop = nil,
+    auto = opts.auto == nil ? true : bool(opts.auto),
+    interval = opts.interval == nil ? 0.08 : opts.interval
+  }
+  setmetatable(s, Status)
+  return s
+
+fn _status_auto_step(st)
+  st.tick()
+
+Status.line = fn(self)
+  frame = self.frames[self.frame_index]
+  if frame == nil
+    frame = self.frames[1]
+  return "[cyan]" + frame + "[/] " + self.message
+
+Status.start = fn(self, msg = nil)
+  if msg != nil
+    self.message = msg
+  if self.auto
+    self.start_auto(self.interval)
+    return self
+  self.active = true
+  return self
+
+Status.start_auto = fn(self, interval = 0.08, msg = nil)
+  if msg != nil
+    self.message = msg
+  return _auto_start(self, _status_auto_step, interval)
+
+Status.__enter = fn(self)
+  self.start()
+  return self
+
+Status.tick = fn(self, msg = nil)
+  if not self.active
+    self.start()
+  if msg != nil
+    self.message = msg
+
+  _write_inline(self, self.line())
+
+  self.frame_index = self.frame_index + 1
+  if self.frame_index > #self.frames
+    self.frame_index = 1
+  return self
+
+Status.stop = fn(self, msg = nil, ok = true)
+  _auto_stop(self)
+  if msg != nil
+    self.message = msg
+  final = ok ? "[green]ok[/] " : "[red]x[/] "
+  return _write_final(self, final + self.message)
+
+Status.__exit = fn(self, ex)
+  if ex == nil
+    self.stop(self.message, true)
+  else
+    self.stop(self.message, false)
+
+Progress = {}
+Progress.__index = Progress
+
+fn _progress_auto_step(pb)
+  pb.render()
+
+fn _progress_render(pb)
+  pb.render()
+
+fn progress_new(total = 100, opts = nil)
+  if opts == nil
+    opts = {}
+
+  if total == nil or total <= 0
+    total = 1
+
+  p = {
+    total = int(total),
+    value = 0,
+    width = opts.width == nil ? 30 : int(opts.width),
+    prefix = opts.prefix == nil ? "" : str(opts.prefix),
+    suffix = opts.suffix == nil ? "" : str(opts.suffix),
+    complete = opts.complete == nil ? "=" : str(opts.complete),
+    incomplete = opts.incomplete == nil ? "-" : str(opts.incomplete),
+    show_counts = opts.show_counts == nil ? true : bool(opts.show_counts),
+    last_len = 0,
+    active = false,
+    auto_handle = nil,
+    auto_stop = nil,
+    auto = opts.auto == nil ? true : bool(opts.auto),
+    interval = opts.interval == nil ? 0.08 : opts.interval
+  }
+  if p.width < 5
+    p.width = 5
+
+  setmetatable(p, Progress)
+  return p
+
+Progress.line = fn(self)
+  v = self.value
+  if v < 0
+    v = 0
+  if v > self.total
+    v = self.total
+
+  ratio = self.total > 0 ? (v / self.total) : 1
+  filled = int(ratio * self.width)
+  if filled < 0
+    filled = 0
+  if filled > self.width
+    filled = self.width
+
+  bar = _repeat_char(self.complete, filled) + _repeat_char(self.incomplete, self.width - filled)
+  pct = int(ratio * 100)
+
+  left = self.prefix
+  if #left > 0
+    left = left + " "
+  right = self.suffix
+  if #right > 0
+    right = " " + right
+
+  counts = ""
+  if self.show_counts
+    counts = " (" + str(v) + "/" + str(self.total) + ")"
+
+  return left + "[" + bar + "] " + str(pct) + "%" + counts + right
+
+Progress.start = fn(self)
+  if self.auto
+    self.start_auto(self.interval)
+    return self
+  self.active = true
+  self.render()
+  return self
+
+Progress.start_auto = fn(self, interval = 0.08)
+  return _auto_start(self, _progress_auto_step, interval, _progress_render)
+
+Progress.stop = fn(self)
+  _auto_stop(self)
+  return self
+
+Progress.render = fn(self)
+  return _write_inline(self, self.line())
+
+Progress.update = fn(self, value, suffix = nil)
+  self.value = int(value)
+  if suffix != nil
+    self.suffix = str(suffix)
+  return self.render()
+
+Progress.advance = fn(self, delta = 1)
+  self.value = self.value + int(delta)
+  return self.render()
+
+Progress.finish = fn(self, suffix = nil)
+  self.value = self.total
+  if suffix != nil
+    self.suffix = str(suffix)
+  line = self.line()
+  self.stop()
+  return _write_final(self, line)
+
+Progress.__enter = fn(self)
+  self.start()
+  return self
+
+Progress.__exit = fn(self, ex)
+  if ex == nil
+    self.finish(self.suffix)
+  else
+    self.finish("failed")
+
+return {
+  App = App,
+  _format = _format,
+  printc = printc,
+  status = status_new,
+  progress = progress_new
+}

@@ -1,0 +1,37 @@
+string = import string
+json = import json
+http = import http
+
+Response = {}
+JSON_SCALAR_TYPES = {number = true, boolean = true, ["nil"] = true}
+
+fn stream_response(status, headers, stream)
+  return {
+    __stream = true,
+    status = status or 200,
+    headers = headers or {},
+    stream = stream
+  }
+
+Response.normalize = fn(res)
+  res_type = type(res)
+  if res_type == "string"
+    if res[..5] == "HTTP/"
+      return res
+    return http.response(200, {["Content-Type"] = "text/plain"}, res)
+
+  if res_type == "thread"
+    return stream_response(200, {}, res)
+
+  if res_type == "table"
+    if res.__stream or res.stream or type(res.body) == "thread"
+      return stream_response(res.status, res.headers, res.stream or res.body)
+    if res.status or res.headers or res.body
+      return http.response(res.status or 200, res.headers, res.body or "")
+    return http.response(200, {["Content-Type"] = "application/json"}, json.encode(res))
+
+  if JSON_SCALAR_TYPES[res_type]
+    return http.response(200, {["Content-Type"] = "application/json"}, json.encode(res))
+  return http.response(500, nil, "Invalid handler response type")
+
+return Response

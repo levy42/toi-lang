@@ -12,7 +12,7 @@ payload = {
     "name": "Ada",
     "active": True,
     "score": 98.5,
-    "tags": ["pua", "json", "perf"],
+    "tags": ["toi", "json", "perf"],
     "nested": {
         "retries": 3,
         "timeout_ms": 250,
@@ -34,7 +34,7 @@ assert_true(isinstance(decoded, dict), "json.loads should return dict")
 assert_true(decoded["name"] == "Ada", "decoded.name mismatch")
 assert_true(decoded["active"] is True, "decoded.active mismatch")
 assert_true(decoded["nested"]["retries"] == 3, "decoded nested mismatch")
-assert_true(decoded["tags"][0] == "pua", "decoded array mismatch")
+assert_true(decoded["tags"][0] == "toi", "decoded array mismatch")
 assert_true(decoded["users"][2]["role"] == "member", "decoded array object mismatch")
 
 # Benchmark encode

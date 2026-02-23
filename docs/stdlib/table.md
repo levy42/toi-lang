@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 table = import table
 ```
 

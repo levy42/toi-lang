@@ -10,7 +10,7 @@
 #include "token.h"
 #include "object.h"
 #include "value.h"
-#include "pua_lineedit.h"
+#include "toi_lineedit.h"
 
 #define VERSION "0.0.1"
 // ANSI color codes for syntax highlighting
@@ -121,7 +121,7 @@ static int word_list_contains(const CompletionWord* words, const char* s, int le
     return 0;
 }
 
-static int completion_exists(pua_lineedit_completions *lc, const char* candidate) {
+static int completion_exists(toi_lineedit_completions *lc, const char* candidate) {
     for (size_t i = 0; i < lc->len; i++) {
         if (strcmp(lc->cvec[i], candidate) == 0) return 1;
     }
@@ -129,7 +129,7 @@ static int completion_exists(pua_lineedit_completions *lc, const char* candidate
 }
 
 static void add_completion_candidate(const char *buf, int replace_start, const char* replacement,
-                                   pua_lineedit_completions *lc) {
+                                   toi_lineedit_completions *lc) {
     if ((int)lc->len >= REPL_COMPLETION_MAX) return;
 
     int prefix_len = replace_start;
@@ -143,13 +143,13 @@ static void add_completion_candidate(const char *buf, int replace_start, const c
     candidate[out_len] = '\0';
 
     if (!completion_exists(lc, candidate)) {
-        pua_lineedit_add_completion(lc, candidate);
+        toi_lineedit_add_completion(lc, candidate);
     }
     free(candidate);
 }
 
 static void add_globals_matches(const char *buf, int replace_start, const char* prefix, int prefix_len,
-                              pua_lineedit_completions *lc) {
+                              toi_lineedit_completions *lc) {
     if (repl_vm_for_completion == NULL) return;
     Table* globals = &repl_vm_for_completion->globals;
 
@@ -179,7 +179,7 @@ static int lookup_global_by_slice(VM* vm, const char* name, int name_len, Value*
 }
 
 static void add_table_member_matches(const char *buf, int member_start, const char* prefix, int prefix_len,
-                                  ObjTable* table, pua_lineedit_completions *lc) {
+                                  ObjTable* table, toi_lineedit_completions *lc) {
     for (int i = 0; i < table->table.capacity && (int)lc->len < REPL_COMPLETION_MAX; i++) {
         Entry* entry = &table->table.entries[i];
         if (entry->key == NULL || IS_NIL(entry->value)) continue;
@@ -271,7 +271,7 @@ static int is_operator(TokenType type) {
            type == TOKEN_AND || type == TOKEN_OR || type == TOKEN_NOT ||
            type == TOKEN_DOT || type == TOKEN_DOT_DOT || type == TOKEN_QUESTION ||
            type == TOKEN_HASH || type == TOKEN_COLON || type == TOKEN_POWER ||
-           type == TOKEN_INT_DIV;
+           type == TOKEN_COLON_COLON || type == TOKEN_INT_DIV;
 }
 
 static void append_raw(char* output, size_t output_size, size_t* out_pos, const char* src, size_t len) {
@@ -434,7 +434,7 @@ static void syntax_highlight_callback(const char *buf, char *highlighted, size_t
 }
 
 // Linenoise completion callback for keyword/function completion
-static void completion_callback(const char *buf, pua_lineedit_completions *lc) {
+static void completion_callback(const char *buf, toi_lineedit_completions *lc) {
     int len = (int)strlen(buf);
 
     int base_start = 0, base_len = 0, member_start = 0, member_len = 0;
@@ -534,7 +534,7 @@ static int is_input_complete(const char* input) {
         last_type == TOKEN_LESS || last_type == TOKEN_LESS_EQUAL ||
         last_type == TOKEN_GREATER || last_type == TOKEN_GREATER_EQUAL ||
         last_type == TOKEN_AND || last_type == TOKEN_OR || last_type == TOKEN_NOT ||
-        last_type == TOKEN_EQUALS || last_type == TOKEN_COLON) {
+        last_type == TOKEN_EQUALS || last_type == TOKEN_COLON || last_type == TOKEN_COLON_COLON) {
         return 0;
     }
 
@@ -556,13 +556,13 @@ void start_repl(void) {
     vm.disable_gc = 1;  // Disable GC in REPL to keep all objects alive
     vm.is_repl = 1;     // Enable REPL mode
 
-    printf("%sPUA %s%s\n", COLOR_KEYWORD, VERSION, COLOR_RESET);
+    printf("%sTOI %s%s\n", COLOR_KEYWORD, VERSION, COLOR_RESET);
 
-    // Configure pua_lineedit
-    pua_lineedit_set_multi_line(1);  // Enable multi-line editing
-    pua_lineedit_set_syntax_highlight_callback(syntax_highlight_callback);
-    pua_lineedit_set_completion_callback(completion_callback);
-    pua_lineedit_history_set_max_len(100);  // Keep last 100 commands
+    // Configure toi_lineedit
+    toi_lineedit_set_multi_line(1);  // Enable multi-line editing
+    toi_lineedit_set_syntax_highlight_callback(syntax_highlight_callback);
+    toi_lineedit_set_completion_callback(completion_callback);
+    toi_lineedit_history_set_max_len(100);  // Keep last 100 commands
 
     signal(SIGINT, handle_sigint);
 
@@ -571,7 +571,7 @@ void start_repl(void) {
     buffer[0] = '\0';
 
     for (;;) {
-        line = pua_lineedit(buffer[0] == '\0' ? "> " : "... ");
+        line = toi_lineedit(buffer[0] == '\0' ? "> " : "... ");
         if (line == NULL) {
             if (errno == EAGAIN) {
                 printf("\n");
@@ -616,7 +616,7 @@ void start_repl(void) {
 
         if (should_execute) {
             // Input is complete, add to history and execute
-            pua_lineedit_history_add(buffer);
+            toi_lineedit_history_add(buffer);
 
             // Compile and execute
             ObjFunction* function = compile_repl(buffer);

@@ -1,0 +1,36 @@
+from lib.test import assert_true
+
+os = import os
+
+ROOT = "tests/tmp_mkdir_all_case"
+NEST = ROOT + "/a/b/c"
+
+fn safe_rmdir(path)
+  if os.exists(path) and os.isdir(path)
+    os.rmdir(path)
+
+safe_rmdir(ROOT + "/a/b/c")
+safe_rmdir(ROOT + "/a/b")
+safe_rmdir(ROOT + "/a")
+safe_rmdir(ROOT)
+
+local miss, miss_err = os.mkdir(NEST)
+assert_true(miss == nil)
+assert_true(miss_err != nil)
+
+local ok, err = os.mkdir(NEST, true)
+assert_true(ok == true, "mkdir -p failed: " + str(err))
+assert_true(os.isdir(ROOT))
+assert_true(os.isdir(ROOT + "/a"))
+assert_true(os.isdir(ROOT + "/a/b"))
+assert_true(os.isdir(ROOT + "/a/b/c"))
+
+local ok2, err2 = os.mkdir(NEST, true)
+assert_true(ok2 == true, "mkdir -p idempotent failed: " + str(err2))
+
+safe_rmdir(ROOT + "/a/b/c")
+safe_rmdir(ROOT + "/a/b")
+safe_rmdir(ROOT + "/a")
+safe_rmdir(ROOT)
+
+print "os mkdir all ok"

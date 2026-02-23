@@ -1,8 +1,8 @@
 # gzip (optional)
 
-`gzip` is available only when Pua is built with system zlib (`libz`).
+`gzip` is available only when Toi is built with system zlib (`libz`).
 
-```pua
+```toi
 gzip = import gzip
 ```
 

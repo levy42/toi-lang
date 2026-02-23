@@ -105,8 +105,19 @@ static void compile_expression_source(const char* expr_src) {
 }
 
 static void compile_fstring_expression_slice(const char* src, int len) {
+    const char* expr_start = src;
+    const char* expr_end = src + len;
+    trim_slice(&expr_start, &expr_end);
+    if (expr_start >= expr_end) {
+        error("f-string interpolation is empty.");
+        return;
+    }
+
     int expr_src_len = 0;
-    char* expr_src = unescape_fstring_expr_slice(src, len, &expr_src_len);
+    char* expr_src = unescape_fstring_expr_slice(
+        expr_start,
+        (int)(expr_end - expr_start),
+        &expr_src_len);
     compile_expression_source(expr_src);
     free(expr_src);
 }
@@ -178,10 +189,26 @@ static int emit_fstring_format_call(const char* expr_src, int expr_len, const ch
 void fstring(int can_assign) {
     (void)can_assign;
     int base_top = type_stack_top;
+    const char* tok = parser.previous.start;
+    int tok_len = parser.previous.length;
+    const char* src = NULL;
+    int raw_len = 0;
 
-    // Token is f"..." - extract content (skip f" at start and " at end)
-    const char* src = parser.previous.start + 2;
-    int raw_len = parser.previous.length - 3;
+    // Token is either f"..." / f'...' / f[[...]]
+    if (tok_len >= 5 && tok[0] == 'f' && tok[1] == '[' && tok[2] == '[' &&
+        tok[tok_len - 2] == ']' && tok[tok_len - 1] == ']') {
+        src = tok + 3;       // after f[[
+        raw_len = tok_len - 5; // strip f[[ and ]]
+    } else if (tok_len >= 4 && tok[0] == 'f' &&
+               (tok[1] == '"' || tok[1] == '\'')) {
+        src = tok + 2;       // after f"
+        raw_len = tok_len - 3; // strip f" and trailing "
+    } else {
+        error("Invalid f-string token.");
+        type_stack_top = base_top;
+        type_push(TYPEHINT_STR);
+        return;
+    }
 
     int part_count = 0;
     int i = 0;
@@ -251,20 +278,14 @@ void fstring(int can_assign) {
                 }
 
                 // Check for string start: \"
-                if (src[i] == '\\' && i + 1 < raw_len && src[i+1] == '"') {
-                    i += 2; // enter string
+                if (src[i] == '"' || src[i] == '\'') {
+                    char quote = src[i++];
                     while (i < raw_len) {
-                        // Check for escaped backslash (double backslash)
-                        if (src[i] == '\\' && i + 1 < raw_len && src[i+1] == '\\') {
-                            i += 2;
+                        if (src[i] == '\\' && i + 1 < raw_len) {
+                            i += 2; // escaped char inside expression string
                             continue;
                         }
-
-                        // Check for closing quote \"
-                        if (src[i] == '\\' && i + 1 < raw_len && src[i+1] == '"') {
-                            i += 2;
-                            break;
-                        }
+                        if (src[i] == quote) { i++; break; }
                         i++;
                     }
                     continue;

@@ -2,7 +2,7 @@
 
 ## Conditionals
 
-```pua
+```toi
 if cond
   ...
 elif other
@@ -13,7 +13,7 @@ else
 
 Walrus (`:=`) can be used in conditions:
 
-```pua
+```toi
 k = nil
 if (k := 3) == 3
   print k
@@ -21,12 +21,12 @@ if (k := 3) == 3
 
 ## While Loop
 
-```pua
+```toi
 while cond
   ...
 ```
 
-```pua
+```toi
 i = 0
 while ((i := i + 1) <= 10)
   print i
@@ -34,9 +34,9 @@ while ((i := i + 1) <= 10)
 
 ## For Loop
 
-Pua supports iterator-style `for ... in ...`.
+Toi supports iterator-style `for ... in ...`.
 
-```pua
+```toi
 for v in values
   ...
 
@@ -52,7 +52,7 @@ Index-loop shorthand (`i#`) is available in specific iterator contexts.
 
 ## Exceptions
 
-```pua
+```toi
 try
   risky()
 except e
@@ -67,7 +67,7 @@ finally
 
 Context-manager style:
 
-```pua
+```toi
 with resource() as r
   r.use()
 ```

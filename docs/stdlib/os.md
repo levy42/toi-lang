@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 os = import os
 ```
 
@@ -17,7 +17,7 @@ os = import os
 
 - `os.remove(path) -> true|false, err?`
 - `os.rename(old, new) -> true|false, err?`
-- `os.mkdir(path) -> true|false, err?`
+- `os.mkdir(path, [all=false]) -> true|false, err?`
 - `os.rmdir(path) -> true|false, err?`
 - `os.listdir(path) -> table|nil, err?`
 - `os.isfile(path) -> bool`

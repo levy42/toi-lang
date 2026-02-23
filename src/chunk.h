@@ -43,6 +43,7 @@ typedef enum {
     OP_SET_UPVALUE,
     OP_CLOSE_UPVALUE,
     OP_GET_TABLE,
+    OP_GET_META_TABLE,
     OP_SET_TABLE,
     OP_DELETE_TABLE,
     OP_NEW_TABLE,

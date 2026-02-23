@@ -1,6 +1,6 @@
-# Pua
+# Toi
 
-Pua is a small, Lua-like scripting language with indentation-based blocks and a compact standard library.
+Toi is a small, Lua-like scripting language with indentation-based blocks and a compact standard library.
 
 ## Documentation
 
@@ -15,17 +15,18 @@ make
 make release
 make clean
 make test
+make docs
 make test-fmt
 ```
 
 ## Run
 
 ```bash
-./pua                  # REPL
-./pua path/to/file.pua # run script
-./pua fmt file.pua     # print formatted code
-./pua fmt -w file.pua  # format in place
-./pua fmt --check file.pua  # exit 1 if formatting would change
+./toi                  # REPL
+./toi path/to/file.toi # run script
+./toi fmt file.toi     # print formatted code
+./toi fmt -w file.toi  # format in place
+./toi fmt --check file.toi  # exit 1 if formatting would change
 ```
 
 ## Syntax (quick reference)
@@ -128,7 +129,7 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 - `json`: encode/decode
 - `binary`: `pack(value)` / `unpack(bytes)`
 - `struct`: `pack(fmt, ...)` / `unpack(fmt, bytes, offset=1)`
-- `socket`: tcp, select, send/recv
+- `socket`: tcp, select, send/recv, optional TLS
 - `coroutine`: create, resume, status, yield
 - `thread`: threads and scheduling helpers
 - `template`: `compile`, `render`, `code`
@@ -136,15 +137,50 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 - `regex`: POSIX regex wrapper (`match`, `search`, `replace`, `split`)
 - `fnmatch`: POSIX glob wrapper (`match`)
 - `glob`: POSIX pathname expansion wrapper (`match`)
-- `gzip` (optional): zlib-backed gzip wrapper (`compress`, `decompress`)
+- `gzip`: zlib-backed gzip wrapper (`compress`, `decompress`)
 
-## Pua libraries (`lib/*.pua`)
+## Toi libraries (`lib/*.toi`)
 
 - `lib.types` – small type-check helpers (String/Number/Boolean/Integer/List/Optional/Record)
 - `lib.record` – record schemas + validation + `__str`
 - `lib.scheduler` – cooperative scheduler
 - `lib.selector` – poll/select readiness helper
+- `lib.log` – structured-ish logging helpers (levels, named loggers, handlers)
 - `lib.http_server` – simple concurrent HTTP server framework
+- `lib.loadtest` – minimalist HTTP/HTTPS load test CLI (RPS-oriented)
+
+Quick run:
+
+```bash
+./toi lib/loadtest.toi rps http://127.0.0.1:8080/ 10 20 2000 false
+```
+
+- Args: `url duration_sec concurrency timeout_ms verify_tls`
+
+## `lib.http_server` quick HTTPS example
+
+```toi
+http_server = import lib.http_server
+
+app = http_server(
+  host = "0.0.0.0",
+  port = 8443,
+  ssl = true,
+  ssl_cert = "certs/server.crt",
+  ssl_key = "certs/server.key"
+)
+
+get = app.get
+@get("/health")
+fn health(req)
+  return {ok = true}
+
+app.run()
+```
+
+- TLS requires a build with OpenSSL (`socket.tls_available() == true`).
+- `ssl=true` requires both `ssl_cert` and `ssl_key`.
+- Certificate/key aliases are also accepted: `cert` or `cert_path`, and `key` or `key_path`.
 
 ## Notes
 
@@ -159,7 +195,7 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 ```
 
 - Prototype language server is in the separate extension repo at
-  `/Users/levy/Projects/zed-extension-pua/lsp/pua_lsp.py` and supports:
+  `/Users/levy/Projects/zed-extension-toi/lsp/toi_lsp.py` and supports:
   - completion (keywords + workspace symbols)
   - goto definition (cross-file in workspace)
   - document symbols
@@ -171,10 +207,10 @@ mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
 ```json
 {
   "lsp": {
-    "pua-lsp": {
+    "toi-lsp": {
       "binary": {
         "path": "/usr/bin/env",
-        "arguments": ["python3", "/Users/levy/Projects/zed-extension-pua/lsp/pua_lsp.py"]
+        "arguments": ["python3", "/Users/levy/Projects/zed-extension-toi/lsp/toi_lsp.py"]
       }
     }
   }
@@ -192,9 +228,9 @@ Sample benchmark results collected in this repository on:
 Commands used:
 
 ```bash
-./pua tests/21_template_perf.pua
-./pua tests/26_json_perf.pua
-N=100000 ./pua tests/peft/btree_perf.pua
+./toi tests/21_template_perf.toi
+./toi tests/26_json_perf.toi
+N=100000 ./toi tests/peft/btree_perf.toi
 ```
 
 Observed output:

@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 btree = import btree
 ```
 
@@ -21,4 +21,4 @@ btree = import btree
 
 Keys and values support string/number usage shown in tests.
 
-See `tests/39_btree.pua` for end-to-end usage and persistence behavior.
+See `tests/39_btree.toi` for end-to-end usage and persistence behavior.

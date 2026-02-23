@@ -996,6 +996,26 @@ static void dot(int can_assign) {
     }
 }
 
+static void meta_dot(int can_assign) {
+    last_expr_ends_with_call = 0;
+    int base_top = type_stack_top - 1;
+    consume_property_name_after_dot();
+    uint8_t name = identifier_constant(&parser.previous);
+
+    if (can_assign && (match(TOKEN_EQUALS) || match(TOKEN_WALRUS))) {
+        error("Can't assign through metatable method access.");
+        expression();
+        type_stack_top = base_top;
+        type_push(TYPEHINT_ANY);
+        return;
+    }
+
+    emit_bytes(OP_CONSTANT, name);
+    emit_byte(OP_GET_META_TABLE);
+    type_stack_top = base_top;
+    type_push(TYPEHINT_ANY);
+}
+
 static void subscript(int can_assign) {
     last_expr_ends_with_call = 0;
     int base_top = type_stack_top - 1;
@@ -1063,7 +1083,7 @@ static int is_table_comprehension_start(int start_line);
 static void table_comprehension(int can_assign);
 static void compile_expression_from_string(const char* src_start, size_t src_len);
 static int find_comprehension_for(const char** for_start);
-static const char* find_comprehension_assign(Lexer base, const char* expr_start, const char* expr_end);
+static const char* find_comprehension_assign(const char* expr_start, const char* expr_end);
 static int is_implicit_table_separator(void);
 
 static int is_table_entry_start(TokenType type) {
@@ -1294,6 +1314,19 @@ static void range_(int can_assign) {
 }
 
 static void compile_expression_from_string(const char* src_start, size_t src_len) {
+    while (src_len > 0 && (*src_start == ' ' || *src_start == '\t' || *src_start == '\r' || *src_start == '\n')) {
+        src_start++;
+        src_len--;
+    }
+    while (src_len > 0) {
+        char c = src_start[src_len - 1];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            src_len--;
+            continue;
+        }
+        break;
+    }
+
     char* expr_src = (char*)malloc(src_len + 1);
     memcpy(expr_src, src_start, src_len);
     expr_src[src_len] = '\0';
@@ -1344,29 +1377,70 @@ static int find_comprehension_for(const char** for_start) {
     }
 }
 
-static const char* find_comprehension_assign(Lexer base, const char* expr_start, const char* expr_end) {
-    Lexer peek = base;
+static const char* find_comprehension_assign(const char* expr_start, const char* expr_end) {
     int paren = 0, bracket = 0, brace = 0;
-    for (;;) {
-        Token tok = scan_token(&peek);
-        if (tok.start < expr_start) continue;
-        if (tok.start >= expr_end) return NULL;
-        switch (tok.type) {
-            case TOKEN_LEFT_PAREN: paren++; break;
-            case TOKEN_RIGHT_PAREN: if (paren > 0) paren--; break;
-            case TOKEN_LEFT_BRACKET: bracket++; break;
-            case TOKEN_RIGHT_BRACKET: if (bracket > 0) bracket--; break;
-            case TOKEN_LEFT_BRACE: brace++; break;
-            case TOKEN_RIGHT_BRACE: if (brace > 0) brace--; break;
-            case TOKEN_EQUALS:
-                if (paren == 0 && bracket == 0 && brace == 0) {
-                    return tok.start;
-                }
-                break;
-            default:
-                break;
+    int in_single = 0;
+    int in_double = 0;
+    int escaped = 0;
+
+    for (const char* p = expr_start; p < expr_end; p++) {
+        char c = *p;
+        if (escaped) {
+            escaped = 0;
+            continue;
+        }
+        if ((in_single || in_double) && c == '\\') {
+            escaped = 1;
+            continue;
+        }
+        if (in_single) {
+            if (c == '\'') in_single = 0;
+            continue;
+        }
+        if (in_double) {
+            if (c == '"') in_double = 0;
+            continue;
+        }
+
+        if (c == '\'') {
+            in_single = 1;
+            continue;
+        }
+        if (c == '"') {
+            in_double = 1;
+            continue;
+        }
+
+        if (c == '(') {
+            paren++;
+            continue;
+        }
+        if (c == ')' && paren > 0) {
+            paren--;
+            continue;
+        }
+        if (c == '[') {
+            bracket++;
+            continue;
+        }
+        if (c == ']' && bracket > 0) {
+            bracket--;
+            continue;
+        }
+        if (c == '{') {
+            brace++;
+            continue;
+        }
+        if (c == '}' && brace > 0) {
+            brace--;
+            continue;
+        }
+
+        if (c == '=' && paren == 0 && bracket == 0 && brace == 0) {
+            return p;
         }
     }
+    return NULL;
 }
 
 static int has_slice_range_in_subscript(void) {
@@ -1489,7 +1563,6 @@ static void table_comprehension(int can_assign) {
     (void)can_assign;
 
     const char* expr_start = parser.current.start;
-    Lexer expr_lexer = lexer;
     const char* for_start = NULL;
     if (!find_comprehension_for(&for_start)) {
         error("Expected table comprehension 'expr for ...'.");
@@ -1556,20 +1629,24 @@ static void table_comprehension(int can_assign) {
         expr_count++;
     } while (match(TOKEN_COMMA) && expr_count < 3);
 
+    if (expr_count == 1) {
+        Token iterable_token = {TOKEN_IDENTIFIER, "(iterable)", 10, parser.previous.line};
+        add_local(iterable_token);
+        mark_initialized();
+        int iterable_slot = current->local_count - 1;
+        emit_bytes(OP_GET_LOCAL, (uint8_t)iterable_slot);
+    }
+
     if (expr_count > 1) {
         while (expr_count < 3) {
             emit_byte(OP_NIL);
             expr_count++;
         }
     } else {
-        if (!last_expr_ends_with_call) {
-            if (has_index_sigil) {
-                emit_byte(OP_ITER_PREP_IPAIRS);
-            } else {
-                emit_byte(OP_ITER_PREP);
-            }
-        } else if (has_index_sigil) {
-            error("Index loop syntax 'i#' only works with implicit table iteration.");
+        if (has_index_sigil) {
+            emit_byte(OP_ITER_PREP_IPAIRS);
+        } else {
+            emit_byte(OP_ITER_PREP);
         }
     }
 
@@ -1633,7 +1710,7 @@ static void table_comprehension(int can_assign) {
     }
 
     const char* expr_end = for_start;
-    const char* assign = find_comprehension_assign(expr_lexer, expr_start, expr_end);
+    const char* assign = find_comprehension_assign(expr_start, expr_end);
     if (assign != NULL) {
         emit_bytes(OP_GET_LOCAL, (uint8_t)list_slot);
         compile_expression_from_string(expr_start, (size_t)(assign - expr_start));
@@ -1713,6 +1790,7 @@ ParseRule rules[] = {
     [TOKEN_HASH]          = {unary,    NULL,   PREC_NONE},
     [TOKEN_QUESTION]      = {NULL,     ternary, PREC_TERNARY},
     [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_COLON_COLON]   = {NULL,     meta_dot, PREC_CALL},
     [TOKEN_WALRUS]        = {NULL,     NULL,   PREC_NONE},
     [TOKEN_PLUS_EQUAL]    = {NULL,     NULL,   PREC_NONE},
     [TOKEN_MINUS_EQUAL]   = {NULL,     NULL,   PREC_NONE},

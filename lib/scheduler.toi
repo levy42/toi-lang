@@ -1,0 +1,39 @@
+time = import time
+coroutine = import coroutine
+
+Scheduler = {}
+Scheduler.tasks = {}
+Scheduler.waiting = {}
+
+Scheduler.add = fn(f)
+  co = coroutine.create(f)
+  Scheduler.tasks <+ co
+
+Scheduler.run = fn()
+  while #Scheduler.tasks > 0 or #Scheduler.waiting > 0
+    now = time.clock()
+
+    still_waiting = {}
+    for item in Scheduler.waiting
+      if item[2] <= now
+        Scheduler.tasks <+ item[1]
+      else
+        still_waiting <+ item
+
+    Scheduler.waiting = still_waiting
+
+    next_tasks = {}
+    for co in Scheduler.tasks
+      if coroutine.status(co) != "dead"
+        local status, cmd, arg = coroutine.resume(co)
+
+        if coroutine.status(co) != "dead"
+          if cmd == "sleep"
+            wake = now + arg
+            Scheduler.waiting <+ {co, wake}
+          else
+            next_tasks <+ co
+
+    Scheduler.tasks = next_tasks
+
+return Scheduler

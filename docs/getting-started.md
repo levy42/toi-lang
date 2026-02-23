@@ -18,7 +18,7 @@ make wasm-release
 Default `make wasm` uses `zig cc` (recommended).
 If `zig` is unavailable, the Makefile falls back to `clang-20`/`clang` when distro `wasi-libc`
 headers and libs are present (e.g. `/usr/include/wasm32-wasi`, `/usr/lib/wasm32-wasi`).
-Use `make wasm-release` for a smaller production-oriented `pua.wasm`.
+Use `make wasm-release` for a smaller production-oriented `toi.wasm`.
 
 If you prefer `clang` + explicit WASI sysroot, pass both:
 
@@ -40,32 +40,32 @@ Open directly:
 open web/playground.html
 ```
 
-In the page, pick your local `pua.wasm` (built by `make wasm`) and run code from the textarea.
+In the page, pick your local `toi.wasm` (built by `make wasm`) and run code from the textarea.
 
 ## Run
 
 ```bash
-./pua
-./pua path/to/script.pua
+./toi
+./toi path/to/script.toi
 ```
 
 ## Format Source
 
 ```bash
-./pua fmt file.pua
-./pua fmt -w file.pua
-./pua fmt --check file.pua
+./toi fmt file.toi
+./toi fmt -w file.toi
+./toi fmt --check file.toi
 ```
 
 ## Hello World
 
-```pua
-print "hello, pua"
+```toi
+print "hello, toi"
 ```
 
 ## Quick Example
 
-```pua
+```toi
 math = import math
 
 fn hyp(a, b)
@@ -76,7 +76,7 @@ print hyp(3, 4)
 
 ## Testing Convention
 
-Project tests are executable `.pua` programs in `tests/`.
+Project tests are executable `.toi` programs in `tests/`.
 
 ```bash
 make test

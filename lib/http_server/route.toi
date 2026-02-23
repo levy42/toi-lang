@@ -1,0 +1,122 @@
+string = import string
+inspect = import inspect
+http = import http
+
+Route = {}
+
+fn split_path_segments(path)
+  if path == nil or path == ""
+    return {}
+
+  parts = string.split(path, "/")
+  out = {}
+  for seg in parts
+    if seg and seg != ""
+      out <+ seg
+  return out
+
+fn parse_param_segment(seg)
+  if seg == nil
+    return nil
+  n = string.len(seg)
+  if n >= 3 and seg[1] == "<" and seg[n] == ">"
+    name = string.sub(seg, 2, -2)
+    if name != ""
+      return name
+  return nil
+
+fn coerce_param(raw, type_name)
+  t = type_name
+  if t == nil
+    t = "any"
+  t = string.lower(str(t))
+
+  match t
+    case "any"
+      return raw
+    case "str"
+      return raw
+    case "string"
+      return raw
+    case "int"
+      return int(raw)
+    case "float"
+      return float(raw)
+    case "bool"
+      s = string.lower(str(raw))
+      if s == "true" or s == "1"
+        return true
+      if s == "false" or s == "0"
+        return false
+      error("expected bool, got '" + str(raw) + "'")
+    else
+      return raw
+
+fn build_handler_args(route, path_params)
+  sig = route.signature
+  args = {}
+  if sig.arity > 0
+    for i in 1..sig.arity
+      p = sig.params[i]
+      val = path_params[p.name]
+      if val != nil
+        args <+ coerce_param(val, p.type)
+      elif not p.has_default
+        error("missing route parameter '" + p.name + "'")
+  return args
+
+Route.compile = fn(method, path, handler)
+  sig = inspect.signature(handler)
+  return {
+    method = string.upper(method),
+    path = path,
+    segments = split_path_segments(path),
+    signature = sig,
+    handler = handler
+  }
+
+Route.match = fn(route, req_path)
+  req_segments = split_path_segments(req_path)
+  if #route.segments != #req_segments
+    return false, nil
+
+  params = {}
+  if #route.segments > 0
+    for i in 1..#route.segments
+      rseg = route.segments[i]
+      pseg = req_segments[i]
+      pname = parse_param_segment(rseg)
+      if pname
+        params[pname] = pseg
+      elif rseg != pseg
+        return false, nil
+
+  return true, params
+
+Route.dispatch = fn(app, req)
+  method = string.upper(req.method or "GET")
+  path = req.path or "/"
+
+  saw_path = false
+  for route in app.routes
+    local ok, params = Route.match(route, path)
+    if ok
+      saw_path = true
+      if route.method == method
+        args = nil
+        try
+          args = build_handler_args(route, params)
+        except e
+          return http.response(400, nil, "Bad Request: " + str(e))
+
+        try
+          res = route.handler(*args)
+          return app.normalize_response(res)
+        except e
+          return http.response(500, nil, "Internal Server Error")
+
+  if saw_path
+    return http.response(405, nil, "Method Not Allowed")
+  return http.response(404, nil, "Not Found")
+
+return Route

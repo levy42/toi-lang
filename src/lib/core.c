@@ -400,12 +400,57 @@ int core_tostring(VM* vm, int arg_count, Value* args) {
     RETURN_OBJ(str);
 }
 
+static void raise_error_table_cstr(VM* vm, const char* type_name, const char* code, const char* msg) {
+    ObjTable* ex = new_table();
+    table_set(&ex->table, copy_string("type", 4),
+              OBJ_VAL(copy_string(type_name, (int)strlen(type_name))));
+    if (code != NULL) {
+        table_set(&ex->table, copy_string("code", 4),
+                  OBJ_VAL(copy_string(code, (int)strlen(code))));
+    }
+    table_set(&ex->table, copy_string("msg", 3),
+              OBJ_VAL(copy_string(msg, (int)strlen(msg))));
+
+    vm_current_thread(vm)->has_exception = 1;
+    vm_current_thread(vm)->exception = OBJ_VAL(ex);
+    vm_current_thread(vm)->last_error = vm_current_thread(vm)->exception;
+}
+
+static void raise_error_table_value(VM* vm, const char* type_name, Value code_val, Value msg_val) {
+    ObjTable* ex = new_table();
+    table_set(&ex->table, copy_string("type", 4),
+              OBJ_VAL(copy_string(type_name, (int)strlen(type_name))));
+    if (!IS_NIL(code_val)) {
+        table_set(&ex->table, copy_string("code", 4), code_val);
+    }
+    table_set(&ex->table, copy_string("msg", 3), msg_val);
+
+    vm_current_thread(vm)->has_exception = 1;
+    vm_current_thread(vm)->exception = OBJ_VAL(ex);
+    vm_current_thread(vm)->last_error = vm_current_thread(vm)->exception;
+}
+
 
 static int global_error(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
-    ASSERT_STRING(0);
+    Value message = args[0];
+    if (arg_count == 1 && IS_TABLE(message)) {
+        vm_current_thread(vm)->has_exception = 1;
+        vm_current_thread(vm)->exception = message;
+        vm_current_thread(vm)->last_error = vm_current_thread(vm)->exception;
+        return 0;
+    }
 
-    vm_runtime_error(vm, "%s", GET_CSTRING(0));
+    Value code_val = NIL_VAL;
+    const char* type_name = "RuntimeError";
+    if (arg_count >= 2) {
+        code_val = args[1];
+    }
+    if (arg_count >= 3) {
+        ASSERT_STRING(2);
+        type_name = AS_CSTRING(args[2]);
+    }
+    raise_error_table_value(vm, type_name, code_val, message);
     return 0; // Signal failure to vm_run
 }
 
@@ -535,18 +580,18 @@ static int int_native(VM* vm, int arg_count, Value* args) {
         char* end = NULL;
         long num = strtol(str, &end, 10);
         if (end == str) {
-            vm_runtime_error(vm, "int() expects a valid base-10 string.");
+            raise_error_table_cstr(vm, "ValueError", "E_INT_PARSE", "int() expects a valid base-10 string.");
             return 0;
         }
         while (*end != '\0' && isspace((unsigned char)*end)) end++;
         if (*end != '\0') {
-            vm_runtime_error(vm, "int() expects a valid base-10 string.");
+            raise_error_table_cstr(vm, "ValueError", "E_INT_PARSE", "int() expects a valid base-10 string.");
             return 0;
         }
         RETURN_NUMBER((double)num);
     }
 
-    vm_runtime_error(vm, "int() expects number, string, or bool.");
+    raise_error_table_cstr(vm, "TypeError", "E_INT_TYPE", "int() expects number, string, or bool.");
     return 0;
 }
 
@@ -565,18 +610,18 @@ static int float_native(VM* vm, int arg_count, Value* args) {
         char* end = NULL;
         double num = strtod(str, &end);
         if (end == str) {
-            vm_runtime_error(vm, "float() expects a valid number string.");
+            raise_error_table_cstr(vm, "ValueError", "E_FLOAT_PARSE", "float() expects a valid number string.");
             return 0;
         }
         while (*end != '\0' && isspace((unsigned char)*end)) end++;
         if (*end != '\0') {
-            vm_runtime_error(vm, "float() expects a valid number string.");
+            raise_error_table_cstr(vm, "ValueError", "E_FLOAT_PARSE", "float() expects a valid number string.");
             return 0;
         }
         RETURN_NUMBER(num);
     }
 
-    vm_runtime_error(vm, "float() expects number, string, or bool.");
+    raise_error_table_cstr(vm, "TypeError", "E_FLOAT_TYPE", "float() expects number, string, or bool.");
     return 0;
 }
 
@@ -711,6 +756,7 @@ static int divmod_native(VM* vm, int arg_count, Value* args) {
 }
 
 static int range_iter(VM* vm, int arg_count, Value* args) {
+    (void)arg_count;
     Value state = args[0];
     double current = AS_NUMBER(args[1]);
     

@@ -1,0 +1,30 @@
+from lib.test import assert_true
+
+cli = import cli
+pigment = import cli.pigment
+string = import string
+
+toi_out = pigment.highlight("if a == 1 -- ok\nprint(\"[x]\")", "toi")
+assert_true(toi_out has "<span color=\"blue\">if</span>")
+assert_true(toi_out has "<span color=\"magenta\">==</span>")
+assert_true(toi_out has "<span color=\"yellow\">1</span>")
+assert_true(toi_out has "<span color=\"green\">&quot;[x]&quot;</span>")
+
+js_out = pigment.highlight("const x = 1; // hi", "js")
+assert_true(js_out has "<span color=\"blue\">const</span>")
+assert_true(js_out has "<span color=\"gray\">// hi</span>")
+
+css_out = pigment.highlight("/* hi */ .a { color: \"#fff\"; }", "css")
+assert_true(css_out has "<span color=\"gray\">/* hi */</span>")
+assert_true(css_out has "<span color=\"cyan\">color</span>")
+assert_true(css_out has "<span color=\"green\">&quot;#fff&quot;</span>")
+
+html_out = pigment.highlight("<div class=\"x\">ok</div><!--c-->", "html")
+assert_true(html_out has "<span color=\"magenta\">&lt;</span><span color=\"blue\">div</span>")
+assert_true(html_out has "<span color=\"cyan\">class</span>")
+assert_true(html_out has "<span color=\"gray\">&lt;!--c--&gt;</span>")
+
+fallback_out = pigment.highlight("fn run()", "unknown")
+assert_true(fallback_out has "<span color=\"blue\">fn</span>")
+
+print "cli pigment ok"

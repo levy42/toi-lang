@@ -1,9 +1,0 @@
-from lib.test import assert_eq
-
-os = import os
-
-assert_eq(os.getenv("PUA__MISSING_ENV_TEST"), nil)
-assert_eq(os.getenv("PUA__MISSING_ENV_TEST", "fallback"), "fallback")
-assert_eq(os.getenv("PUA__MISSING_ENV_TEST", 42), 42)
-
-print "os.getenv fallback ok"

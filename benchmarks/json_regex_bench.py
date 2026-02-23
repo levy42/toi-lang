@@ -6,7 +6,7 @@ PAYLOAD = {
     "name": "Ada",
     "active": True,
     "score": 98.5,
-    "tags": ["pua", "json", "perf"],
+    "tags": ["toi", "json", "perf"],
     "nested": {"retries": 3, "timeout_ms": 250, "ok": True},
     "users": [
         {"id": 1, "role": "admin"},

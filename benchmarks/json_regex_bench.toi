@@ -1,0 +1,70 @@
+json = import json
+regex = import regex
+time = import time
+string = import string
+
+payload = {
+  name = "Ada",
+  active = true,
+  score = 98.5,
+  tags = {"toi", "json", "perf"},
+  nested = {
+    retries = 3,
+    timeout_ms = 250,
+    ok = true
+  },
+  users = {
+    {id = 1, role = "admin"},
+    {id = 2, role = "staff"},
+    {id = 3, role = "member"}
+  }
+}
+
+encode_iters = 20000
+decode_iters = 20000
+regex_iters = 120000
+text = "order-123 shipped
+order-456 pending
+order-789 shipped"
+pattern = "order-([0-9]+)[[:space:]]+(shipped|pending)"
+
+fn bench(name, func)
+  start = time.clock()
+  result = func()
+  elapsed = time.clock() - start
+  print string.format("%s: %fs", name, elapsed)
+  return result
+
+fn bench_json_encode()
+  encoded = ""
+  for i in 1..encode_iters
+    encoded = json.encode(payload)
+  return encoded
+
+fn bench_json_decode(encoded)
+  decoded = nil
+  for i in 1..decode_iters
+    decoded = json.decode(encoded)
+  return decoded
+
+fn bench_regex_search()
+  total = 0
+  for i in 1..regex_iters
+    m = regex.search(pattern, text)
+    total = total + #m.groups[1]
+  return total
+
+fn bench_regex_replace()
+  out = ""
+  for i in 1..regex_iters
+    out = regex.replace(pattern, text, "replaced")
+  return #out
+
+print "Toi json/regex benchmark"
+print string.format("iterations: encode=%d decode=%d regex=%d", encode_iters, decode_iters, regex_iters)
+encoded = bench("json encode", bench_json_encode)
+decoded = bench("json decode", fn() return bench_json_decode(encoded))
+regex_total = bench("regex search", bench_regex_search)
+replace_len = bench("regex replace", bench_regex_replace)
+print string.format("payload bytes: %d", #encoded)
+print string.format("results: decoded_name=%s decoded_users=%d regex_total=%d replace_len=%d", decoded.name, #decoded.users, regex_total, replace_len)

@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 json = import json
 ```
 
@@ -13,5 +13,5 @@ json = import json
 
 ## Notes
 
-- Encodes Pua tables as JSON arrays or objects depending on shape.
+- Encodes Toi tables as JSON arrays or objects depending on shape.
 - Decoder raises runtime errors for invalid JSON.

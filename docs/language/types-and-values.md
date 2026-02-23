@@ -33,3 +33,8 @@ Common metamethod keys used in the runtime include:
 - `__call`
 - `__append`
 - `__next`
+
+Metatable-only member access is available with `::`:
+
+- `obj::method(args...)` looks up `method` directly on `getmetatable(obj)`, not through `__index`.
+- If the looked-up value is callable, `obj` is passed automatically as the first argument.

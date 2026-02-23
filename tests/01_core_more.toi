@@ -1,0 +1,70 @@
+from lib.test import assert_eq
+
+string = import string
+
+-- functions: default params, varargs, multiple returns, closures
+fn add(a, b = 10)
+  return a + b
+assert_eq(add(5), 15)
+
+fn sum(*vals)
+  total = 0
+  i = 1
+  while vals[i] != nil
+    total = total + vals[i]
+    i = i + 1
+  return total
+assert_eq(sum(1, 2, 3, 4), 10)
+
+fn pair()
+  return 7, 9
+local p, q = pair()
+assert_eq(p, 7)
+assert_eq(q, 9)
+
+fn makeCounter()
+  c = 0
+  return fn()
+    c = c + 1
+    return c
+counter = makeCounter()
+assert_eq(counter(), 1)
+assert_eq(counter(), 2)
+
+-- ternary
+t1 = true ? 1 : 2
+t2 = false ? 1 : 2
+assert_eq(t1, 1)
+assert_eq(t2, 2)
+
+-- table comprehension (array-style)
+tcomp = {x * x for x in {1, 2, 3}}
+assert_eq(tcomp[1], 1)
+assert_eq(tcomp[3], 9)
+
+-- table comprehension (second array-style case)
+mcomp = {x * 10 for x in {1, 2, 3}}
+assert_eq(mcomp[1], 10)
+assert_eq(mcomp[3], 30)
+
+-- strings: multiline and f-string
+m = [[hello
+world]]
+assert_eq(m, "hello\nworld")
+name = "Toi"
+f = f"hi {name} {1 + 2}"
+assert_eq(f, "hi Toi 3")
+i = 7
+assert_eq(f"x{i % 10}", "x7")
+assert_eq("hello"[1], "h")
+assert_eq("hello"[5], "o")
+assert_eq("hello"[-1], "o")
+assert_eq("hello"[-2], "l")
+
+-- metatable + __str
+mt = {__str = fn(self) return "T"}
+obj = {}
+setmetatable(obj, mt)
+assert_eq(str(obj), "T")
+
+print "core ok"

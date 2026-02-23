@@ -15,6 +15,62 @@
 #include "../value.h"
 #include "../vm.h"
 
+static int mkdir_one(const char* path, char** err_out) {
+    if (mkdir(path, 0755) == 0) {
+        return 1;
+    }
+    if (errno != EEXIST) {
+        *err_out = strerror(errno);
+        return 0;
+    }
+
+    struct stat st;
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        return 1;
+    }
+
+    *err_out = strerror(errno);
+    return 0;
+}
+
+static int mkdir_all(const char* path, char** err_out) {
+    if (path == NULL || path[0] == '\0') {
+        *err_out = "invalid path";
+        return 0;
+    }
+
+    size_t len = strlen(path);
+    char* buf = (char*)malloc(len + 1);
+    if (buf == NULL) {
+        *err_out = "out of memory";
+        return 0;
+    }
+    memcpy(buf, path, len + 1);
+
+    while (len > 1 && buf[len - 1] == '/') {
+        buf[len - 1] = '\0';
+        len--;
+    }
+
+    for (char* p = buf + 1; *p != '\0'; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        if (buf[0] != '\0' && !mkdir_one(buf, err_out)) {
+            free(buf);
+            return 0;
+        }
+        *p = '/';
+    }
+
+    if (!mkdir_one(buf, err_out)) {
+        free(buf);
+        return 0;
+    }
+
+    free(buf);
+    return 1;
+}
+
 // os.exit(code)
 static int os_exit(VM* vm, int arg_count, Value* args) {
     int code = 0;
@@ -99,19 +155,35 @@ static int os_clock(VM* vm, int arg_count, Value* args) {
     RETURN_NUMBER((double)clock() / CLOCKS_PER_SEC);
 }
 
-// os.mkdir(path) -> true or nil, error
+// os.mkdir(path, all?) -> true or nil, error
 static int os_mkdir(VM* vm, int arg_count, Value* args) {
-    ASSERT_ARGC_EQ(1);
+    ASSERT_ARGC_GE(1);
+    if (arg_count > 2) {
+        vm_runtime_error(vm, "Expected at most 2 arguments but got %d.", arg_count);
+        return 0;
+    }
     ASSERT_STRING(0);
 
     const char* path = GET_CSTRING(0);
-    if (mkdir(path, 0755) == 0) {
-        RETURN_TRUE;
-    } else {
-        push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
-        return 2;
+    int all = 0;
+    if (arg_count == 2) {
+        if (!IS_BOOL(args[1])) {
+            vm_runtime_error(vm, "Argument 2 must be a bool.");
+            return 0;
+        }
+        all = AS_BOOL(args[1]) ? 1 : 0;
     }
+
+    char* err = NULL;
+    int ok = all ? mkdir_all(path, &err) : mkdir_one(path, &err);
+    if (ok) {
+        RETURN_TRUE;
+    }
+
+    push(vm, NIL_VAL);
+    if (err == NULL) err = "mkdir failed";
+    push(vm, OBJ_VAL(copy_string(err, (int)strlen(err))));
+    return 2;
 }
 
 // os.rmdir(path) -> true or nil, error

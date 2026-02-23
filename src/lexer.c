@@ -188,6 +188,39 @@ static Token multiline_string(Lexer* lexer) {
     return error_token(lexer, "Unterminated multiline string.");
 }
 
+static Token fstring_quoted(Lexer* lexer, char quote) {
+    // lexer->start points at 'f', opening quote already consumed.
+    while (peek(lexer) != quote && !is_at_end(lexer)) {
+        if (peek(lexer) == '\n') lexer->line++;
+        if (peek(lexer) == '\\' && peek_next(lexer) != '\0') {
+            advance(lexer); // skip backslash
+        }
+        advance(lexer);
+    }
+    if (is_at_end(lexer)) return error_token(lexer, "Unterminated f-string.");
+    advance(lexer); // consume closing quote
+    return make_token(lexer, TOKEN_FSTRING);
+}
+
+static Token fstring_multiline(Lexer* lexer) {
+    // lexer->start points at 'f', current points at first '['.
+    // consume [[ and then read until ]]
+    advance(lexer); // consume first [
+    advance(lexer); // consume second [
+
+    while (!is_at_end(lexer)) {
+        if (peek(lexer) == ']' && peek_next(lexer) == ']') {
+            advance(lexer); // first ]
+            advance(lexer); // second ]
+            return make_token(lexer, TOKEN_FSTRING);
+        }
+        if (peek(lexer) == '\n') lexer->line++;
+        advance(lexer);
+    }
+
+    return error_token(lexer, "Unterminated multiline f-string.");
+}
+
 Token scan_token(Lexer* lexer) {
     if (lexer->pending_dedents > 0) {
         lexer->pending_dedents--;
@@ -272,19 +305,15 @@ Token scan_token(Lexer* lexer) {
     }
 
     char c = advance(lexer);
-    // Check for f-string: f"..." or f'...'
-    if (c == 'f' && (peek(lexer) == '"' || peek(lexer) == '\'')) {
-        char quote = advance(lexer); // consume opening quote
-        while (peek(lexer) != quote && !is_at_end(lexer)) {
-            if (peek(lexer) == '\n') lexer->line++;
-            if (peek(lexer) == '\\' && peek_next(lexer) != '\0') {
-                advance(lexer); // skip backslash
-            }
-            advance(lexer);
+    // Check for f-string: f"...", f'...', or f[[...]]
+    if (c == 'f') {
+        if (peek(lexer) == '"' || peek(lexer) == '\'') {
+            char quote = advance(lexer); // consume opening quote
+            return fstring_quoted(lexer, quote);
         }
-        if (is_at_end(lexer)) return error_token(lexer, "Unterminated f-string.");
-        advance(lexer); // consume closing quote
-        return make_token(lexer, TOKEN_FSTRING);
+        if (peek(lexer) == '[' && peek_next(lexer) == '[') {
+            return fstring_multiline(lexer);
+        }
     }
     if (isalpha(c) || c == '_') return identifier(lexer);
     if (isdigit(c)) return number(lexer);
@@ -330,6 +359,7 @@ Token scan_token(Lexer* lexer) {
         case '#': return make_token(lexer, TOKEN_HASH);
         case '?': return make_token(lexer, TOKEN_QUESTION);
         case ':':
+            if (peek(lexer) == ':') { advance(lexer); return make_token(lexer, TOKEN_COLON_COLON); }
             if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_WALRUS); }
             return make_token(lexer, TOKEN_COLON);
         case '@': return make_token(lexer, TOKEN_AT);

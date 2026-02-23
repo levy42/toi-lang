@@ -2,21 +2,21 @@
 
 ## Declaration
 
-```pua
+```toi
 fn add(a, b)
   return a + b
 ```
 
 ## Default Parameters
 
-```pua
+```toi
 fn add(a, b = 10)
   return a + b
 ```
 
 ## Variadic Parameters
 
-```pua
+```toi
 fn sum(*vals)
   ...
 ```
@@ -25,7 +25,7 @@ fn sum(*vals)
 
 Type hints are supported in parameter lists:
 
-```pua
+```toi
 fn f(user_id: int, name: str)
   ...
 ```
@@ -34,7 +34,7 @@ Type hints are metadata (inspectable), not a full static type system.
 
 ## Anonymous Functions
 
-```pua
+```toi
 fn(x)
   return x * 2
 ```
@@ -43,7 +43,7 @@ fn(x)
 
 Decorator syntax is supported for function declarations:
 
-```pua
+```toi
 @decorator
 fn f()
   ...
@@ -59,7 +59,7 @@ Expression assignment uses `:=` (walrus), for example: `x := expr`.
 
 ## Multiple Return Values
 
-```pua
+```toi
 fn pair()
   return 1, 2
 ```

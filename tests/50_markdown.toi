@@ -1,0 +1,80 @@
+from lib.test import assert_eq, assert_true
+
+markdown = import markdown
+
+html1 = markdown.to_html("Hello, *world* and **Toi** with `x < y`.")
+assert_eq(html1, "<p>Hello, <em>world</em> and <strong>Toi</strong> with <code>x &lt; y</code>.</p>")
+
+md2 = [[Paragraph with <tag> & symbols.
+
+```toi
+print("x < y")
+```
+]]
+
+html2 = markdown.to_html(md2)
+expected2 = [[<p>Paragraph with &lt;tag&gt; &amp; symbols.</p>
+<pre><code class="language-toi">print(&quot;x &lt; y&quot;)</code></pre>]]
+assert_eq(html2, expected2)
+
+md3 = [[```
+a < b && c > d
+]]
+html3 = markdown.to_html(md3)
+assert_true(html3 has "<pre><code>a &lt; b &amp;&amp; c &gt; d</code></pre>")
+
+md4 = [[# Title
+## Intro
+
+- one
+- two with [link](https://example.com)
+
+1. first
+2. second
+]]
+html4 = markdown.to_html(md4)
+assert_true(html4 has "<h1 id=\"title\">Title</h1>")
+assert_true(html4 has "<h2 id=\"intro\">Intro</h2>")
+assert_true(html4 has "<ul>")
+assert_true(html4 has "<ol>")
+
+md5 = [[See [Getting Started](docs/getting-started.md) and [Section](docs/README.md#start-here).
+
+> Quote line one
+> Quote line two
+
+---
+]]
+html5 = markdown.to_html(md5)
+assert_true(html5 has "<a href=\"docs/getting-started.html\">Getting Started</a>")
+assert_true(html5 has "<a href=\"docs/README.html#start-here\">Section</a>")
+assert_true(html5 has "<blockquote>")
+assert_true(html5 has "<p>Quote line one Quote line two</p>")
+assert_true(html5 has "<hr />")
+
+md6 = [[- parent
+  - child
+  - child2
+- sibling
+]]
+html6 = markdown.to_html(md6)
+assert_true(html6 has "<ul>")
+assert_true(html6 has "<li>parent")
+assert_true(html6 has "<li>child")
+assert_true(html6 has "<li>child2")
+assert_true(html6 has "<li>sibling")
+
+md7 = [[| Name | Value |
+| --- | --- |
+| A | 1 |
+| B | [Doc](docs/README.md) |
+]]
+html7 = markdown.to_html(md7)
+assert_true(html7 has "<table>")
+assert_true(html7 has "<th>Name</th>")
+assert_true(html7 has "<th>Value</th>")
+assert_true(html7 has "<td>A</td>")
+assert_true(html7 has "<td>1</td>")
+assert_true(html7 has "<a href=\"docs/README.html\">Doc</a>")
+
+print "markdown ok"

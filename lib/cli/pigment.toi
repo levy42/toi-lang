@@ -1,0 +1,189 @@
+regex = import regex
+string = import string
+table = import table
+
+COLORS = {
+  keyword = "blue",
+  operator = "magenta",
+  builtin = "cyan",
+  string = "green",
+  num = "yellow",
+  comment = "gray"
+}
+
+fn _set(words)
+  return {token = true for token in string.split(words, " ") if token != ""}
+
+CFG = {
+  toi = {
+    keywords = _set("if elif else for in while fn return break continue import from as try except raise match case with yield assert and or not has"),
+    builtins = _set("print str type len range input int float bool list dict table min max"),
+    literals = _set("true false nil"),
+    re_comment = regex.compile("--[^\n]*"),
+    re_string = regex.compile("\"([^\"\\\\]|\\\\.)*\"|'([^'\\\\]|\\\\.)*'"),
+    re_number = regex.compile("[0-9]+([._][0-9]+)*"),
+    re_ident = regex.compile("[A-Za-z_][A-Za-z0-9_]*"),
+    re_op = regex.compile("==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|:=|//|\\*\\*|\\.\\.|<\\+|->|[=+*/%<>!.,:;?(){}\\[\\]-]")
+  },
+  js = {
+    keywords = _set("if else for while return function class new let const var try catch throw import export await async in of"),
+    builtins = _set("console Math JSON Date Array Object String Number Promise Map Set RegExp"),
+    literals = _set("true false null undefined"),
+    re_comment = regex.compile("//[^\n]*"),
+    re_string = regex.compile("\"([^\"\\\\]|\\\\.)*\"|'([^'\\\\]|\\\\.)*'|`([^`\\\\]|\\\\.)*`"),
+    re_number = regex.compile("[0-9]+([._][0-9]+)*"),
+    re_ident = regex.compile("[$A-Za-z_][$A-Za-z0-9_]*"),
+    re_op = regex.compile("===|!==|==|!=|<=|>=|=>|&&|\\|\\||\\+\\+|--|\\+=|-=|\\*=|/=|%=|[=+*/%<>!.,:;?(){}\\[\\]-]")
+  },
+  css = {
+    keywords = _set("@media @keyframes @supports @import from to important"),
+    builtins = _set("color background display position width height margin padding border font-size font-family opacity"),
+    literals = _set("auto none inherit initial unset"),
+    re_comment = regex.compile("/\\*([^*]|\\*[^/])*\\*/"),
+    re_string = regex.compile("\"([^\"\\\\]|\\\\.)*\"|'([^'\\\\]|\\\\.)*'"),
+    re_number = regex.compile("[0-9]+([._][0-9]+)*"),
+    re_ident = regex.compile("[@A-Za-z_-][@A-Za-z0-9_-]*"),
+    re_op = regex.compile("::|:=|[;,.#{}()\\[\\]<>+~*=|/:]")
+  }
+}
+
+RE_HTML_COMMENT = regex.compile("<!--([^-]|-[^-]|--[^>])*-->")
+RE_HTML_STRING = regex.compile("\"([^\"\\\\]|\\\\.)*\"|'([^'\\\\]|\\\\.)*'")
+RE_HTML_OP = regex.compile("/>|>|=")
+RE_HTML_TAG = regex.compile("</?[A-Za-z_][A-Za-z0-9_-]*")
+RE_HTML_ATTR = regex.compile("[A-Za-z_][A-Za-z0-9_-]*[ \t\r\n]*=")
+
+fn _emit_raw(out, raw)
+  out <+ string.escape_html(raw)
+
+fn _emit_span(out, color, raw)
+  out <+ f"<span color=\"{color}\">{string.escape_html(raw)}</span>"
+
+fn _push_token(out, s, e, t, kind, color, pri)
+  out <+ {
+    s = s,
+    e = e,
+    t = t,
+    kind = kind,
+    color = color,
+    pri = pri
+  }
+
+fn _token(out, match_obj, kind, color, pri)
+  _push_token(out, match_obj.start, match_obj.end, match_obj.match, kind, color, pri)
+
+fn _collect(out, re, text, kind, color, pri)
+  for m in re.finditer(text)
+    _token(out, m, kind, color, pri)
+
+fn _collect_html_tokens(out, text)
+  _collect(out, RE_HTML_COMMENT, text, "comment", COLORS.comment, 1)
+  _collect(out, RE_HTML_STRING, text, "string", COLORS.string, 2)
+
+  for m in RE_HTML_TAG.finditer(text)
+    raw = m.match
+    prefix_len = 1
+    if #raw >= 2 and raw[2] == "/"
+      prefix_len = 2
+    _push_token(out, m.start, m.start + prefix_len - 1, string.sub(text, m.start, m.start + prefix_len - 1), "op", COLORS.operator, 3)
+    _push_token(out, m.start + prefix_len, m.end, string.sub(text, m.start + prefix_len, m.end), "tag", COLORS.keyword, 4)
+
+  for m in RE_HTML_ATTR.finditer(text)
+    raw = m.match
+    key_len = 0
+    while key_len < #raw
+      c = raw[key_len + 1]
+      if c == "_" or c == "-" or c.is_alnum()
+        key_len = key_len + 1
+      else
+        break
+    if key_len > 0
+      _push_token(out, m.start, m.start + key_len - 1, string.sub(text, m.start, m.start + key_len - 1), "attr", COLORS.builtin, 5)
+
+  _collect(out, RE_HTML_OP, text, "op", COLORS.operator, 6)
+
+fn _sort_tokens(tokens)
+  table.sort(tokens, fn(a, b)
+    if a.s != b.s
+      return a.s < b.s
+    al = a.e - a.s + 1
+    bl = b.e - b.s + 1
+    if al != bl
+      return al > bl
+    return a.pri < b.pri
+  )
+
+fn _render(text, accepted)
+  out = {}
+  pos = 1
+  for tok in accepted
+    if pos < tok.s
+      _emit_raw(out, string.sub(text, pos, tok.s - 1))
+    _emit_span(out, tok.color, tok.t)
+    pos = tok.e + 1
+  if pos <= #text
+    _emit_raw(out, string.sub(text, pos))
+  return table.concat(out, "")
+
+fn _paint_code(text, kind)
+  cfg = CFG[kind]
+  if cfg == nil
+    cfg = CFG.toi
+
+  candidates = {}
+  _collect(candidates, cfg.re_comment, text, "comment", COLORS.comment, 1)
+  _collect(candidates, cfg.re_string, text, "string", COLORS.string, 2)
+  _collect(candidates, cfg.re_number, text, "number", COLORS.num, 3)
+  _collect(candidates, cfg.re_ident, text, "ident", nil, 4)
+  _collect(candidates, cfg.re_op, text, "op", COLORS.operator, 5)
+  _sort_tokens(candidates)
+
+  accepted = {}
+  last_end = 0
+  for tok in candidates
+    if tok.s > last_end
+      color = tok.color
+      if tok.kind == "ident"
+        if cfg.keywords[tok.t] == true or cfg.literals[tok.t] == true
+          color = COLORS.keyword
+        elif cfg.builtins[tok.t] == true
+          color = COLORS.builtin
+      if color != nil
+        accepted <+ {s = tok.s, e = tok.e, t = tok.t, color = color}
+      last_end = tok.e
+
+  return _render(text, accepted)
+
+fn _highlight_html(text)
+  candidates = {}
+  _collect_html_tokens(candidates, text)
+  _sort_tokens(candidates)
+
+  accepted = {}
+  last_end = 0
+  for tok in candidates
+    if tok.s > last_end
+      accepted <+ {s = tok.s, e = tok.e, t = tok.t, color = tok.color}
+      last_end = tok.e
+
+  return _render(text, accepted)
+
+fn highlight(code, lang = "toi")
+  if code == nil
+    return ""
+  if type(code) != "string"
+    code = str(code)
+
+  kind = string.lower(lang)
+  if kind == "javascript"
+    kind = "js"
+  elif kind == "htm"
+    kind = "html"
+
+  if kind == "html"
+    return _highlight_html(code)
+  if kind == "toi" or kind == "js" or kind == "css"
+    return _paint_code(code, kind)
+  return _paint_code(code, "toi")
+
+return { highlight = highlight }

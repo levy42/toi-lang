@@ -24,7 +24,7 @@ File-backed B-tree key/value store.
 - `db.close()` -> `true`
 
 ### Example
-```pua
+```toi
 btree = import btree
 os = import os
 
@@ -32,9 +32,9 @@ os.remove("tests/tmp_btree.db")
 
 db = btree.open("tests/tmp_btree.db")
 
-db.put("name", "pua")
+db.put("name", "toi")
 db.put(1, 100)
-print(db.get("name"))  -- pua
+print(db.get("name"))  -- toi
 print(db.get(1))       -- 100
 
 ok = db.delete("name")
@@ -65,7 +65,7 @@ Note: `io.open(path, mode)` now throws runtime error on failure (no `nil, err` r
 - `buf.close()`
 
 ### Example
-```pua
+```toi
 io = import io
 
 b = io.buffer("line1\nline2")

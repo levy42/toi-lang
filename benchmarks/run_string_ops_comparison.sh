@@ -12,8 +12,8 @@ elif command -v python >/dev/null 2>&1; then
   PYA="python"
 fi
 
-if [ ! -x "$ROOT_DIR/pua" ]; then
-  echo "pua binary not found. Run 'make' first." >&2
+if [ ! -x "$ROOT_DIR/toi" ]; then
+  echo "toi binary not found. Run 'make' first." >&2
   exit 1
 fi
 
@@ -22,8 +22,8 @@ if [ -z "$PYA" ]; then
   exit 1
 fi
 
-printf "\nPua\n\n"
-"$ROOT_DIR/pua" "$ROOT_DIR/benchmarks/string_ops_compare.pua"
+printf "\nToi\n\n"
+"$ROOT_DIR/toi" "$ROOT_DIR/benchmarks/string_ops_compare.toi"
 
 printf "\nPython (%s)\n\n" "$PYA"
 "$PYA" "$ROOT_DIR/benchmarks/string_ops_compare.py"

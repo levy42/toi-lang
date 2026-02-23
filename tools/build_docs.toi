@@ -1,0 +1,176 @@
+io = import io
+os = import os
+string = import string
+table = import table
+path = import path
+
+markdown = import markdown
+
+SRC_ROOT = "docs"
+OUT_ROOT = "site"
+PAGE_CSS_LINES = {
+  "body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f7fb;color:#1d2433;}",
+  ".wrap{display:grid;grid-template-columns:280px 1fr;min-height:100vh;}",
+  ".side{padding:20px;border-right:1px solid #d9dce6;background:#fff;position:sticky;top:0;height:100vh;overflow:auto;}",
+  ".side h1{font-size:16px;margin:0 0 12px 0;}",
+  ".nav{list-style:none;margin:0;padding:0;}",
+  ".nav li{margin:0;}",
+  ".nav a{display:block;padding:7px 8px;border-radius:6px;color:#2b3550;text-decoration:none;font-size:14px;}",
+  ".nav li.active a,.nav a:hover{background:#eef2ff;color:#1a3cff;}",
+  ".main{max-width:980px;padding:28px 36px 56px 36px;}",
+  "h1,h2,h3,h4,h5,h6{line-height:1.25;color:#0f172a;}",
+  "p,li{line-height:1.6;color:#1f2937;}",
+  "code{background:#eef1f7;padding:2px 5px;border-radius:5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;}",
+  "pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:auto;}",
+  "pre code{background:transparent;color:inherit;padding:0;}",
+  "a{color:#1d4ed8;}",
+  "blockquote{margin:12px 0;padding:6px 14px;border-left:4px solid #9aa7c7;background:#edf2ff;border-radius:4px;}",
+  "table{border-collapse:collapse;margin:16px 0;width:100%;}",
+  "th,td{border:1px solid #d2d8e5;padding:8px 10px;text-align:left;}",
+  "th{background:#eef2ff;}",
+  "hr{border:none;border-top:1px solid #d6dbe8;margin:24px 0;}",
+  "@media (max-width:900px){.wrap{grid-template-columns:1fr}.side{position:static;height:auto;border-right:none;border-bottom:1px solid #d9dce6}}"
+}
+PAGE_CSS = table.concat(PAGE_CSS_LINES, "")
+
+fn die(msg)
+  error(f"build_docs: {msg}")
+
+fn relative_link(from_dir, to_path)
+  from_parts = path.split(from_dir)
+  up = ""
+  for _ in from_parts
+    up = f"{up}../"
+  return f"{up}{to_path}"
+
+fn read_file(file_path)
+  f = io.open(file_path, "r")
+  data = f.read()
+  f.close()
+  return data or ""
+
+fn write_file(file_path, content)
+  parent = path.dirname(file_path)
+  if parent != ""
+    local ok, err = os.mkdir(parent, true)
+    if ok != true
+      die(f"mkdir failed for '{parent}': {err}")
+  f = io.open(file_path, "w")
+  f.write(content)
+  f.close()
+
+fn html_escape(s)
+  text = str(s)
+  text = text.split("&")
+  out = table.concat(text, "&amp;")
+  out = table.concat(out.split("<"), "&lt;")
+  out = table.concat(out.split(">"), "&gt;")
+  out = table.concat(out.split('"'), "&quot;")
+  return out
+
+fn extract_title(md, fallback)
+  lines = md.split("\n")
+  for line in lines
+    t = (line or "").trim()
+    if t.starts_with("# ")
+      return t.sub(3).trim()
+  return fallback
+
+fn walk_markdown(root, rel, out)
+  dir_path = root
+  if rel != ""
+    dir_path = path.join(root, rel)
+
+  local names, err = os.listdir(dir_path)
+  if names == nil
+    die(f"listdir failed for '{dir_path}': {err}")
+
+  table.sort(names)
+  for name in names
+    child_rel = rel == "" ? name : (rel + "/" + name)
+    full = path.join(root, child_rel)
+    if os.isdir(full)
+      walk_markdown(root, child_rel, out)
+    elif name.ends_with(".md")
+      out <+ child_rel
+
+fn nav_html(pages, current_html)
+  cur_dir = path.dirname(current_html)
+  items = {}
+  for p in pages
+    href = relative_link(cur_dir, p.rel_html)
+    cls = p.rel_html == current_html ? " class=\"active\"" : ""
+    safe_href = html_escape(href)
+    safe_title = html_escape(p.title)
+    row = f"<li{cls}><a href=\"{safe_href}\">{safe_title}</a></li>"
+    items <+ row
+  nav_items = table.concat(items, "")
+  return f"<ul class=\"nav\">{nav_items}</ul>"
+
+fn page_shell(title, nav, body)
+  safe_title = html_escape(title)
+  parts = {
+    "<!doctype html>\n",
+    "<html><head><meta charset=\"utf-8\">",
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+    f"<title>{safe_title}</title>",
+    f"<style>{PAGE_CSS}</style></head><body><div class=\"wrap\">",
+    f"<aside class=\"side\"><h1>Toi Docs</h1>{nav}</aside>",
+    f"<main class=\"main\">{body}</main>",
+    "</div></body></html>"
+  }
+  return table.concat(parts, "")
+
+fn page_from_md(rel_md)
+  src_path = path.join(SRC_ROOT, rel_md)
+  md = read_file(src_path)
+  rel_html = rel_md.ends_with(".md") ? f"{rel_md.sub(1, #rel_md - 3)}.html" : f"{rel_md}.html"
+  base = path.basename(rel_md)
+  fallback = base.ends_with(".md") ? base.sub(1, #base - 3) : base
+  return {
+    rel_md = rel_md,
+    rel_html = rel_html,
+    title = extract_title(md, fallback),
+    body = markdown.to_html(md)
+  }
+
+fn collect_pages(md_paths)
+  pages = {}
+  for rel_md in md_paths
+    pages <+ page_from_md(rel_md)
+  table.sort(pages, fn(a, b) return a.rel_html < b.rel_html)
+  return pages
+
+fn build()
+  if not os.isdir(SRC_ROOT)
+    die("missing docs directory")
+
+  if os.exists(OUT_ROOT)
+    os.system(f"rm -rf {OUT_ROOT}")
+  local ok, err = os.mkdir(OUT_ROOT, true)
+  if ok != true
+    die(f"mkdir failed for '{OUT_ROOT}': {err}")
+
+  md_paths = {}
+  walk_markdown(SRC_ROOT, "", md_paths)
+  pages = collect_pages(md_paths)
+
+  index_html = nil
+  for p in pages
+    nav = nav_html(pages, p.rel_html)
+    full = page_shell(p.title, nav, p.body)
+    out_path = path.join(OUT_ROOT, p.rel_html)
+    write_file(out_path, full)
+    if p.rel_html == "README.html"
+      index_html = full
+
+  if index_html == nil and #pages > 0
+    first = pages[1]
+    nav = nav_html(pages, first.rel_html)
+    index_html = page_shell(first.title, nav, first.body)
+  if index_html != nil
+    write_file(path.join(OUT_ROOT, "index.html"), index_html)
+
+  print(f"docs built: {#pages} pages -> {OUT_ROOT}")
+
+build()

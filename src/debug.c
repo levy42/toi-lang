@@ -141,6 +141,8 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return simple_instruction("OP_CLOSE_UPVALUE", offset);
         case OP_GET_TABLE:
             return simple_instruction("OP_GET_TABLE", offset);
+        case OP_GET_META_TABLE:
+            return simple_instruction("OP_GET_META_TABLE", offset);
         case OP_SET_TABLE:
             return simple_instruction("OP_SET_TABLE", offset);
         case OP_DELETE_TABLE:

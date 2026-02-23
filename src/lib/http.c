@@ -29,6 +29,160 @@ static const char* get_status_reason(int status) {
     }
 }
 
+static const char* find_crlf(const char* start, const char* end) {
+    const char* p = start;
+    while (p + 1 < end) {
+        if (p[0] == '\r' && p[1] == '\n') {
+            return p;
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static int parse_content_length(const char* s, int len, int* out) {
+    int i = 0;
+    int value = 0;
+
+    while (i < len && isspace((unsigned char)s[i])) i++;
+    if (i >= len) return 0;
+
+    while (i < len && s[i] >= '0' && s[i] <= '9') {
+        int digit = s[i] - '0';
+        if (value > 214748364 || (value == 214748364 && digit > 7)) {
+            return 0;
+        }
+        value = value * 10 + digit;
+        i++;
+    }
+
+    while (i < len && isspace((unsigned char)s[i])) i++;
+    if (i != len) return 0;
+
+    *out = value;
+    return 1;
+}
+
+static int has_csv_token_ci(const char* s, int len, const char* token) {
+    int token_len = (int)strlen(token);
+    int i = 0;
+
+    while (i < len) {
+        while (i < len && (s[i] == ',' || isspace((unsigned char)s[i]))) i++;
+        if (i >= len) break;
+
+        int start = i;
+        while (i < len && s[i] != ',' && s[i] != ';') i++;
+        int end = i;
+        while (end > start && isspace((unsigned char)s[end - 1])) end--;
+
+        if ((end - start) == token_len) {
+            int ok = 1;
+            for (int j = 0; j < token_len; j++) {
+                char a = (char)tolower((unsigned char)s[start + j]);
+                char b = (char)tolower((unsigned char)token[j]);
+                if (a != b) {
+                    ok = 0;
+                    break;
+                }
+            }
+            if (ok) return 1;
+        }
+
+        while (i < len && s[i] != ',') i++;
+    }
+
+    return 0;
+}
+
+// Returns: 1 success, 0 incomplete input, -1 invalid chunked framing.
+static int decode_chunked_body(const char* body_start, const char* end,
+                               char** out_body, int* out_len, int* out_consumed) {
+    const char* cursor = body_start;
+    int cap = (int)(end - body_start);
+    if (cap < 0) cap = 0;
+    char* decoded = (char*)malloc((size_t)cap + 1);
+    if (decoded == NULL) return -1;
+    int decoded_len = 0;
+
+    while (1) {
+        const char* line_end = find_crlf(cursor, end);
+        if (line_end == NULL) {
+            free(decoded);
+            return 0;
+        }
+
+        const char* size_end = line_end;
+        const char* semi = cursor;
+        while (semi < line_end && *semi != ';') semi++;
+        if (semi < line_end) size_end = semi;
+
+        while (cursor < size_end && isspace((unsigned char)*cursor)) cursor++;
+        while (size_end > cursor && isspace((unsigned char)size_end[-1])) size_end--;
+        if (size_end == cursor) {
+            free(decoded);
+            return -1;
+        }
+
+        int chunk_size = 0;
+        const char* p = cursor;
+        while (p < size_end) {
+            char c = *p;
+            int digit = -1;
+            if (c >= '0' && c <= '9') digit = c - '0';
+            else if (c >= 'a' && c <= 'f') digit = 10 + (c - 'a');
+            else if (c >= 'A' && c <= 'F') digit = 10 + (c - 'A');
+            else {
+                free(decoded);
+                return -1;
+            }
+
+            if (chunk_size > 0x0FFFFFFF) {
+                free(decoded);
+                return -1;
+            }
+            chunk_size = (chunk_size << 4) | digit;
+            p++;
+        }
+
+        cursor = line_end + 2;
+
+        if (chunk_size == 0) {
+            while (1) {
+                const char* trailer_end = find_crlf(cursor, end);
+                if (trailer_end == NULL) {
+                    free(decoded);
+                    return 0;
+                }
+                if (trailer_end == cursor) {
+                    cursor += 2;
+                    decoded[decoded_len] = '\0';
+                    *out_body = decoded;
+                    *out_len = decoded_len;
+                    *out_consumed = (int)(cursor - body_start);
+                    return 1;
+                }
+                cursor = trailer_end + 2;
+            }
+        }
+
+        if ((int)(end - cursor) < chunk_size + 2) {
+            free(decoded);
+            return 0;
+        }
+
+        memcpy(decoded + decoded_len, cursor, (size_t)chunk_size);
+        decoded_len += chunk_size;
+        cursor += chunk_size;
+
+        if (cursor[0] != '\r' || cursor[1] != '\n') {
+            free(decoded);
+            return -1;
+        }
+        cursor += 2;
+    }
+}
+
 // Parse HTTP request: http.parse(data) -> {method, path, version, headers, body}
 static int http_parse(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
@@ -38,8 +192,10 @@ static int http_parse(VM* vm, int arg_count, Value* args) {
     const char* src = data->chars;
     int len = data->length;
 
+    const char* src_end = src + len;
+
     // Find end of request line
-    const char* line_end = strstr(src, "\r\n");
+    const char* line_end = find_crlf(src, src_end);
     if (!line_end) {
         RETURN_NIL;
     }
@@ -50,7 +206,7 @@ static int http_parse(VM* vm, int arg_count, Value* args) {
     // Method
     const char* method_start = p;
     while (p < line_end && *p != ' ') p++;
-    if (p >= line_end) { RETURN_NIL; }
+    if (p >= line_end) { RETURN_FALSE; }
     int method_len = p - method_start;
     p++; // skip space
 
@@ -69,7 +225,7 @@ static int http_parse(VM* vm, int arg_count, Value* args) {
         query_len = p - query_start;
     }
 
-    if (p >= line_end) { RETURN_NIL; }
+    if (p >= line_end) { RETURN_FALSE; }
     p++; // skip space
 
     // Version
@@ -117,11 +273,17 @@ static int http_parse(VM* vm, int arg_count, Value* args) {
     // Parse headers
     ObjTable* headers = new_table();
     push(vm, OBJ_VAL(headers));
+    int content_length = -1;
+    int transfer_chunked = 0;
 
     p = line_end + 2; // Skip \r\n
-    while (p < src + len) {
-        line_end = strstr(p, "\r\n");
-        if (!line_end) break;
+    while (p < src_end) {
+        line_end = find_crlf(p, src_end);
+        if (!line_end) {
+            pop(vm); // headers table
+            pop(vm); // result table
+            RETURN_NIL;
+        }
 
         // Empty line = end of headers
         if (line_end == p) {
@@ -149,6 +311,20 @@ static int http_parse(VM* vm, int arg_count, Value* args) {
         while (val_start < line_end && isspace((unsigned char)*val_start)) val_start++;
         int val_len = line_end - val_start;
 
+        if (name_len == 14 && memcmp(name_buf, "content-length", 14) == 0) {
+            int parsed_len = 0;
+            if (!parse_content_length(val_start, val_len, &parsed_len)) {
+                pop(vm); // headers table
+                pop(vm); // result table
+                RETURN_FALSE;
+            }
+            content_length = parsed_len;
+        } else if (name_len == 17 && memcmp(name_buf, "transfer-encoding", 17) == 0) {
+            if (has_csv_token_ci(val_start, val_len, "chunked")) {
+                transfer_chunked = 1;
+            }
+        }
+
         ObjString* hdr_key = copy_string(name_buf, name_len);
         push(vm, OBJ_VAL(hdr_key));
         ObjString* hdr_val = copy_string(val_start, val_len);
@@ -165,16 +341,54 @@ static int http_parse(VM* vm, int arg_count, Value* args) {
     pop(vm);
     pop(vm); // headers table
 
-    // Body is everything after headers
-    int body_len = (src + len) - p;
+    int body_offset = (int)(p - src);
+    int body_len = 0;
+    const char* body_ptr = p;
+    char* chunked_body = NULL;
+    int chunked_consumed = 0;
+    int consumed = body_offset;
+
+    if (transfer_chunked) {
+        int chunk_status = decode_chunked_body(p, src_end, &chunked_body, &body_len, &chunked_consumed);
+        if (chunk_status == 0) {
+            pop(vm); // result table
+            RETURN_NIL;
+        } else if (chunk_status < 0) {
+            pop(vm); // result table
+            RETURN_FALSE;
+        }
+        body_ptr = chunked_body;
+        consumed = body_offset + chunked_consumed;
+    } else if (content_length >= 0) {
+        int available = (int)(src_end - p);
+        if (available < content_length) {
+            pop(vm); // result table
+            RETURN_NIL;
+        }
+        body_len = content_length;
+        consumed = body_offset + content_length;
+    } else {
+        body_len = 0;
+        consumed = body_offset;
+    }
+
     if (body_len > 0) {
         ObjString* body_key = copy_string("body", 4);
         push(vm, OBJ_VAL(body_key));
-        ObjString* body_val = copy_string(p, body_len);
+        ObjString* body_val = copy_string(body_ptr, body_len);
         push(vm, OBJ_VAL(body_val));
         table_set(&result->table, body_key, OBJ_VAL(body_val));
         pop(vm); pop(vm);
     }
+
+    if (chunked_body != NULL) {
+        free(chunked_body);
+    }
+
+    ObjString* consumed_key = copy_string("consumed", 8);
+    push(vm, OBJ_VAL(consumed_key));
+    table_set(&result->table, consumed_key, NUMBER_VAL((double)consumed));
+    pop(vm);
 
     // Result table is already on stack
     return 1;

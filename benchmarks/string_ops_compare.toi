@@ -1,0 +1,38 @@
+time = import time
+string = import string
+
+fn bench(name, func)
+  start = time.clock()
+  result = func()
+  elapsed = time.clock() - start
+  print string.format("%s %f sec (checksum=%d)", name, elapsed, result)
+  return elapsed
+
+ITER = 200000
+S = "The Quick Brown Fox Jumps Over The Lazy Dog 12345"
+
+fn bench_upper()
+  sum = 0
+  for i in 1..ITER
+    x = S.upper()
+    sum = sum + #x
+  return sum
+
+fn bench_lower()
+  sum = 0
+  for i in 1..ITER
+    x = S.lower()
+    sum = sum + #x
+  return sum
+
+fn bench_substring_range()
+  sum = 0
+  for i in 1..ITER
+    x = S[5..19]
+    sum = sum + #x
+  return sum
+
+print string.format("Toi string ops benchmark (iter=%d)", ITER)
+bench("upper", bench_upper)
+bench("lower", bench_lower)
+bench("substring range", bench_substring_range)

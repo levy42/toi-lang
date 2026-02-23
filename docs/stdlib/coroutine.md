@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 coroutine = import coroutine
 ```
 

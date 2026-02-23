@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 socket = import socket
 ```
 
@@ -11,6 +11,7 @@ socket = import socket
 - `socket.tcp() -> sock`
 - `socket.udp() -> sock`
 - `socket.select(read_list, write_list, [timeout]) -> ready_read, ready_write`
+- `socket.tls_available() -> bool`
 
 ## Socket Methods
 
@@ -21,6 +22,8 @@ socket = import socket
 - `sock.send(data) -> bytes_sent|nil, err?`
 - `sock.recv([size]) -> data|nil, err?`
 - `sock.settimeout(nil|seconds)`
+- `sock.tls([servername], [verify=false]) -> true|nil, err?` (client handshake)
+- `sock.tls_server(cert_path, key_path) -> true|nil, err?` (server handshake)
 - `sock.close()`
 - `sock.getpeername() -> ip, port`
 - `sock.getsockname() -> ip, port`
@@ -30,3 +33,9 @@ socket = import socket
 
 - `read_list` and `write_list` are tables (typically arrays) of socket userdata.
 - Returns two tables: ready-to-read sockets, ready-to-write sockets.
+
+## TLS Notes
+
+- TLS support is optional and enabled when Toi is built with OpenSSL available via `pkg-config`.
+- `socket.tls_available()` returns whether TLS is compiled in.
+- Once TLS is enabled on a socket, `sock.send`/`sock.recv` use TLS records transparently.

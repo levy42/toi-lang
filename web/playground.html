@@ -3,7 +3,7 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Pua WASM Playground</title>
+        <title>Toi WASM Playground</title>
         <link
             rel="icon"
             type="image/svg+xml"
@@ -199,7 +199,7 @@
                         stroke-linejoin="round"
                     />
                 </svg>
-                Pua Playground
+                Toi Playground
             </h1>
             <section>
                 <button id="runBtn">
@@ -227,8 +227,65 @@
                     aria-hidden="true"
                 ></pre>
                 <textarea id="source" class="editor-input" spellcheck="false">
-print "Hello from Pua WASM"
-print 1 + 2
+-- Toi playground syntax tour
+print "hello from toi.wasm"
+
+name = "Toi"
+version = 1
+print f"{name} v{version}"
+
+fn fib(n)
+  if n <= 1
+    return n
+  a = 0
+  b = 1
+  i = 2
+  while i <= n
+    next = a + b
+    a = b
+    b = next
+    i = i + 1
+  return b
+
+value = fib(10)
+print f"fib(10) = {value}"
+
+arr = {1, 2, 3, 4}
+squares = {x * x for x in arr}
+print f"squares: {squares[1]}, {squares[2]}, {squares[3]}, {squares[4]}"
+
+obj = {
+  lang = "toi"
+  greet = fn(self, who = "world")
+    return f"hello {who} from {self.lang}"
+}
+print obj.greet("playground")
+
+i = 0
+sum = 0
+while ((i := i + 1) <= 5)
+  sum = sum + i
+print f"sum 1..5 = {sum}"
+
+kind = value > 30 ? "big" : "small"
+match kind
+  case "big"
+    print "match: big"
+  else
+    print "match: small"
+
+fn safe_div(a, b)
+  if b == 0
+    throw {kind = "ZeroDivision", msg = "cannot divide by zero"}
+  return a / b
+
+try
+  print f"6 / 2 = {safe_div(6, 2)}"
+  print f"6 / 0 = {safe_div(6, 0)}"
+except e if type(e) == "table" and e.kind == "ZeroDivision"
+  print f"caught: {e.msg}"
+finally
+  print "done"
 </textarea
                 >
             </div>
@@ -366,7 +423,7 @@ print 1 + 2
             }
 
             async function loadWasmModule() {
-                const wasmPath = "../pua.wasm";
+                const wasmPath = "../toi.wasm";
                 const response = await fetch(wasmPath);
                 if (!response.ok) {
                     throw new Error(
@@ -395,14 +452,14 @@ print 1 + 2
                         appendOutput(msg + "\n"),
                     );
 
-                    const args = ["pua.wasm", "/main.pua"];
+                    const args = ["toi.wasm", "/main.toi"];
                     const env = [];
                     const fds = [
                         new OpenFile(new File([])),
                         stdout,
                         stderr,
                         new PreopenDirectory("/", [
-                            ["main.pua", new File(sourceBytes)],
+                            ["main.toi", new File(sourceBytes)],
                         ]),
                     ];
                     const wasi = new WASI(args, env, fds);

@@ -333,6 +333,228 @@ static int string_trim(VM* vm, int arg_count, Value* args) {
     RETURN_OBJ(take_string(buf, new_len));
 }
 
+static int string_ltrim(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* str = GET_STRING(0);
+    const char* s = str->chars;
+    int len = str->length;
+
+    int start = 0;
+    while (start < len && (s[start] == ' ' || s[start] == '\t' ||
+           s[start] == '\n' || s[start] == '\r')) {
+        start++;
+    }
+
+    if (start == 0) {
+        RETURN_OBJ(str);
+    }
+    if (start >= len) {
+        RETURN_STRING("", 0);
+    }
+
+    int new_len = len - start;
+    char* buf = (char*)malloc((size_t)new_len + 1);
+    if (buf == NULL) {
+        vm_runtime_error(vm, "string.ltrim(): out of memory.");
+        return 0;
+    }
+    memcpy(buf, s + start, (size_t)new_len);
+    buf[new_len] = '\0';
+    RETURN_OBJ(take_string(buf, new_len));
+}
+
+static int string_rtrim(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* str = GET_STRING(0);
+    const char* s = str->chars;
+    int len = str->length;
+
+    int end = len;
+    while (end > 0 && (s[end - 1] == ' ' || s[end - 1] == '\t' ||
+           s[end - 1] == '\n' || s[end - 1] == '\r')) {
+        end--;
+    }
+
+    if (end == len) {
+        RETURN_OBJ(str);
+    }
+    if (end <= 0) {
+        RETURN_STRING("", 0);
+    }
+
+    char* buf = (char*)malloc((size_t)end + 1);
+    if (buf == NULL) {
+        vm_runtime_error(vm, "string.rtrim(): out of memory.");
+        return 0;
+    }
+    memcpy(buf, s, (size_t)end);
+    buf[end] = '\0';
+    RETURN_OBJ(take_string(buf, end));
+}
+
+static int string_is_digit(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* str = GET_STRING(0);
+    if (str->length <= 0) {
+        RETURN_FALSE;
+    }
+
+    for (int i = 0; i < str->length; i++) {
+        unsigned char c = (unsigned char)str->chars[i];
+        if (isdigit((int)c) == 0) {
+            RETURN_FALSE;
+        }
+    }
+    RETURN_TRUE;
+}
+
+static int string_is_alpha(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* str = GET_STRING(0);
+    if (str->length <= 0) {
+        RETURN_FALSE;
+    }
+
+    for (int i = 0; i < str->length; i++) {
+        unsigned char c = (unsigned char)str->chars[i];
+        if (isalpha((int)c) == 0) {
+            RETURN_FALSE;
+        }
+    }
+    RETURN_TRUE;
+}
+
+static int string_is_alnum(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* str = GET_STRING(0);
+    if (str->length != 1) {
+        RETURN_FALSE;
+    }
+
+    unsigned char c = (unsigned char)str->chars[0];
+    RETURN_BOOL(isalnum((int)c) != 0);
+}
+
+static int string_is_space(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* str = GET_STRING(0);
+    if (str->length != 1) {
+        RETURN_FALSE;
+    }
+
+    unsigned char c = (unsigned char)str->chars[0];
+    RETURN_BOOL(isspace((int)c) != 0);
+}
+
+static int string_escape_html(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+
+    ObjString* str = GET_STRING(0);
+    const char* s = str->chars;
+    int len = str->length;
+
+    int out_len = 0;
+    for (int i = 0; i < len; i++) {
+        switch (s[i]) {
+            case '&': out_len += 5; break;   // &amp;
+            case '<': out_len += 4; break;   // &lt;
+            case '>': out_len += 4; break;   // &gt;
+            case '"': out_len += 6; break;   // &quot;
+            case '\'': out_len += 5; break;  // &#39;
+            default: out_len += 1; break;
+        }
+    }
+
+    if (out_len == len) {
+        RETURN_OBJ(str);
+    }
+
+    char* out = (char*)malloc((size_t)out_len + 1);
+    if (out == NULL) {
+        vm_runtime_error(vm, "string.escape_html(): out of memory.");
+        return 0;
+    }
+
+    int j = 0;
+    for (int i = 0; i < len; i++) {
+        switch (s[i]) {
+            case '&':
+                memcpy(out + j, "&amp;", 5);
+                j += 5;
+                break;
+            case '<':
+                memcpy(out + j, "&lt;", 4);
+                j += 4;
+                break;
+            case '>':
+                memcpy(out + j, "&gt;", 4);
+                j += 4;
+                break;
+            case '"':
+                memcpy(out + j, "&quot;", 6);
+                j += 6;
+                break;
+            case '\'':
+                memcpy(out + j, "&#39;", 5);
+                j += 5;
+                break;
+            default:
+                out[j++] = s[i];
+                break;
+        }
+    }
+    out[j] = '\0';
+
+    RETURN_OBJ(take_string(out, out_len));
+}
+
+static int string_starts_with(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(2);
+    ASSERT_STRING(0);
+    ASSERT_STRING(1);
+
+    ObjString* str = GET_STRING(0);
+    ObjString* prefix = GET_STRING(1);
+
+    if (prefix->length > str->length) {
+        RETURN_FALSE;
+    }
+
+    RETURN_BOOL(memcmp(str->chars, prefix->chars, (size_t)prefix->length) == 0);
+}
+
+static int string_ends_with(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(2);
+    ASSERT_STRING(0);
+    ASSERT_STRING(1);
+
+    ObjString* str = GET_STRING(0);
+    ObjString* suffix = GET_STRING(1);
+
+    if (suffix->length > str->length) {
+        RETURN_FALSE;
+    }
+    if (suffix->length == 0) {
+        RETURN_TRUE;
+    }
+
+    const char* start = str->chars + (str->length - suffix->length);
+    RETURN_BOOL(memcmp(start, suffix->chars, (size_t)suffix->length) == 0);
+}
+
 static int string_split(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_STRING(0);
@@ -752,11 +974,20 @@ void register_string(VM* vm) {
         {"sub", string_sub},
         {"lower", string_lower},
         {"upper", string_upper},
+        {"starts_with", string_starts_with},
+        {"ends_with", string_ends_with},
         {"mutable", string_mutable},
         {"char", string_char},
         {"byte", string_byte},
         {"find", string_find},
         {"trim", string_trim},
+        {"ltrim", string_ltrim},
+        {"rtrim", string_rtrim},
+        {"is_digit", string_is_digit},
+        {"is_alpha", string_is_alpha},
+        {"is_alnum", string_is_alnum},
+        {"is_space", string_is_space},
+        {"escape_html", string_escape_html},
         {"split", string_split},
         {"join", string_join},
         {"rep", string_rep},

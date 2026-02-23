@@ -1,0 +1,17 @@
+from lib.test import assert_eq, assert_true
+
+template = import template
+global table = import table
+
+src = "Hello {{ name }}! {% set x = base + 1 %}{% if x > 3 %}ok{% else %}bad{% endif %} {% for v in items %}[{{ v }}]{% endfor %}"
+ctx = {
+  name = "Toi",
+  base = 3,
+  items = {"a", "b", "c"}
+}
+
+out = template.render(src, ctx)
+assert_true(out != nil)
+assert_eq(out, "Hello Toi! ok [a][b][c]")
+
+print "template implicit ctx ok"

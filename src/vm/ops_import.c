@@ -25,10 +25,10 @@ InterpretResult vm_handle_op_import(VM* vm, ObjString* module_name, CallFrame** 
     char filename[512];
     FILE* file = NULL;
     const char* candidates[4] = {
-        "%s.pua",
-        "%s/__.pua",
-        "lib/%s.pua",
-        "lib/%s/__.pua"
+        "%s.toi",
+        "%s/__.toi",
+        "lib/%s.toi",
+        "lib/%s/__.toi"
     };
 
     for (int ci = 0; ci < 4 && file == NULL; ci++) {
@@ -37,8 +37,8 @@ InterpretResult vm_handle_op_import(VM* vm, ObjString* module_name, CallFrame** 
     }
 
     if (file == NULL) {
-        printf("\033[31mCould not open module '%s'\033[0m (tried '%s.pua', '%s/__.pua', "
-               "'lib/%s.pua', and 'lib/%s/__.pua').\n",
+        printf("\033[31mCould not open module '%s'\033[0m (tried '%s.toi', '%s/__.toi', "
+               "'lib/%s.toi', and 'lib/%s/__.toi').\n",
                module_name->chars, module_path, module_path, module_path, module_path);
         return INTERPRET_RUNTIME_ERROR;
     }

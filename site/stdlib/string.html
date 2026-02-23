@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>`string` Module</title><style>body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f7fb;color:#1d2433;}.wrap{display:grid;grid-template-columns:280px 1fr;min-height:100vh;}.side{padding:20px;border-right:1px solid #d9dce6;background:#fff;position:sticky;top:0;height:100vh;overflow:auto;}.side h1{font-size:16px;margin:0 0 12px 0;}.nav{list-style:none;margin:0;padding:0;}.nav li{margin:0;}.nav a{display:block;padding:7px 8px;border-radius:6px;color:#2b3550;text-decoration:none;font-size:14px;}.nav li.active a,.nav a:hover{background:#eef2ff;color:#1a3cff;}.main{max-width:980px;padding:28px 36px 56px 36px;}h1,h2,h3,h4,h5,h6{line-height:1.25;color:#0f172a;}p,li{line-height:1.6;color:#1f2937;}code{background:#eef1f7;padding:2px 5px;border-radius:5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;}pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:auto;}pre code{background:transparent;color:inherit;padding:0;}a{color:#1d4ed8;}blockquote{margin:12px 0;padding:6px 14px;border-left:4px solid #9aa7c7;background:#edf2ff;border-radius:4px;}table{border-collapse:collapse;margin:16px 0;width:100%;}th,td{border:1px solid #d2d8e5;padding:8px 10px;text-align:left;}th{background:#eef2ff;}hr{border:none;border-top:1px solid #d6dbe8;margin:24px 0;}@media (max-width:900px){.wrap{grid-template-columns:1fr}.side{position:static;height:auto;border-right:none;border-bottom:1px solid #d9dce6}}</style></head><body><div class="wrap"><aside class="side"><h1>Toi Docs</h1><ul class="nav"><li><a href="../stdlib/uuid.html">`uuid` Module</a></li><li><a href="../getting-started.html">Getting Started</a></li><li><a href="../language/control-flow.html">Control Flow</a></li><li><a href="../language/functions.html">Functions</a></li><li><a href="../language/modules.html">Modules and Imports</a></li><li><a href="../language/syntax.html">Language Syntax</a></li><li><a href="../language/types-and-values.html">Types and Values</a></li><li><a href="../repl.html">REPL</a></li><li><a href="../stdlib/README.html">Standard Library</a></li><li><a href="../stdlib/binary.html">`binary` Module</a></li><li><a href="../stdlib/btree.html">`btree` Module</a></li><li><a href="../stdlib/core.html">Core Built-ins</a></li><li><a href="../stdlib/coroutine.html">`coroutine` Module</a></li><li><a href="../stdlib/dir.html">`dir` Module</a></li><li><a href="../stdlib/fnmatch.html">`fnmatch` Module</a></li><li><a href="../stdlib/glob.html">`glob` Module</a></li><li><a href="../stdlib/gzip.html">gzip (optional)</a></li><li><a href="../stdlib/http.html">`http` Module</a></li><li><a href="../stdlib/inspect.html">`inspect` Module</a></li><li><a href="../stdlib/io.html">`io` Module</a></li><li><a href="../stdlib/json.html">`json` Module</a></li><li><a href="../stdlib/math.html">`math` Module</a></li><li><a href="../stdlib/mmap.html">`mmap` Module</a></li><li><a href="../stdlib/os.html">`os` Module</a></li><li><a href="../stdlib/poll.html">`poll` Module</a></li><li><a href="../stdlib/regex.html">`regex` Module</a></li><li><a href="../stdlib/signal.html">`signal` Module</a></li><li><a href="../stdlib/socket.html">`socket` Module</a></li><li><a href="../stdlib/stat.html">`stat` Module</a></li><li class="active"><a href="../stdlib/string.html">`string` Module</a></li><li><a href="../stdlib/struct.html">`struct` Module</a></li><li><a href="../stdlib/table.html">`table` Module</a></li><li><a href="../stdlib/template.html">`template` Module</a></li><li><a href="../stdlib/thread.html">`thread` Module</a></li><li><a href="../stdlib/time.html">`time` Module</a></li><li><a href="../stdlib/toi-libraries.html">Toi Libraries (`lib/*.toi`)</a></li><li><a href="../README.html">Toi Documentation</a></li></ul></aside><main class="main"><h1 id="string-module"><code>string</code> Module</h1>
+<p>Import:</p>
+<pre><code class="language-toi">string = import string</code></pre>
+<p>The module is callable as <code>str(x)</code> via metatable, and is also aliased globally as <code>str</code>.</p>
+<h2 id="functions">Functions</h2>
+<ul>
+<li><code>len(s)</code>
+</li>
+<li><code>sub(s, start, [end])</code>
+</li>
+<li><code>lower(s)</code>
+</li>
+<li><code>upper(s)</code>
+</li>
+<li><code>starts_with(s, prefix)</code>
+</li>
+<li><code>ends_with(s, suffix)</code>
+</li>
+<li><code>char(...)</code>
+</li>
+<li><code>byte(s, [index])</code>
+</li>
+<li><code>find(s, pattern, [start])</code>
+</li>
+<li><code>trim(s)</code>
+</li>
+<li><code>split(s, [sep])</code>
+</li>
+<li><code>join(sep, table)</code>
+</li>
+<li><code>rep(s, n)</code>
+</li>
+<li><code>reverse(s)</code>
+</li>
+<li><code>format(fmt, ...)</code>
+</li>
+</ul>
+<h2 id="string-format"><code>string.format</code></h2>
+<p>Supports printf-like formatting with guarded specifiers, including width/precision (for example: <code>&quot;%.2f&quot;</code>, <code>&quot;%08x&quot;</code>).</p></main></div></body></html>

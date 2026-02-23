@@ -5,7 +5,7 @@
 #include <time.h>
 #include <signal.h>
 #include <math.h>
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 #include <pthread.h>
 #endif
 
@@ -200,6 +200,25 @@ static void report_exception(VM* vm) {
     Value ex = vm_current_thread(vm)->exception;
     if (IS_STRING(ex)) {
         fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "%s\n", AS_CSTRING(ex));
+    } else if (IS_TABLE(ex)) {
+        ObjTable* t = AS_TABLE(ex);
+        Value msg = NIL_VAL;
+        Value type = NIL_VAL;
+        Value code = NIL_VAL;
+        ObjString* msg_key = copy_string("msg", 3);
+        ObjString* type_key = copy_string("type", 4);
+        ObjString* code_key = copy_string("code", 4);
+        table_get(&t->table, msg_key, &msg);
+        table_get(&t->table, type_key, &type);
+        table_get(&t->table, code_key, &code);
+
+        const char* msg_s = IS_STRING(msg) ? AS_CSTRING(msg) : "<exception>";
+        const char* type_s = IS_STRING(type) ? AS_CSTRING(type) : "Error";
+        if (IS_STRING(code)) {
+            fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "%s [%s:%s]\n", msg_s, type_s, AS_CSTRING(code));
+        } else {
+            fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "%s [%s]\n", msg_s, type_s);
+        }
     } else {
         fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "<exception>\n");
     }
@@ -271,7 +290,7 @@ static int handle_exception(VM* vm, CallFrame** frame, uint8_t** ip) {
 
 static volatile sig_atomic_t interrupt_requested = 0;
 
-#ifndef PUA_WASM
+#ifndef TOI_WASM
 static pthread_key_t current_thread_key;
 static pthread_once_t current_thread_key_once = PTHREAD_ONCE_INIT;
 
@@ -1162,6 +1181,10 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
             case OP_DUP: push(vm, peek(vm, 0)); break;
             case OP_GET_TABLE: {
                 if (!vm_handle_op_get_table(vm, &frame, &ip)) goto runtime_error;
+                break;
+            }
+            case OP_GET_META_TABLE: {
+                if (!vm_handle_op_get_meta_table(vm)) goto runtime_error;
                 break;
             }
             case OP_SET_TABLE: {

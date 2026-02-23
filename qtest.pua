@@ -1,3 +1,0 @@
-if (a:=6) > 5
-  print a
-  print "a is greater than 3"

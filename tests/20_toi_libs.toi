@@ -1,0 +1,154 @@
+from lib.test import assert_eq, assert_true, expect_error
+
+-- types module
+types = import lib.types
+from lib.types import String, Integer
+assert_eq(types.String.check("hi"), "hi")
+assert_eq(String.check("hi"), "hi")
+assert_eq(Integer.check(42), 42)
+
+User = types.Record {
+  name = types.String,
+  age = types.Integer
+}
+u = User {name = "Max", age = 21}
+validated_u = u.check()
+assert_eq(validated_u.name, "Max")
+assert_eq(validated_u.age, 21)
+
+bad_u = User {name = 10, age = "x"}
+err_bad_u = expect_error(fn()
+  bad_u.check()
+)
+assert_true(err_bad_u has "$.name" or err_bad_u has "$.age")
+
+str_list = types.List(types.String)
+assert_eq(str_list.check({"a", "b", "c"})[2], "b")
+err3 = expect_error(fn()
+  str_list.check({"a", 2})
+)
+assert_true(err3 has "$")
+
+err4 = expect_error(fn()
+  str_list.check({[1] = "a", [3] = "c"})
+)
+assert_true(err4 has "$")
+err5 = expect_error(fn()
+  str_list.check({[1] = "a", x = "b"})
+)
+assert_true(err5 has "$")
+
+opt_num = types.Optional(types.Number)
+assert_true(opt_num.check(nil) == nil)
+assert_eq(opt_num.check(1.5), 1.5)
+err8 = expect_error(fn()
+  opt_num.check("1")
+)
+assert_true(err8 has "$")
+
+person_t = types.Record({
+  name = types.String,
+  age = types.Integer
+})
+assert_eq(person_t.check({name = "Ada", age = 36}).age, 36)
+err10 = expect_error(fn()
+  person_t.check({name = "Ada"})
+)
+assert_true(err10 has "$")
+
+strict_person_t = types.Record({name = types.String}, {allow_extra = false})
+err11 = expect_error(fn()
+  strict_person_t.check({name = "Ada", extra = 1})
+)
+assert_true(err11 has "$.extra")
+
+assert_eq(types.validate(types.Integer, 10), 10)
+err13 = expect_error(fn()
+  types.validate(types.Integer, 10.5)
+)
+assert_true(err13 has "$")
+
+-- Literal
+role_t = types.Literal("admin", "staff")
+assert_eq(role_t.check("admin"), "admin")
+err15 = expect_error(fn()
+  role_t.check("guest")
+)
+assert_true(err15 has "$")
+
+-- Union
+id_t = types.Union(types.String, types.Integer)
+assert_eq(id_t.check("u-1"), "u-1")
+assert_eq(id_t.check(123), 123)
+err18 = expect_error(fn()
+  id_t.check(false)
+)
+assert_true(err18 has "$")
+
+-- Constraints
+adult_t = types.Constraints(types.Integer, {min = 18, max = 120})
+assert_eq(adult_t.check(30), 30)
+err20 = expect_error(fn()
+  adult_t.check(15)
+)
+assert_true(err20 has "$")
+
+name_t = types.Constraints(types.String, {min_len = 2, max_len = 10, pattern = "a"})
+assert_eq(name_t.check("adam"), "adam")
+err22 = expect_error(fn()
+  name_t.check("x")
+)
+assert_true(err22 has "$")
+
+-- Path-aware nested errors
+profile_t = types.Record({
+  user = types.Record({
+    name = types.String,
+    age = types.Constraints(types.Integer, {min = 18})
+  })
+})
+
+err23 = expect_error(fn()
+  profile_t.check({user = {name = 42, age = 20}})
+)
+assert_true(err23 has "$.user.name")
+
+err24 = expect_error(fn()
+  profile_t.check({user = {name = "Ada", age = 15}})
+)
+assert_true(err24 has "$.user.age")
+
+-- coercion
+v25 = types.coerce(types.Integer, "42")
+assert_eq(v25, 42)
+
+err26 = expect_error(fn()
+  types.validate(types.Integer, "42")
+)
+assert_true(err26 has "$")
+
+v27 = types.coerce(types.Boolean, "true")
+assert_true(v27 == true)
+
+coerce_t = types.Record({age = types.Integer, scores = types.List(types.Number), active = types.Boolean})
+v28 = types.coerce(coerce_t, {age = "21", scores = {"1.5", "2"}, active = "1"})
+assert_eq(v28.age, 21)
+assert_eq(v28.scores[1], 1.5)
+assert_eq(v28.scores[2], 2)
+assert_true(v28.active == true)
+
+-- scheduler module
+sched = import scheduler
+done = 0
+sched.add(fn()
+  done = done + 1
+)
+sched.run()
+assert_eq(done, 1)
+
+-- http server module (import only)
+http_server = import http_server
+assert_true(type(http_server) == "table")
+assert_true(type(http_server.new) == "function")
+
+print "toi libs ok"

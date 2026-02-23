@@ -11,6 +11,11 @@
 #include <fcntl.h>
 #include <sys/time.h>
 
+#ifdef TOI_HAVE_TLS
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#endif
+
 #include "libs.h"
 #include "../object.h"
 #include "../value.h"
@@ -20,11 +25,59 @@
 typedef struct {
     int fd;
     int timeout_ms; // -1 = blocking, 0 = non-blocking, >0 = timeout in ms
+#ifdef TOI_HAVE_TLS
+    SSL_CTX* tls_ctx;
+    SSL* tls;
+#endif
 } SocketData;
+
+#ifdef TOI_HAVE_TLS
+static int tls_global_initialized = 0;
+
+static void tls_global_init(void) {
+    if (tls_global_initialized) return;
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_ssl_algorithms();
+    tls_global_initialized = 1;
+}
+
+static void socket_tls_cleanup(SocketData* sock, int do_shutdown) {
+    if (sock == NULL) return;
+    if (sock->tls != NULL) {
+        if (do_shutdown) {
+            SSL_shutdown(sock->tls);
+        }
+        SSL_free(sock->tls);
+        sock->tls = NULL;
+    }
+    if (sock->tls_ctx != NULL) {
+        SSL_CTX_free(sock->tls_ctx);
+        sock->tls_ctx = NULL;
+    }
+}
+
+static int push_tls_error(VM* vm, const char* fallback) {
+    char errbuf[256];
+    unsigned long err = ERR_get_error();
+    if (err != 0) {
+        ERR_error_string_n(err, errbuf, sizeof(errbuf));
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string(errbuf, (int)strlen(errbuf))));
+        return 2;
+    }
+    push(vm, NIL_VAL);
+    push(vm, OBJ_VAL(copy_string(fallback, (int)strlen(fallback))));
+    return 2;
+}
+#endif
 
 static void socket_userdata_finalizer(void* ptr) {
     SocketData* sock = (SocketData*)ptr;
     if (sock == NULL) return;
+#ifdef TOI_HAVE_TLS
+    socket_tls_cleanup(sock, 1);
+#endif
     if (sock->fd >= 0) {
         close(sock->fd);
         sock->fd = -1;
@@ -70,6 +123,10 @@ static int socket_tcp(VM* vm, int arg_count, Value* args) {
     }
     data->fd = fd;
     data->timeout_ms = -1; // blocking by default
+#ifdef TOI_HAVE_TLS
+    data->tls_ctx = NULL;
+    data->tls = NULL;
+#endif
 
     ObjUserdata* udata = new_userdata_with_finalizer(data, socket_userdata_finalizer);
     set_socket_metatable(vm, udata);
@@ -96,6 +153,10 @@ static int socket_udp(VM* vm, int arg_count, Value* args) {
     }
     data->fd = fd;
     data->timeout_ms = -1;
+#ifdef TOI_HAVE_TLS
+    data->tls_ctx = NULL;
+    data->tls = NULL;
+#endif
 
     ObjUserdata* udata = new_userdata_with_finalizer(data, socket_userdata_finalizer);
     set_socket_metatable(vm, udata);
@@ -252,6 +313,10 @@ static int sock_accept(VM* vm, int arg_count, Value* args) {
     }
     client_data->fd = client_fd;
     client_data->timeout_ms = -1;
+#ifdef TOI_HAVE_TLS
+    client_data->tls_ctx = NULL;
+    client_data->tls = NULL;
+#endif
 
     ObjUserdata* udata = new_userdata_with_finalizer(client_data, socket_userdata_finalizer);
     set_socket_metatable(vm, udata);
@@ -278,6 +343,21 @@ static int sock_send(VM* vm, int arg_count, Value* args) {
     }
 
     ObjString* data = GET_STRING(1);
+#ifdef TOI_HAVE_TLS
+    if (sock->tls != NULL) {
+        int sent = SSL_write(sock->tls, data->chars, data->length);
+        if (sent <= 0) {
+            int err = SSL_get_error(sock->tls, sent);
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                push(vm, NIL_VAL);
+                push(vm, OBJ_VAL(copy_string("timeout", 7)));
+                return 2;
+            }
+            return push_tls_error(vm, "tls write failed");
+        }
+        RETURN_NUMBER((double)sent);
+    }
+#endif
     ssize_t sent = send(sock->fd, data->chars, data->length, 0);
 
     if (sent < 0) {
@@ -308,6 +388,30 @@ static int sock_recv(VM* vm, int arg_count, Value* args) {
     }
 
     char* buffer = (char*)malloc(size + 1);
+#ifdef TOI_HAVE_TLS
+    if (sock->tls != NULL) {
+        int received = SSL_read(sock->tls, buffer, size);
+        if (received <= 0) {
+            free(buffer);
+            if (received == 0) {
+                push(vm, NIL_VAL);
+                push(vm, OBJ_VAL(copy_string("closed", 6)));
+                return 2;
+            }
+            int err = SSL_get_error(sock->tls, received);
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                push(vm, NIL_VAL);
+                push(vm, OBJ_VAL(copy_string("timeout", 7)));
+                return 2;
+            }
+            return push_tls_error(vm, "tls read failed");
+        }
+        buffer[received] = '\0';
+        push(vm, OBJ_VAL(copy_string(buffer, received)));
+        free(buffer);
+        return 1;
+    }
+#endif
     ssize_t received = recv(sock->fd, buffer, size, 0);
 
     if (received < 0) {
@@ -381,6 +485,159 @@ static int sock_settimeout(VM* vm, int arg_count, Value* args) {
     RETURN_TRUE;
 }
 
+// socket.tls_available() -> bool
+static int socket_tls_available(VM* vm, int arg_count, Value* args) {
+    (void)arg_count;
+    (void)args;
+#ifdef TOI_HAVE_TLS
+    RETURN_TRUE;
+#else
+    RETURN_FALSE;
+#endif
+}
+
+// sock:tls(servername=nil, verify=false)
+static int sock_tls(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    ASSERT_USERDATA(0);
+    if (arg_count >= 2 && !IS_STRING(args[1]) && !IS_NIL(args[1])) {
+        vm_runtime_error(vm, "Argument 2 must be a string or nil.");
+        return 0;
+    }
+    if (arg_count >= 3 && !IS_BOOL(args[2]) && !IS_NIL(args[2])) {
+        vm_runtime_error(vm, "Argument 3 must be a bool or nil.");
+        return 0;
+    }
+
+#ifndef TOI_HAVE_TLS
+    push(vm, NIL_VAL);
+    push(vm, OBJ_VAL(copy_string("tls unavailable (rebuild with OpenSSL)", 39)));
+    return 2;
+#else
+    SocketData* sock = get_socket_data(GET_USERDATA(0));
+    if (sock == NULL || sock->fd < 0) {
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string("socket closed", 13)));
+        return 2;
+    }
+    if (sock->tls != NULL) {
+        RETURN_TRUE;
+    }
+
+    int verify = 0;
+    const char* servername = NULL;
+    if (arg_count >= 2 && IS_STRING(args[1])) {
+        servername = GET_CSTRING(1);
+    }
+    if (arg_count >= 3 && IS_BOOL(args[2])) {
+        verify = AS_BOOL(args[2]) ? 1 : 0;
+    }
+
+    tls_global_init();
+
+    SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    if (ctx == NULL) {
+        return push_tls_error(vm, "failed to create TLS context");
+    }
+
+    if (verify) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+        if (SSL_CTX_set_default_verify_paths(ctx) != 1) {
+            SSL_CTX_free(ctx);
+            return push_tls_error(vm, "failed to load system CA certs");
+        }
+    } else {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    }
+
+    SSL* ssl = SSL_new(ctx);
+    if (ssl == NULL) {
+        SSL_CTX_free(ctx);
+        return push_tls_error(vm, "failed to create TLS handle");
+    }
+
+    SSL_set_fd(ssl, sock->fd);
+    if (servername != NULL && SSL_set_tlsext_host_name(ssl, servername) != 1) {
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        return push_tls_error(vm, "failed to set TLS server name");
+    }
+
+    if (SSL_connect(ssl) != 1) {
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        return push_tls_error(vm, "TLS handshake failed");
+    }
+
+    sock->tls_ctx = ctx;
+    sock->tls = ssl;
+    RETURN_TRUE;
+#endif
+}
+
+// sock:tls_server(cert_path, key_path)
+static int sock_tls_server(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(3);
+    ASSERT_USERDATA(0);
+    ASSERT_STRING(1);
+    ASSERT_STRING(2);
+
+#ifndef TOI_HAVE_TLS
+    push(vm, NIL_VAL);
+    push(vm, OBJ_VAL(copy_string("tls unavailable (rebuild with OpenSSL)", 39)));
+    return 2;
+#else
+    SocketData* sock = get_socket_data(GET_USERDATA(0));
+    if (sock == NULL || sock->fd < 0) {
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string("socket closed", 13)));
+        return 2;
+    }
+    if (sock->tls != NULL) {
+        RETURN_TRUE;
+    }
+
+    const char* cert_path = GET_CSTRING(1);
+    const char* key_path = GET_CSTRING(2);
+    tls_global_init();
+
+    SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+    if (ctx == NULL) {
+        return push_tls_error(vm, "failed to create TLS context");
+    }
+
+    if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) != 1) {
+        SSL_CTX_free(ctx);
+        return push_tls_error(vm, "failed to load TLS certificate");
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+        SSL_CTX_free(ctx);
+        return push_tls_error(vm, "failed to load TLS private key");
+    }
+    if (SSL_CTX_check_private_key(ctx) != 1) {
+        SSL_CTX_free(ctx);
+        return push_tls_error(vm, "TLS private key does not match certificate");
+    }
+
+    SSL* ssl = SSL_new(ctx);
+    if (ssl == NULL) {
+        SSL_CTX_free(ctx);
+        return push_tls_error(vm, "failed to create TLS handle");
+    }
+
+    SSL_set_fd(ssl, sock->fd);
+    if (SSL_accept(ssl) != 1) {
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        return push_tls_error(vm, "TLS server handshake failed");
+    }
+
+    sock->tls_ctx = ctx;
+    sock->tls = ssl;
+    RETURN_TRUE;
+#endif
+}
+
 // sock:close()
 static int sock_close(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
@@ -389,6 +646,9 @@ static int sock_close(VM* vm, int arg_count, Value* args) {
     ObjUserdata* udata = GET_USERDATA(0);
     SocketData* sock = get_socket_data(udata);
     if (sock != NULL && sock->fd >= 0) {
+#ifdef TOI_HAVE_TLS
+        socket_tls_cleanup(sock, 1);
+#endif
         close(sock->fd);
         sock->fd = -1;
     }
@@ -584,6 +844,7 @@ void register_socket(VM* vm) {
         {"tcp", socket_tcp},
         {"udp", socket_udp},
         {"select", socket_select},
+        {"tls_available", socket_tls_available},
         {NULL, NULL}
     };
     register_module(vm, "socket", socket_funcs);
@@ -601,6 +862,8 @@ void register_socket(VM* vm) {
         {"send", sock_send},
         {"recv", sock_recv},
         {"settimeout", sock_settimeout},
+        {"tls", sock_tls},
+        {"tls_server", sock_tls_server},
         {"close", sock_close},
         {"getpeername", sock_getpeername},
         {"getsockname", sock_getsockname},

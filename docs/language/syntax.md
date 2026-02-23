@@ -17,7 +17,7 @@
 
 Examples:
 
-```pua
+```toi
 n = 42
 s = "hello"
 m = [[line 1
@@ -56,7 +56,7 @@ Other:
 
 Walrus returns the assigned value, so it can be used inside larger expressions:
 
-```pua
+```toi
 v = (x := 10)
 ok = (x := x + 1) > 10
 ```
@@ -65,8 +65,8 @@ ok = (x := x + 1) > 10
 
 Array-like + map-like hybrid:
 
-```pua
-t = {10, 20, name = "pua", [10] = "x"}
+```toi
+t = {10, 20, name = "toi", [10] = "x"}
 print t[1]
 print t.name
 print t["name"]
@@ -81,8 +81,8 @@ print t["name"]
 
 ## Strings and Interpolation
 
-```pua
-name = "Pua"
+```toi
+name = "Toi"
 pi = 3.14159
 s = f"hello {name}, pi={pi|.2f}"
 ```

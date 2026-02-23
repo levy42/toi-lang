@@ -287,12 +287,12 @@ static int run_fmt(int argc, char* argv[]) {
             path = arg;
             continue;
         }
-        fprintf(stderr, "Usage: pua fmt [-w|--check] [path|-]\n");
+        fprintf(stderr, "Usage: toi fmt [-w|--check] [path|-]\n");
         return 64;
     }
 
     if (write_in_place && path == NULL) {
-        fprintf(stderr, "Usage: pua fmt [-w|--check] [path|-]\n");
+        fprintf(stderr, "Usage: toi fmt [-w|--check] [path|-]\n");
         return 64;
     }
 
@@ -337,7 +337,7 @@ int main(int argc, char* argv[]) {
     } else if (argc >= 2) {
         return run_file(argv[1], argc - 2, argv + 2);
     } else {
-        fprintf(stderr, "Usage: pua [path [args...]] | pua fmt [-w|--check] [path|-]\n");
+        fprintf(stderr, "Usage: toi [path [args...]] | toi fmt [-w|--check] [path|-]\n");
         exit(64);
     }
 

@@ -41,7 +41,7 @@ static void buf_append_str(StrBuf* buf, const char* str) {
     buf_append(buf, str, strlen(str));
 }
 
-// Escape a string for Pua string literal
+// Escape a string for Toi string literal
 static void buf_append_escaped(StrBuf* buf, const char* str, size_t len) {
     buf_append_str(buf, "\"");
     for (size_t i = 0; i < len; i++) {

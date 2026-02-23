@@ -1,0 +1,515 @@
+socket = import socket
+string = import string
+table = import table
+io = import io
+os = import os
+http = import http
+stat = import stat
+
+Route = import lib.http_server.route
+Response = import lib.http_server.response
+Transport = import lib.http_server.transport
+
+HttpServer = {}
+HttpServer.__index = HttpServer
+
+fn normalize_mount_path(path)
+  p = path
+  if type(p) != "string" or p == ""
+    p = "/"
+
+  if p[1] != "/"
+    p = "/" + p
+
+  while #p > 1 and p[#p] == "/"
+    p = string.sub(p, 1, #p - 1)
+
+  return p
+
+fn clean_relative_path(raw_rel)
+  rel = raw_rel
+  if rel == nil or rel == "" or rel == "/"
+    return "index.html"
+
+  while #rel > 0 and rel[1] == "/"
+    rel = rel[2..]
+
+  if rel == ""
+    return "index.html"
+
+  parts = string.split(rel, "/")
+  out = {}
+  for part in parts
+    if part == nil or part == "" or part == "."
+      continue
+    if part == ".."
+      return nil
+    out <+ part
+
+  if #out == 0
+    return "index.html"
+  return table.concat(out, "/")
+
+fn resolve_mount_relative_path(req_path, mount_path)
+  path = req_path
+  if type(path) != "string" or path == ""
+    path = "/"
+
+  if mount_path == "/"
+    return clean_relative_path(path)
+
+  if path == mount_path
+    return "index.html"
+
+  prefix = mount_path + "/"
+  if path[..#prefix] != prefix
+    return nil
+
+  return clean_relative_path(string.sub(path, #prefix + 1))
+
+fn join_path(base, rel)
+  if base == nil or base == ""
+    return rel
+
+  if base[#base] == "/"
+    return base + rel
+  return base + "/" + rel
+
+fn path_extension(path)
+  last_dot = 0
+  last_slash = 0
+  i = 1
+  while i <= #path
+    ch = path[i]
+    if ch == "/"
+      last_slash = i
+    elif ch == "."
+      last_dot = i
+    i = i + 1
+
+  if last_dot == 0 or last_dot <= last_slash or last_dot == #path
+    return ""
+
+  return string.lower(string.sub(path, last_dot + 1))
+
+fn content_type_for(path)
+  ext = path_extension(path)
+  if ext == "html" or ext == "htm"
+    return "text/html; charset=utf-8"
+  if ext == "css"
+    return "text/css; charset=utf-8"
+  if ext == "js" or ext == "mjs"
+    return "application/javascript; charset=utf-8"
+  if ext == "json"
+    return "application/json; charset=utf-8"
+  if ext == "txt"
+    return "text/plain; charset=utf-8"
+  if ext == "svg"
+    return "image/svg+xml"
+  if ext == "xml"
+    return "application/xml; charset=utf-8"
+  if ext == "wasm"
+    return "application/wasm"
+  if ext == "pdf"
+    return "application/pdf"
+  if ext == "png"
+    return "image/png"
+  if ext == "jpg" or ext == "jpeg"
+    return "image/jpeg"
+  if ext == "gif"
+    return "image/gif"
+  if ext == "webp"
+    return "image/webp"
+  if ext == "ico"
+    return "image/x-icon"
+  if ext == "woff"
+    return "font/woff"
+  if ext == "woff2"
+    return "font/woff2"
+  if ext == "ttf"
+    return "font/ttf"
+  return "application/octet-stream"
+
+fn accepts_gzip(req)
+  if type(req) != "table"
+    return false
+
+  headers = req.headers
+  if type(headers) != "table"
+    return false
+
+  raw = headers["accept-encoding"]
+  if type(raw) != "string"
+    return false
+
+  entries = string.split(string.lower(raw), ",")
+  for entry in entries
+    token = string.trim(entry)
+    if token == ""
+      continue
+
+    parts = string.split(token, ";")
+    name = string.trim(parts[1] or "")
+    if name != "gzip"
+      continue
+
+    q = 1.0
+    i = 2
+    while i <= #parts
+      param = string.trim(parts[i] or "")
+      local eq_i, eq_j = string.find(param, "=")
+      if eq_i and eq_i > 1
+        key = string.trim(string.sub(param, 1, eq_i - 1))
+        if key == "q"
+          value = string.trim(string.sub(param, eq_j + 1))
+          try
+            q = float(value)
+          except e
+            q = 1.0
+      i = i + 1
+
+    if q > 0
+      return true
+
+  return false
+
+fn read_file(path)
+  local f, err = io.open(path, "r")
+  if f == nil
+    return nil
+
+  local data = nil
+  try
+    data = f.read()
+  except e
+    data = nil
+
+  try
+    f.close()
+  except e
+    nil
+
+  return data
+
+fn request_header(req, name)
+  if type(req) != "table" or type(req.headers) != "table"
+    return nil
+  key = string.lower(name or "")
+  value = req.headers[key]
+  if value
+    return value
+  return req.headers[name]
+
+fn parse_nonneg_int(raw)
+  if type(raw) != "string"
+    return nil
+  token = string.trim(raw)
+  if token == ""
+    return nil
+  local n = nil
+  try
+    n = int(token)
+  except e
+    n = nil
+  if n == nil or n < 0
+    return nil
+  return n
+
+fn build_etag(file_stat)
+  mtime = int(file_stat.mtime or 0)
+  size = int(file_stat.size or 0)
+  return "\"" + str(mtime) + "-" + str(size) + "\""
+
+fn etag_matches(req, etag)
+  raw = request_header(req, "if-none-match")
+  if type(raw) != "string"
+    return false
+  entries = string.split(raw, ",")
+  for entry in entries
+    token = string.trim(entry or "")
+    if token == "*"
+      return true
+    if token == etag
+      return true
+    if token[..2] == "W/" and token[3..] == etag
+      return true
+  return false
+
+fn modified_since_match(req, file_stat)
+  raw = request_header(req, "if-modified-since")
+  if type(raw) != "string"
+    return false
+  ts = parse_nonneg_int(raw)
+  if ts == nil
+    return false
+  return int(file_stat.mtime or 0) <= ts
+
+fn parse_single_byte_range(raw_range, size)
+  if type(raw_range) != "string"
+    return nil, nil
+  if size < 0
+    size = 0
+
+  value = string.trim(raw_range)
+  if value == ""
+    return nil, nil
+  if string.lower(value[..6]) != "bytes="
+    return false, "invalid"
+  spec = string.trim(value[7..])
+  if string.find(spec, ",")
+    return false, "invalid"
+
+  local dash_i, dash_j = string.find(spec, "-")
+  if dash_i == nil
+    return false, "invalid"
+
+  start_raw = string.trim(string.sub(spec, 1, dash_i - 1))
+  end_raw = string.trim(string.sub(spec, dash_j + 1))
+  if start_raw == "" and end_raw == ""
+    return false, "invalid"
+
+  if start_raw == ""
+    suffix_len = parse_nonneg_int(end_raw)
+    if suffix_len == nil or suffix_len <= 0
+      return false, "invalid"
+    if size == 0
+      return false, "unsat"
+    if suffix_len >= size
+      return {start = 0, ["end"] = size - 1}, nil
+    return {start = size - suffix_len, ["end"] = size - 1}, nil
+
+  start_i = parse_nonneg_int(start_raw)
+  if start_i == nil
+    return false, "invalid"
+  if start_i >= size
+    return false, "unsat"
+
+  end_i = size - 1
+  if end_raw != ""
+    end_i = parse_nonneg_int(end_raw)
+    if end_i == nil
+      return false, "invalid"
+  if end_i < start_i
+    return false, "unsat"
+  if end_i >= size
+    end_i = size - 1
+
+  return {start = start_i, ["end"] = end_i}, nil
+
+fn maybe_gzip_body(mount, req, body, headers)
+  if not mount.gzip or mount.gzip_mod == nil
+    return body
+
+  if not accepts_gzip(req)
+    return body
+
+  local zipped = nil
+  try
+    zipped = mount.gzip_mod.compress(body)
+  except e
+    zipped = nil
+
+  if zipped == nil
+    return body
+
+  headers["Content-Encoding"] = "gzip"
+  headers["Vary"] = "Accept-Encoding"
+  return zipped
+
+fn serve_mount_file(mount, req)
+  rel = resolve_mount_relative_path(req.path, mount.mount_path)
+  if rel == nil
+    return false, nil
+
+  method = string.upper(req.method or "GET")
+  if method != "GET" and method != "HEAD"
+    return true, http.response(405, nil, "Method Not Allowed")
+
+  file_path = join_path(mount.dir_path, rel)
+  if os.isdir(file_path)
+    file_path = join_path(file_path, "index.html")
+
+  if not os.isfile(file_path)
+    return true, http.response(404, nil, "Not Found")
+
+  local file_stat, file_stat_err = stat.stat(file_path)
+  if file_stat == nil
+    return true, http.response(404, nil, "Not Found")
+
+  file_size = int(file_stat.size or 0)
+  etag = build_etag(file_stat)
+  body = read_file(file_path)
+  if body == nil
+    return true, http.response(404, nil, "Not Found")
+
+  headers = {
+    ["Content-Type"] = content_type_for(file_path),
+    ["Accept-Ranges"] = "bytes",
+    ["ETag"] = etag,
+    ["Last-Modified"] = str(int(file_stat.mtime or 0))
+  }
+
+  if etag_matches(req, etag) or modified_since_match(req, file_stat)
+    return true, http.response(304, headers, "")
+
+  status = 200
+  range_enabled = false
+  range_req = request_header(req, "range")
+  if type(range_req) == "string" and range_req != ""
+    local parsed_range, range_err = parse_single_byte_range(range_req, file_size)
+    if parsed_range == false
+      if range_err == "unsat"
+        return true, http.response(416, {
+          ["Content-Range"] = "bytes */" + str(file_size),
+          ["Accept-Ranges"] = "bytes",
+          ["ETag"] = etag,
+          ["Last-Modified"] = str(int(file_stat.mtime or 0))
+        }, "Range Not Satisfiable")
+      return true, http.response(400, nil, "Bad Request")
+
+    if parsed_range != nil
+      range_enabled = true
+      status = 206
+      body = string.sub(body, parsed_range.start + 1, parsed_range["end"] + 1)
+      headers["Content-Range"] = "bytes " + str(parsed_range.start) + "-" + str(parsed_range["end"]) + "/" + str(file_size)
+
+  if not range_enabled
+    body = maybe_gzip_body(mount, req, body, headers)
+
+  if method == "HEAD"
+    headers["Content-Length"] = str(#body)
+    body = ""
+
+  return true, http.response(status, headers, body)
+
+fn dispatch_static_mounts(app, req)
+  for mount in app.static_mounts
+    local handled, res = serve_mount_file(mount, req)
+    if handled
+      return res
+
+  return nil
+
+fn _new_http_server_app(cls, opts = nil)
+  if opts == nil
+    opts = {}
+
+  app = {}
+  app.routes = {}
+  app.static_mounts = {}
+  app.host = opts.host or "0.0.0.0"
+  app.port = 8080
+  if opts.port != nil
+    app.port = opts.port
+  app.socket = socket.tcp()
+  app.ssl = opts.ssl
+  app.ssl_cert = opts.ssl_cert or opts.cert or opts.cert_path
+  app.ssl_key = opts.ssl_key or opts.key or opts.key_path
+  if app.ssl
+    if type(app.ssl_cert) != "string" or app.ssl_cert == ""
+      error("http_server ssl=true requires ssl_cert")
+    if type(app.ssl_key) != "string" or app.ssl_key == ""
+      error("http_server ssl=true requires ssl_key")
+  app.running = false
+  app.stop_requested = false
+  app.stop_deadline = nil
+  app.stop_grace_seconds = opts.stop_grace_seconds or 0
+  app.force_close = false
+  app.active_connections = 0
+  app.request_count = 0
+  app.gc_every_requests = opts.gc_every_requests or 1000
+  app.trim_after_gc = opts.trim_after_gc
+  app.worker_threads = opts.worker_threads or 0
+  app.worker_select_timeout = opts.worker_select_timeout or 0.05
+  app.worker_queue_capacity = opts.worker_queue_capacity or 0
+  if app.trim_after_gc == nil
+    app.trim_after_gc = true
+  app.normalize_response = opts.normalize_response or Response.normalize
+
+  setmetatable(app, cls)
+
+  app._base_handler = opts.handler
+  if app._base_handler == nil
+    app._base_handler = fn(req)
+      return Route.dispatch(app, req)
+
+  app.handler = fn(req)
+    static_res = dispatch_static_mounts(app, req)
+    if static_res != nil
+      return static_res
+    return app._base_handler(req)
+
+  return app
+
+HttpServer.__call = _new_http_server_app
+setmetatable(HttpServer, HttpServer)
+
+-- Backward-compatible constructor.
+HttpServer.new = fn(port, handler = nil)
+  return HttpServer({port = port, handler = handler})
+
+-- Backward-compatible alias.
+HttpServer.app = fn(port)
+  return HttpServer({port = port})
+
+HttpServer.route = fn(self, method, path)
+  m = method
+  p = path
+  return fn(handler)
+    self.routes <+ Route.compile(m, p, handler)
+    return handler
+
+HttpServer.get = fn(self, path)
+  return self.route("GET", path)
+
+HttpServer.post = fn(self, path)
+  return self.route("POST", path)
+
+HttpServer.put = fn(self, path)
+  return self.route("PUT", path)
+
+HttpServer.patch = fn(self, path)
+  return self.route("PATCH", path)
+
+HttpServer.delete = fn(self, path)
+  return self.route("DELETE", path)
+
+HttpServer.serve_dir = fn(self, dir_path, path, gzip = false)
+  if type(dir_path) != "string" or dir_path == ""
+    error("serve_dir(dir_path, path, gzip=false): dir_path must be a non-empty string")
+
+  mount_path = normalize_mount_path(path)
+  gzip_enabled = gzip
+  gzip_mod = nil
+  if gzip_enabled
+    try
+      gzip_mod = import gzip
+    except e
+      gzip_mod = nil
+
+  self.static_mounts <+ {
+    dir_path = dir_path,
+    mount_path = mount_path,
+    gzip = gzip_enabled,
+    gzip_mod = gzip_mod
+  }
+
+  return self
+
+HttpServer.run = fn(self)
+  return Transport.run(self)
+
+HttpServer.stop = fn(self, grace_sec = nil)
+  grace = grace_sec
+  if grace == nil
+    grace = self.stop_grace_seconds or 0
+  if type(grace) != "number" or grace < 0
+    grace = 0
+  self.stop_requested = true
+  self.stop_deadline = os.clock() + grace
+  return true
+
+HttpServer.is_running = fn(self)
+  return self.running
+
+return HttpServer

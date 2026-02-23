@@ -1,0 +1,68 @@
+string = import string
+table = import table
+
+fn is_abs(p)
+  if p == nil or p == ""
+    return false
+  return p.starts_with("/")
+
+fn split(p)
+  if p == nil or p == ""
+    return {}
+  return {part for part in string.split(p, "/") if part != nil and part != ""}
+
+fn join(a, b)
+  if a == nil or a == ""
+    return b or ""
+  if b == nil or b == ""
+    return a
+  if a.ends_with("/")
+    return a + b
+  return a + "/" + b
+
+fn normalize(p)
+  if p == nil or p == ""
+    return ""
+  abs = is_abs(p)
+  parts = split(p)
+  if #parts == 0
+    return abs ? "/" : ""
+  body = table.concat(parts, "/")
+  return abs ? ("/" + body) : body
+
+fn dirname(p)
+  if p == nil or p == ""
+    return ""
+  n = normalize(p)
+  if n == "/"
+    return "/"
+  i = #n
+  while i >= 1
+    if n[i] == "/"
+      if i == 1
+        return "/"
+      return string.sub(n, 1, i - 1)
+    i = i - 1
+  return ""
+
+fn basename(p)
+  if p == nil or p == ""
+    return ""
+  n = normalize(p)
+  if n == "/"
+    return "/"
+  i = #n
+  while i >= 1
+    if n[i] == "/"
+      return string.sub(n, i + 1)
+    i = i - 1
+  return n
+
+return {
+  join = join,
+  split = split,
+  dirname = dirname,
+  basename = basename,
+  normalize = normalize,
+  is_abs = is_abs,
+}

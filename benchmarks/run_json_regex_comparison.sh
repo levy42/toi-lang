@@ -11,5 +11,5 @@ echo "== Lua =="
 lua benchmarks/json_regex_bench.lua
 
 echo
-echo "== Pua =="
-./pua benchmarks/json_regex_bench.pua
+echo "== Toi =="
+./toi benchmarks/json_regex_bench.toi

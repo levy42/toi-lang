@@ -1,0 +1,120 @@
+from lib.test import assert_eq, assert_true
+
+http_server = import lib.http_server
+io = import io
+os = import os
+string = import string
+gzip = import gzip
+
+ROOT = "tests/tmp_http_static"
+SECRET = "tests/tmp_http_secret.txt"
+
+fn safe_rm(path)
+  if os.exists(path)
+    os.remove(path)
+
+fn safe_rmdir(path)
+  if os.exists(path) and os.isdir(path)
+    os.rmdir(path)
+
+fn assert_has(haystack, needle)
+  local i, j = string.find(haystack, needle)
+  if i == nil
+    error("assert_has failed: missing '" + needle + "'")
+
+fn body_of(resp)
+  local i, j = string.find(resp, "\r\n\r\n")
+  if j == nil
+    return ""
+  return string.sub(resp, j + 1)
+
+safe_rm(ROOT + "/index.html")
+safe_rm(ROOT + "/app.js")
+safe_rmdir(ROOT)
+safe_rm(SECRET)
+
+local ok, err = os.mkdir(ROOT)
+assert_true(ok == true, "mkdir failed")
+
+f = io.open(ROOT + "/index.html", "w")
+f.write("<h1>Hello static</h1>")
+f.close()
+
+f = io.open(ROOT + "/app.js", "w")
+f.write("console.log('hello gzip')")
+f.close()
+
+f = io.open(SECRET, "w")
+f.write("top-secret")
+f.close()
+
+app = http_server(port=0, host="127.0.0.1")
+app.serve_dir(ROOT, "/assets", true)
+
+get = app.get
+@get("/health")
+fn health()
+  return "ok"
+
+r1 = app.handler({method = "GET", path = "/assets"})
+assert_has(r1, "200 OK")
+assert_has(r1, "Content-Type: text/html")
+assert_has(r1, "<h1>Hello static</h1>")
+
+r2 = app.handler({method = "GET", path = "/assets/app.js", headers = { ["accept-encoding"] = "gzip, deflate" }})
+assert_has(r2, "200 OK")
+assert_has(r2, "Content-Type: application/javascript")
+assert_has(r2, "Content-Encoding: gzip")
+assert_has(r2, "Vary: Accept-Encoding")
+assert_eq(gzip.decompress(body_of(r2)), "console.log('hello gzip')")
+
+r3 = app.handler({method = "GET", path = "/assets/app.js"})
+assert_has(r3, "200 OK")
+assert_true(string.find(r3, "Content-Encoding: gzip") == nil)
+assert_has(r3, "console.log('hello gzip')")
+
+r3b = app.handler({method = "GET", path = "/assets/app.js"})
+assert_has(r3b, "ETag:")
+
+local etag_start, etag_colon = string.find(r3b, "ETag:")
+assert_true(etag_start != nil)
+local etag_end = string.find(r3b, "\r\n", etag_colon + 1)
+assert_true(etag_end != nil)
+etag = string.trim(string.sub(r3b, etag_colon + 1, etag_end - 1))
+
+r3c = app.handler({method = "GET", path = "/assets/app.js", headers = {["if-none-match"] = etag}})
+assert_has(r3c, "304 Not Modified")
+
+r3d = app.handler({method = "GET", path = "/assets/app.js", headers = {["range"] = "bytes=0-6"}})
+assert_has(r3d, "206")
+assert_has(r3d, "Content-Range: bytes 0-6/")
+assert_has(r3d, "console")
+
+r3e = app.handler({method = "GET", path = "/assets/app.js", headers = {["range"] = "bytes=999-1000"}})
+assert_has(r3e, "416")
+assert_has(r3e, "Content-Range: bytes */")
+
+r3f = app.handler({method = "HEAD", path = "/assets/app.js", headers = {["range"] = "bytes=0-6"}})
+assert_has(r3f, "206")
+assert_true(body_of(r3f) == "")
+
+r3g = app.handler({method = "GET", path = "/assets/app.js", headers = {["if-modified-since"] = "9999999999"}})
+assert_has(r3g, "304 Not Modified")
+
+r4 = app.handler({method = "GET", path = "/assets/../tmp_http_secret.txt"})
+assert_has(r4, "404 Not Found")
+assert_true(string.find(r4, "top-secret") == nil)
+
+r5 = app.handler({method = "GET", path = "/health"})
+assert_has(r5, "200 OK")
+assert_has(r5, "ok")
+
+r6 = app.handler({method = "POST", path = "/assets/app.js"})
+assert_has(r6, "405 Method Not Allowed")
+
+safe_rm(ROOT + "/index.html")
+safe_rm(ROOT + "/app.js")
+safe_rmdir(ROOT)
+safe_rm(SECRET)
+
+print "http serve_dir ok"

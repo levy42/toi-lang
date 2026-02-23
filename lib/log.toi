@@ -1,0 +1,283 @@
+io = import io
+os = import os
+string = import string
+table = import table
+
+LEVELS = {
+  trace = 10,
+  debug = 20,
+  info = 30,
+  warn = 40,
+  error = 50
+}
+
+LEVEL_NAMES = {
+  [10] = "TRACE",
+  [20] = "DEBUG",
+  [30] = "INFO",
+  [40] = "WARN",
+  [50] = "ERROR"
+}
+
+ESC = string.char(27)
+ANSI_RESET = ESC + "[0m"
+LEVEL_COLORS = {
+  [10] = ESC + "[36m", -- cyan
+  [20] = ESC + "[34m", -- blue
+  [30] = ESC + "[32m", -- green
+  [40] = ESC + "[33m", -- yellow
+  [50] = ESC + "[31m"  -- red
+}
+
+fn parse_level(level)
+  if type(level) == "number"
+    return int(level)
+  if type(level) != "string"
+    return LEVELS.info
+  key = string.lower(string.trim(level))
+  value = LEVELS[key]
+  if type(value) == "number"
+    return value
+  return LEVELS.info
+
+fn level_name(level)
+  n = parse_level(level)
+  return LEVEL_NAMES[n] or ("L" + str(n))
+
+fn merge_fields(base, extra)
+  out = {}
+  if type(base) == "table"
+    for k, v in base
+      out[k] = v
+  if type(extra) == "table"
+    for k, v in extra
+      out[k] = v
+  return out
+
+fn fmt_fields(fields)
+  if type(fields) != "table"
+    return ""
+  parts = {}
+  for k, v in fields
+    parts <+ f"{k}={v}"
+  if #parts == 0
+    return ""
+  return " " + table.concat(parts, " ")
+
+fn default_formatter(record)
+  ts = int(record.ts or 0)
+  lvl = level_name(record.level)
+  logger_name = record.logger or "root"
+  msg = str(record.msg or "")
+  return string.format("%d %-5s [%s] %s%s", ts, lvl, logger_name, msg, fmt_fields(record.fields))
+
+fn should_color_console()
+  -- Colorize for typical terminal sessions; honor NO_COLOR.
+  no_color = os.getenv("NO_COLOR")
+  if no_color and no_color != ""
+    return false
+  term = os.getenv("TERM")
+  if term == nil or term == "" or term == "dumb"
+    return false
+  return true
+
+fn colorize_line(line, level)
+  if type(line) != "string"
+    return line
+  color = LEVEL_COLORS[parse_level(level)]
+  if type(color) != "string"
+    return line
+  lvl = level_name(level)
+  local i, j = string.find(line, lvl)
+  if i == nil
+    return color + line + ANSI_RESET
+  return string.sub(line, 1, i - 1) + color + lvl + ANSI_RESET + string.sub(line, j + 1)
+
+fn console_handler(record, line)
+  out = line
+  if should_color_console()
+    out = colorize_line(line, record.level)
+  print(out)
+  return true
+
+fn file_handler(path, append = true)
+  if type(path) != "string" or path == ""
+    error("file_handler(path): path must be a non-empty string")
+  mode = append ? "a" : "w"
+  local file, open_err = io.open(path, mode)
+  if file == nil
+    error("file_handler open failed: " + str(open_err))
+  return fn(record, line)
+    file.write(line + "\n")
+    return true
+
+Logger = {}
+Logger.__index = Logger
+
+fn logger_new(cls, name = "root", opts = nil)
+  if opts == nil
+    opts = {}
+  obj = {}
+  obj.name = type(name) == "string" and name != "" ? name : "root"
+  obj.level = parse_level(opts.level or LEVELS.info)
+  obj.handlers = {}
+  obj.formatter = opts.formatter or default_formatter
+  obj.context = merge_fields(nil, opts.context)
+
+  if type(opts.handlers) == "table"
+    for h in opts.handlers
+      if type(h) == "function"
+        obj.handlers <+ h
+
+  if #obj.handlers == 0
+    obj.handlers <+ console_handler
+
+  setmetatable(obj, cls)
+  return obj
+
+LoggerMeta = {}
+LoggerMeta.__call = logger_new
+setmetatable(Logger, LoggerMeta)
+
+Logger.set_level = fn(self, level)
+  self.level = parse_level(level)
+  return self
+
+Logger.is_enabled = fn(self, level)
+  return parse_level(level) >= self.level
+
+Logger.add_handler = fn(self, handler)
+  if type(handler) == "function"
+    self.handlers <+ handler
+  return self
+
+Logger.clear_handlers = fn(self)
+  self.handlers = {}
+  return self
+
+Logger.with_fields = fn(self, fields)
+  child = Logger(self.name, {
+    level = self.level,
+    handlers = self.handlers,
+    formatter = self.formatter,
+    context = merge_fields(self.context, fields)
+  })
+  return child
+
+Logger.child = fn(self, suffix, fields = nil)
+  child_name = self.name
+  if type(suffix) == "string" and suffix != ""
+    child_name = self.name + "." + suffix
+  child = Logger(child_name, {
+    level = self.level,
+    handlers = self.handlers,
+    formatter = self.formatter,
+    context = merge_fields(self.context, fields)
+  })
+  return child
+
+Logger.log = fn(self, level, msg, fields = nil)
+  lvl = parse_level(level)
+  if lvl < self.level
+    return false
+
+  record = {
+    ts = int(os.clock()),
+    level = lvl,
+    logger = self.name,
+    msg = msg,
+    fields = merge_fields(self.context, fields)
+  }
+  line = self.formatter(record)
+
+  for h in self.handlers
+    if type(h) == "function"
+      try
+        h(record, line)
+      except e
+        nil
+  return true
+
+Logger.trace = fn(self, msg, fields = nil)
+  return self.log("trace", msg, fields)
+
+Logger.debug = fn(self, msg, fields = nil)
+  return self.log("debug", msg, fields)
+
+Logger.info = fn(self, msg, fields = nil)
+  return self.log("info", msg, fields)
+
+Logger.warn = fn(self, msg, fields = nil)
+  return self.log("warn", msg, fields)
+
+Logger.error = fn(self, msg, fields = nil)
+  return self.log("error", msg, fields)
+
+_registry = {}
+_root = Logger("root")
+_registry["root"] = _root
+
+fn get_logger(name = "root")
+  n = type(name) == "string" and name != "" ? name : "root"
+  existing = _registry[n]
+  if existing
+    return existing
+  logger = Logger(n)
+  _registry[n] = logger
+  return logger
+
+fn configure(level = nil, handlers = nil, formatter = nil, context = nil)
+  if type(level) == "table"
+    error("log.configure(level=..., handlers=..., formatter=..., context=...) expects named args, not options table")
+  if level != nil
+    _root.set_level(level)
+  if formatter
+    _root.formatter = formatter
+  if type(context) == "table"
+    _root.context = merge_fields(nil, context)
+  if handlers
+    _root.handlers = {}
+    if type(handlers) == "table"
+      for h in handlers
+        if type(h) == "function"
+          _root.handlers <+ h
+    if #_root.handlers == 0
+      _root.handlers <+ console_handler
+  return _root
+
+fn log(level, msg, fields = nil)
+  return _root.log(level, msg, fields)
+
+fn trace(msg, fields = nil)
+  return _root.trace(msg, fields)
+
+fn debug(msg, fields = nil)
+  return _root.debug(msg, fields)
+
+fn info(msg, fields = nil)
+  return _root.info(msg, fields)
+
+fn warn(msg, fields = nil)
+  return _root.warn(msg, fields)
+
+fn error_(msg, fields = nil)
+  return _root.error(msg, fields)
+
+return {
+  LEVELS = LEVELS,
+  level_name = level_name,
+  parse_level = parse_level,
+  default_formatter = default_formatter,
+  console_handler = console_handler,
+  file_handler = file_handler,
+  Logger = Logger,
+  get_logger = get_logger,
+  configure = configure,
+  root = _root,
+  log = log,
+  trace = trace,
+  debug = debug,
+  info = info,
+  warn = warn,
+  error = error_
+}

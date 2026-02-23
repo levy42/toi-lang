@@ -2,7 +2,7 @@
 
 Native modules are loaded with `import`:
 
-```pua
+```toi
 math = import math
 ```
 
@@ -37,4 +37,4 @@ Available native modules:
 
 Global core functions are documented in `docs/stdlib/core.md`.
 
-Pua-implemented helper libraries are documented in `docs/stdlib/pua-libraries.md`.
+Toi-implemented helper libraries are documented in `docs/stdlib/toi-libraries.md`.

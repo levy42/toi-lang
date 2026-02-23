@@ -2,7 +2,7 @@
 
 Import:
 
-```pua
+```toi
 binary = import binary
 ```
 
@@ -15,6 +15,6 @@ binary = import binary
 
 ## Notes
 
-- Binary pack/unpack supports common Pua values (`nil`, booleans, numbers, strings, tables).
+- Binary pack/unpack supports common Toi values (`nil`, booleans, numbers, strings, tables).
 - Functions are not serialized (decoded as `nil`).
 - `binary.unhex` requires even-length valid hex input.

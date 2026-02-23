@@ -590,10 +590,10 @@ void register_thread(VM* vm) {
     // Initialize VM-state lock once.
     if (!gil_initialized) {
         gil_initialized = 1;
-        const char* no_gil = getenv("PUA_NO_GIL");
+        const char* no_gil = getenv("TOI_NO_GIL");
         if (no_gil && (no_gil[0] == '1' || no_gil[0] == 'y' || no_gil[0] == 'Y')) {
             no_gil_enabled = 1;
-            fprintf(stderr, "WARNING: PUA_NO_GIL enabled (experimental/unsafe).\n");
+            fprintf(stderr, "WARNING: TOI_NO_GIL enabled (experimental/unsafe).\n");
             fprintf(stderr, "         Shared-VM execution may race or crash.\n");
         }
         if (!no_gil_enabled) {

@@ -409,13 +409,30 @@ static void try_statement() {
         patch_try(handler_offset.except_offset);
 
         begin_scope();
+        int except_local = -1;
+        int has_filter = 0;
+        int filter_fail_jump = -1;
+        int after_except_jump = -1;
         if (match(TOKEN_IDENTIFIER)) {
             Token name = parser.previous;
             add_local(name);
             mark_initialized();
-            emit_bytes(OP_SET_LOCAL, (uint8_t)(current->local_count - 1));
+            except_local = current->local_count - 1;
+            emit_bytes(OP_SET_LOCAL, (uint8_t)except_local);
         } else {
             emit_byte(OP_POP);
+        }
+
+        if (match(TOKEN_IF)) {
+            if (except_local < 0) {
+                error("Filtered except requires an exception variable: use 'except e if ...'.");
+            } else {
+                has_filter = 1;
+                type_stack_top = 0;
+                expression();
+                filter_fail_jump = emit_jump(OP_JUMP_IF_FALSE);
+                emit_byte(OP_POP); // condition when true
+            }
         }
 
         if (match(TOKEN_INDENT)) {
@@ -428,6 +445,16 @@ static void try_statement() {
             }
             statement();
         }
+
+        if (has_filter) {
+            after_except_jump = emit_jump(OP_JUMP);
+            patch_jump(filter_fail_jump);
+            emit_byte(OP_POP); // condition when false
+            emit_bytes(OP_GET_LOCAL, (uint8_t)except_local);
+            emit_byte(OP_THROW);
+            patch_jump(after_except_jump);
+        }
+
         end_scope();
         emit_byte(OP_END_TRY);
     }
@@ -684,7 +711,6 @@ static void for_statement() {
         // If two expressions: pad with one nil
         // If three expressions: use as-is
         int expr_count = 0;
-        int single_expr_is_call = 0;
         int is_range_expr = 0;
         int eligible_for_range = (var_count == 1 && !has_index_sigil);
         // First expression
@@ -693,7 +719,6 @@ static void for_statement() {
         expression();
         in_for_range_header = 0;
         expr_count = 1;
-        single_expr_is_call = last_expr_ends_with_call;
         is_range_expr = eligible_for_range && last_expr_was_range;
 
         if (is_range_expr && check(TOKEN_COMMA)) {
@@ -784,24 +809,31 @@ static void for_statement() {
             return;
         }
 
+        // Normalize single-expression iteration by materializing the iterable
+        // into a hidden local first, then preparing iterator triple from that.
+        if (expr_count == 1) {
+            Token iterable_token = {TOKEN_IDENTIFIER, "(iterable)", 10, parser.previous.line};
+            add_local(iterable_token);
+            mark_initialized();
+            int iterable_slot = current->local_count - 1;
+            emit_bytes(OP_GET_LOCAL, (uint8_t)iterable_slot);
+        }
+
         // Only pad if we have 2 or 3 expressions
-        // If expr_count == 1, assume the expression returns all 3 values
+        // If expr_count == 1, iterate that single value via OP_ITER_PREP.
         if (expr_count > 1) {
             while (expr_count < 3) {
                 emit_byte(OP_NIL);
                 expr_count++;
             }
         } else {
-            // Single expression: might be a table that needs implicit iteration.
-            // Avoid prepping function calls (ending in ')') which likely return triplet.
-            if (!single_expr_is_call) {
-                if (has_index_sigil) {
-                    emit_byte(OP_ITER_PREP_IPAIRS);
-                } else {
-                    emit_byte(OP_ITER_PREP);
-                }
-            } else if (has_index_sigil) {
-                error("Index loop syntax 'i#' only works with implicit table iteration.");
+            // Single-expression for-in always means iterate that value.
+            // Triplet iterator protocol remains available via explicit
+            // `for ... in iter_fn, state, control`.
+            if (has_index_sigil) {
+                emit_byte(OP_ITER_PREP_IPAIRS);
+            } else {
+                emit_byte(OP_ITER_PREP);
             }
         }
 
