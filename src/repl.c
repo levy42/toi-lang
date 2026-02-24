@@ -513,6 +513,9 @@ static int is_input_complete(const char* input) {
             case TOKEN_FOR:
             case TOKEN_FN:
             case TOKEN_WITH:
+            case TOKEN_TRY:
+            case TOKEN_EXCEPT:
+            case TOKEN_FINALLY:
                 has_control_flow = 1;
                 break;
             default: break;

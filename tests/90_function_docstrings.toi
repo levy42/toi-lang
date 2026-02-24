@@ -1,0 +1,42 @@
+from lib.test import assert_eq, assert_true
+
+fn no_doc()
+  return 1
+
+fn has_doc()
+  "hello docs"
+  return 2
+
+fn escaped_doc()
+  "line1\nline2\tok"
+  return 3
+
+fn multiline_doc()
+  [[line a
+line b]]
+  return 4
+
+fn not_first()
+  local x = 1
+  "later"
+  return x
+
+fn not_plain()
+  "a" + "b"
+  return 0
+
+assert_true(no_doc.__doc == nil)
+assert_eq(has_doc.__doc, "hello docs")
+assert_eq(escaped_doc.__doc, "line1\nline2\tok")
+assert_eq(multiline_doc.__doc, "line a\nline b")
+assert_true(not_first.__doc == nil)
+assert_true(not_plain.__doc == nil)
+
+fn method(self)
+  "method docs"
+  return 42
+
+tbl = {method = method}
+assert_eq(tbl.method.__doc, "method docs")
+
+print "function docstrings ok"

@@ -1,5 +1,21 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Toi Libraries (`lib/*.toi`)</title><style>body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f7fb;color:#1d2433;}.wrap{display:grid;grid-template-columns:280px 1fr;min-height:100vh;}.side{padding:20px;border-right:1px solid #d9dce6;background:#fff;position:sticky;top:0;height:100vh;overflow:auto;}.side h1{font-size:16px;margin:0 0 12px 0;}.nav{list-style:none;margin:0;padding:0;}.nav li{margin:0;}.nav a{display:block;padding:7px 8px;border-radius:6px;color:#2b3550;text-decoration:none;font-size:14px;}.nav li.active a,.nav a:hover{background:#eef2ff;color:#1a3cff;}.main{max-width:980px;padding:28px 36px 56px 36px;}h1,h2,h3,h4,h5,h6{line-height:1.25;color:#0f172a;}p,li{line-height:1.6;color:#1f2937;}code{background:#eef1f7;padding:2px 5px;border-radius:5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;}pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:auto;}pre code{background:transparent;color:inherit;padding:0;}a{color:#1d4ed8;}blockquote{margin:12px 0;padding:6px 14px;border-left:4px solid #9aa7c7;background:#edf2ff;border-radius:4px;}table{border-collapse:collapse;margin:16px 0;width:100%;}th,td{border:1px solid #d2d8e5;padding:8px 10px;text-align:left;}th{background:#eef2ff;}hr{border:none;border-top:1px solid #d6dbe8;margin:24px 0;}@media (max-width:900px){.wrap{grid-template-columns:1fr}.side{position:static;height:auto;border-right:none;border-bottom:1px solid #d9dce6}}</style></head><body><div class="wrap"><aside class="side"><h1>Toi Docs</h1><ul class="nav"><li><a href="../stdlib/uuid.html">`uuid` Module</a></li><li><a href="../getting-started.html">Getting Started</a></li><li><a href="../language/control-flow.html">Control Flow</a></li><li><a href="../language/functions.html">Functions</a></li><li><a href="../language/modules.html">Modules and Imports</a></li><li><a href="../language/syntax.html">Language Syntax</a></li><li><a href="../language/types-and-values.html">Types and Values</a></li><li><a href="../repl.html">REPL</a></li><li><a href="../stdlib/README.html">Standard Library</a></li><li><a href="../stdlib/binary.html">`binary` Module</a></li><li><a href="../stdlib/btree.html">`btree` Module</a></li><li><a href="../stdlib/core.html">Core Built-ins</a></li><li><a href="../stdlib/coroutine.html">`coroutine` Module</a></li><li><a href="../stdlib/dir.html">`dir` Module</a></li><li><a href="../stdlib/fnmatch.html">`fnmatch` Module</a></li><li><a href="../stdlib/glob.html">`glob` Module</a></li><li><a href="../stdlib/gzip.html">gzip (optional)</a></li><li><a href="../stdlib/http.html">`http` Module</a></li><li><a href="../stdlib/inspect.html">`inspect` Module</a></li><li><a href="../stdlib/io.html">`io` Module</a></li><li><a href="../stdlib/json.html">`json` Module</a></li><li><a href="../stdlib/math.html">`math` Module</a></li><li><a href="../stdlib/mmap.html">`mmap` Module</a></li><li><a href="../stdlib/os.html">`os` Module</a></li><li><a href="../stdlib/poll.html">`poll` Module</a></li><li><a href="../stdlib/regex.html">`regex` Module</a></li><li><a href="../stdlib/signal.html">`signal` Module</a></li><li><a href="../stdlib/socket.html">`socket` Module</a></li><li><a href="../stdlib/stat.html">`stat` Module</a></li><li><a href="../stdlib/string.html">`string` Module</a></li><li><a href="../stdlib/struct.html">`struct` Module</a></li><li><a href="../stdlib/table.html">`table` Module</a></li><li><a href="../stdlib/template.html">`template` Module</a></li><li><a href="../stdlib/thread.html">`thread` Module</a></li><li><a href="../stdlib/time.html">`time` Module</a></li><li class="active"><a href="../stdlib/toi-libraries.html">Toi Libraries (`lib/*.toi`)</a></li><li><a href="../README.html">Toi Documentation</a></li></ul></aside><main class="main"><h1 id="toi-libraries-lib-toi">Toi Libraries (<code>lib/*.toi</code>)</h1>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Toi Libraries (`lib/*.toi`)</title>
+    <link rel="stylesheet" href="../docs.css">
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+</head>
+<body>
+    <aside>
+    <a class="brand" href="../README.html">
+    <img class="brand-logo" src="../logo.svg" alt="Toi logo">
+    <span>Toi Docs</span>
+    </a>
+    <ul class="nav"><li><a href="../README.html">Toi Documentation</a></li><li><a href="../getting-started.html">Getting Started</a></li><li><a href="../repl.html">REPL</a></li><li class="nav-collapsible"><details class="nav-group"><summary>Language</summary><ul class="subnav"><li><a href="../language/control-flow.html">Control Flow</a></li><li><a href="../language/functions.html">Functions</a></li><li><a href="../language/modules.html">Modules and Imports</a></li><li><a href="../language/syntax.html">Language Syntax</a></li><li><a href="../language/types-and-values.html">Types and Values</a></li></ul></details></li><li class="nav-collapsible"><details class="nav-group active" open><summary>Standard Library</summary><ul class="subnav"><li><a href="../stdlib/README.html">Standard Library</a></li><li><a href="../stdlib/binary.html">`binary` Module</a></li><li><a href="../stdlib/btree.html">`btree` Module</a></li><li><a href="../stdlib/core.html">Core Built-ins</a></li><li><a href="../stdlib/coroutine.html">`coroutine` Module</a></li><li><a href="../stdlib/dir.html">`dir` Module</a></li><li><a href="../stdlib/fnmatch.html">`fnmatch` Module</a></li><li><a href="../stdlib/glob.html">`glob` Module</a></li><li><a href="../stdlib/gzip.html">gzip (optional)</a></li><li><a href="../stdlib/http.html">`http` Module</a></li><li><a href="../stdlib/inspect.html">`inspect` Module</a></li><li><a href="../stdlib/io.html">`io` Module</a></li><li><a href="../stdlib/json.html">`json` Module</a></li><li><a href="../stdlib/math.html">`math` Module</a></li><li><a href="../stdlib/mmap.html">`mmap` Module</a></li><li><a href="../stdlib/os.html">`os` Module</a></li><li><a href="../stdlib/poll.html">`poll` Module</a></li><li><a href="../stdlib/regex.html">`regex` Module</a></li><li><a href="../stdlib/signal.html">`signal` Module</a></li><li><a href="../stdlib/socket.html">`socket` Module</a></li><li><a href="../stdlib/stat.html">`stat` Module</a></li><li><a href="../stdlib/string.html">`string` Module</a></li><li><a href="../stdlib/struct.html">`struct` Module</a></li><li><a href="../stdlib/table.html">`table` Module</a></li><li><a href="../stdlib/template.html">`template` Module</a></li><li><a href="../stdlib/thread.html">`thread` Module</a></li><li><a href="../stdlib/time.html">`time` Module</a></li><li class="active"><a href="../stdlib/toi-libraries.html">Toi Libraries (`lib/*.toi`)</a></li><li><a href="../stdlib/uuid.html">`uuid` Module</a></li></ul></details></li></ul>
+    </aside>
+    <main><h1 id="toi-libraries-lib-toi">Toi Libraries (<code>lib/*.toi</code>)</h1>
 <p>These are standard helper modules implemented in Toi itself.</p>
 <h2 id="lib-test"><code>lib.test</code></h2>
 <p>Testing helpers used by <code>tests/*.toi</code>:</p>
@@ -28,14 +44,14 @@
 </ul>
 <p>Primitive types are now callable with constraint/default metadata, which is sugar for wrapping with <code>Constraints(...)</code>.</p>
 <p>Examples:</p>
-<pre><code class="language-toi">types = import lib.types
+<pre><code class="language-toi">types = <span color="blue">import</span> lib.types
 
-short_name_t = types.String(max_len = 30, pattern = &quot;^[A-Z]&quot;)
-adult_t = types.Integer(min = 18, max = 120)
+short_name_t = types.String(max_len = <span color="yellow">30</span>, pattern = <span color="green">&quot;^[A-Z]&quot;</span>)
+adult_t = types.Integer(<span color="cyan">min</span> = <span color="yellow">18</span>, <span color="cyan">max</span> = <span color="yellow">120</span>)
 
 profile_t = types.Record({
-  name = types.String(default = &quot;Anonymous&quot;),
-  age = types.Integer(default = 18)
+  name = types.String(default = <span color="green">&quot;Anonymous&quot;</span>),
+  age = types.Integer(default = <span color="yellow">18</span>)
 })</code></pre>
 <p>When a record field is missing, <code>Record.check(...)</code> applies the field&#39;s <code>default</code> (value or function) before validation.</p>
 <p>See <code>tests/20_toi_libs.toi</code> and <code>tests/70_types_options_defaults.toi</code> for detailed usage.</p>
@@ -191,20 +207,20 @@ profile_t = types.Record({
 </li>
 </ul>
 <p>HTTPS example:</p>
-<pre><code class="language-toi">http_server = import lib.http_server
+<pre><code class="language-toi">http_server = <span color="blue">import</span> lib.http_server
 
 app = http_server(
-  host = &quot;127.0.0.1&quot;,
-  port = 8443,
-  ssl = true,
-  ssl_cert = &quot;tests/fixtures/tls/server.crt&quot;,
-  ssl_key = &quot;tests/fixtures/tls/server.key&quot;
+  host = <span color="green">&quot;127.0.0.1&quot;</span>,
+  port = <span color="yellow">8443</span>,
+  ssl = <span color="blue">true</span>,
+  ssl_cert = <span color="green">&quot;tests/fixtures/tls/server.crt&quot;</span>,
+  ssl_key = <span color="green">&quot;tests/fixtures/tls/server.key&quot;</span>
 )
 
 get = app.get
-@get(&quot;/&quot;)
-fn root(req)
-  return &quot;ok over tls&quot;
+@get(<span color="green">&quot;/&quot;</span>)
+<span color="blue">fn</span> root(req)
+  <span color="blue">return</span> <span color="green">&quot;ok over tls&quot;</span>
 
 app.run()</code></pre>
 <p>Notes:</p>
@@ -227,7 +243,7 @@ app.run()</code></pre>
 </li>
 </ul>
 <p>Example:</p>
-<pre><code class="language-bash">./toi lib/loadtest.toi rps http://127.0.0.1:8080/ 10 20 2000 false</code></pre>
+<pre><code class="language-bash">./toi lib/loadtest.toi rps http:<span color="magenta">//</span><span color="yellow">127.0.0.1</span>:<span color="yellow">8080</span>/ <span color="yellow">10</span> <span color="yellow">20</span> <span color="yellow">2000</span> <span color="blue">false</span></code></pre>
 <p>Behavior notes:</p>
 <ul>
 <li>Uses plain TCP for <code>http://</code> and <code>socket.tls(...)</code> for <code>https://</code>.
@@ -236,4 +252,6 @@ app.run()</code></pre>
 </li>
 <li>Uses <code>thread</code> workers when available; otherwise falls back to concurrency <code>1</code>.
 </li>
-</ul></main></div></body></html>
+</ul></main>
+</body>
+</html>

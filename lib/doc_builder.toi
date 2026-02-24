@@ -1,0 +1,231 @@
+io = import io
+os = import os
+path = import path
+string = import string
+table = import table
+
+template = import template
+markdown = import markdown
+
+DEFAULT_SRC_ROOT = "docs"
+DEFAULT_OUT_ROOT = "site"
+DEFAULT_ASSETS_ROOT = "lib/doc_builder_assets"
+DEFAULT_TEMPLATE_FILE = "base.toi.tpl"
+DEFAULT_CSS_FILE = "docs.css"
+DEFAULT_LOGO_SOURCE = "logo.svg"
+DEFAULT_LOGO_FILE = "logo.svg"
+DEFAULT_FAVICON_FILE = "favicon.svg"
+
+fn die(msg)
+  error(f"doc_builder: {msg}")
+
+fn read_file(file_path)
+  f = io.open(file_path, "r")
+  if not f
+    die(f"open failed for '{file_path}'")
+
+  data = f.read()
+  f.close()
+  return data or ""
+
+fn write_file(file_path, content)
+  parent = path.dirname(file_path)
+  if parent != ""
+    local ok, err = os.mkdir(parent, true)
+    if ok != true
+      die(f"mkdir failed for '{parent}': {err}")
+
+  f = io.open(file_path, "w")
+  if not f
+    die(f"open failed for '{file_path}'")
+
+  f.write(content)
+  f.close()
+
+fn html_escape(s)
+  return string.escape_html(str(s))
+
+fn relative_link(from_dir, to_path)
+  from_parts = path.split(from_dir)
+  up = ""
+  for _ in from_parts
+    up = f"{up}../"
+  return f"{up}{to_path}"
+
+fn extract_title(md, fallback)
+  lines = md.split("\n")
+  for line in lines
+    t = (line or "").trim()
+    if t.starts_with("# ")
+      return t.sub(3).trim()
+  return fallback
+
+fn walk_markdown(root, rel, out)
+  dir_path = rel == "" ? root : path.join(root, rel)
+
+  local names, err = os.listdir(dir_path)
+  if names == nil
+    die(f"listdir failed for '{dir_path}': {err}")
+
+  table.sort(names)
+  for name in names
+    child_rel = rel == "" ? name : (rel + "/" + name)
+    full = path.join(root, child_rel)
+    if os.isdir(full)
+      walk_markdown(root, child_rel, out)
+      continue
+    if name.ends_with(".md")
+      out <+ child_rel
+
+fn nav_html(pages, current_html)
+  cur_dir = path.dirname(current_html)
+  items = {}
+  root_pages = {}
+  group_pages = {}
+  group_names = {}
+
+  for p in pages
+    parts = path.split(p.rel_html)
+    if #parts <= 1
+      root_pages <+ p
+      continue
+
+    group = parts[1]
+    if group_pages[group] == nil
+      group_pages[group] = {}
+      group_names <+ group
+    group_pages[group] <+ p
+
+  for p in root_pages
+    href = relative_link(cur_dir, p.rel_html)
+    cls = p.rel_html == current_html ? " class=\"active\"" : ""
+    items <+ f"<li{cls}><a href=\"{html_escape(href)}\">{html_escape(p.title)}</a></li>"
+
+  table.sort(group_names)
+  for group in group_names
+    group_label = group
+    if group == "stdlib"
+      group_label = "Standard Library"
+    elif group == "language"
+      group_label = "Language"
+
+    sub_items = {}
+    for p in group_pages[group]
+      href = relative_link(cur_dir, p.rel_html)
+      cls = p.rel_html == current_html ? " class=\"active\"" : ""
+      sub_items <+ f"<li{cls}><a href=\"{html_escape(href)}\">{html_escape(p.title)}</a></li>"
+
+    is_open = current_html.starts_with(group + "/")
+    open_attr = is_open ? " open" : ""
+    group_cls = is_open ? " class=\"nav-group active\"" : " class=\"nav-group\""
+    subnav = "<ul class=\"subnav\">" + table.concat(sub_items, "") + "</ul>"
+    details = f"<details{group_cls}{open_attr}><summary>{html_escape(group_label)}</summary>{subnav}</details>"
+    items <+ f"<li class=\"nav-collapsible\">{details}</li>"
+
+  nav_items = table.concat(items, "")
+  return "<ul class=\"nav\">" + nav_items + "</ul>"
+
+fn page_from_md(src_root, rel_md)
+  src_path = path.join(src_root, rel_md)
+  md = read_file(src_path)
+  rel_html = rel_md.ends_with(".md") ? f"{rel_md.sub(1, #rel_md - 3)}.html" : f"{rel_md}.html"
+  base = path.basename(rel_md)
+  fallback = base.ends_with(".md") ? base.sub(1, #base - 3) : base
+  return {
+    rel_md = rel_md,
+    rel_html = rel_html,
+    title = extract_title(md, fallback),
+    body = markdown.to_html(md)
+  }
+
+fn collect_pages(src_root, md_paths)
+  pages = {}
+  for rel_md in md_paths
+    pages <+ page_from_md(src_root, rel_md)
+  table.sort(pages, fn(a, b) return a.rel_html < b.rel_html)
+  return pages
+
+fn render_page(tmpl_src, title, nav, body, css_href, logo_href, home_href, favicon_href)
+  return template.render(tmpl_src, {
+    title = html_escape(title),
+    css_href = html_escape(css_href),
+    logo_href = html_escape(logo_href),
+    home_href = html_escape(home_href),
+    favicon_href = html_escape(favicon_href),
+    nav_html = nav,
+    body_html = body,
+  })
+
+fn build_with_opts(opts)
+  if opts == nil
+    opts = {}
+
+  src_root = opts.src_root or DEFAULT_SRC_ROOT
+  out_root = opts.out_root or DEFAULT_OUT_ROOT
+  assets_root = opts.assets_root or DEFAULT_ASSETS_ROOT
+
+  if not os.isdir(src_root)
+    die(f"missing docs directory: {src_root}")
+
+  if os.exists(out_root)
+    os.system(f"rm -rf {out_root}")
+
+  local ok, err = os.mkdir(out_root, true)
+  if ok != true
+    die(f"mkdir failed for '{out_root}': {err}")
+
+  template_path = path.join(assets_root, DEFAULT_TEMPLATE_FILE)
+  css_path = path.join(assets_root, DEFAULT_CSS_FILE)
+  logo_src_path = opts.logo_src or DEFAULT_LOGO_SOURCE
+  logo_file = opts.logo_file or DEFAULT_LOGO_FILE
+  favicon_src_path = opts.favicon_src or logo_src_path
+  favicon_file = opts.favicon_file or DEFAULT_FAVICON_FILE
+  template_src = read_file(template_path)
+  css_src = read_file(css_path)
+  logo_src = read_file(logo_src_path)
+  favicon_src = read_file(favicon_src_path)
+
+  write_file(path.join(out_root, DEFAULT_CSS_FILE), css_src)
+  write_file(path.join(out_root, logo_file), logo_src)
+  if favicon_file != logo_file or favicon_src_path != logo_src_path
+    write_file(path.join(out_root, favicon_file), favicon_src)
+
+  md_paths = {}
+  walk_markdown(src_root, "", md_paths)
+  pages = collect_pages(src_root, md_paths)
+
+  index_html = nil
+  for p in pages
+    nav = nav_html(pages, p.rel_html)
+    page_dir = path.dirname(p.rel_html)
+    css_href = relative_link(page_dir, DEFAULT_CSS_FILE)
+    logo_href = relative_link(page_dir, logo_file)
+    home_href = relative_link(page_dir, "README.html")
+    favicon_href = relative_link(page_dir, favicon_file)
+    full = render_page(template_src, p.title, nav, p.body, css_href, logo_href, home_href, favicon_href)
+    write_file(path.join(out_root, p.rel_html), full)
+    if p.rel_html == "README.html"
+      index_html = full
+
+  if index_html == nil and #pages > 0
+    first = pages[1]
+    nav = nav_html(pages, first.rel_html)
+    page_dir = path.dirname(first.rel_html)
+    css_href = relative_link(page_dir, DEFAULT_CSS_FILE)
+    logo_href = relative_link(page_dir, logo_file)
+    home_href = relative_link(page_dir, "README.html")
+    favicon_href = relative_link(page_dir, favicon_file)
+    index_html = render_page(template_src, first.title, nav, first.body, css_href, logo_href, home_href, favicon_href)
+
+  if index_html != nil
+    write_file(path.join(out_root, "index.html"), index_html)
+
+  print(f"docs built: {#pages} pages -> {out_root}")
+
+fn build()
+  build_with_opts({})
+
+return {
+  build = build,
+  build_with_opts = build_with_opts,
+}

@@ -274,6 +274,30 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
             maybe_collect_garbage(vm);
             return 1;
         }
+    } else if (IS_CLOSURE(table)) {
+        if (IS_STRING(key)) {
+            ObjString* key_str = AS_STRING(key);
+            ObjFunction* fn = AS_CLOSURE(table)->function;
+            if (key_str->length == 5 && memcmp(key_str->chars, "__doc", 5) == 0 && fn->doc != NULL) {
+                result = OBJ_VAL(fn->doc);
+            } else {
+                result = NIL_VAL;
+            }
+        } else {
+            result = NIL_VAL;
+        }
+    } else if (IS_BOUND_METHOD(table)) {
+        if (IS_STRING(key)) {
+            ObjString* key_str = AS_STRING(key);
+            ObjBoundMethod* bound = AS_BOUND_METHOD(table);
+            if (key_str->length == 5 && memcmp(key_str->chars, "__doc", 5) == 0 &&
+                bound->method->type == OBJ_CLOSURE) {
+                ObjFunction* fn = ((ObjClosure*)bound->method)->function;
+                if (fn->doc != NULL) {
+                    result = OBJ_VAL(fn->doc);
+                }
+            }
+        }
     } else {
         if (IS_OBJ(table)) {
             printf("DEBUG: Attempt to index non-table object type: %d\n", OBJ_TYPE(table));

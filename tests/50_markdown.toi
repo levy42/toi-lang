@@ -13,9 +13,10 @@ print("x < y")
 ]]
 
 html2 = markdown.to_html(md2)
-expected2 = [[<p>Paragraph with &lt;tag&gt; &amp; symbols.</p>
-<pre><code class="language-toi">print(&quot;x &lt; y&quot;)</code></pre>]]
-assert_eq(html2, expected2)
+assert_true(html2 has "<p>Paragraph with &lt;tag&gt; &amp; symbols.</p>")
+assert_true(html2 has "<pre><code class=\"language-toi\">")
+assert_true(html2 has "<span color=\"cyan\">print</span>")
+assert_true(html2 has "<span color=\"green\">&quot;x &lt; y&quot;</span>")
 
 md3 = [[```
 a < b && c > d

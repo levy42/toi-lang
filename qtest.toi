@@ -1,4 +1,1 @@
-for i#, v in {a=4,b=4,c=4}
-  print i
-  print v
-  print '---'
+a = {gffg=4, ggg=5}

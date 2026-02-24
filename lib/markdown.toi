@@ -1,6 +1,12 @@
 string = import string
 table = import table
 
+pigment = nil
+try
+  pigment = import cli.pigment
+except e
+  pigment = nil
+
 fn append_escaped_char(out, ch)
   out <+ string.escape_html(ch)
 
@@ -140,7 +146,10 @@ fn flush_code_block(out, code_lines, code_lang)
   normalized_lines = {}
   for line in code_lines
     normalized_lines <+ str(line)
-  local code = string.escape_html(table.concat(normalized_lines, "\n"))
+  raw_code = table.concat(normalized_lines, "\n")
+  local code = string.escape_html(raw_code)
+  if pigment and code_lang and #code_lang > 0
+    code = pigment.highlight(raw_code, code_lang)
   out <+ f"<pre><code{class_attr}>{code}</code></pre>"
   clear(code_lines)
 

@@ -65,6 +65,7 @@ ObjFunction* new_function() {
     function->arity = 0;
     function->upvalue_count = 0;
     function->name = NULL;
+    function->doc = NULL;
     function->defaults = NULL;
     function->defaults_count = 0;
     function->is_variadic = 0;
@@ -360,6 +361,7 @@ void mark_object(struct Obj* object) {
     } else if (object->type == OBJ_FUNCTION) {
         ObjFunction* function = (ObjFunction*)object;
         mark_object((struct Obj*)function->name);
+        mark_object((struct Obj*)function->doc);
         // Mark constants in chunk
         for (int i = 0; i < function->chunk.constants.count; i++) {
             mark_value(function->chunk.constants.values[i]);

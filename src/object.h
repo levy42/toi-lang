@@ -123,6 +123,7 @@ typedef struct {
     int upvalue_count;
     Chunk chunk;
     ObjString* name;
+    ObjString* doc;
     Value* defaults;
     int defaults_count;
     int is_variadic;

@@ -308,6 +308,56 @@ static double parse_number_token(Token token) {
     return value;
 }
 
+static ObjString* string_from_token(Token token) {
+    // Multiline string [[...]]: raw content.
+    if (token.length >= 4 && token.start[0] == '[' && token.start[1] == '[') {
+        const char* src = token.start + 2;
+        int raw_len = token.length - 4;
+        return copy_string(src, raw_len);
+    }
+
+    // Quoted string ("..." or '...'): decode escapes.
+    char quote = token.start[0];
+    const char* src = token.start + 1;
+    int raw_len = token.length - 2;
+    char* buf = (char*)malloc((size_t)raw_len + 1);
+    int w = 0;
+    for (int i = 0; i < raw_len; i++) {
+        char c = src[i];
+        if (c == '\\' && i + 1 < raw_len) {
+            char e = src[++i];
+            switch (e) {
+                case 'n': buf[w++] = '\n'; break;
+                case 't': buf[w++] = '\t'; break;
+                case 'r': buf[w++] = '\r'; break;
+                case '\'': buf[w++] = '\''; break;
+                case '"': buf[w++] = '"'; break;
+                case '\\': buf[w++] = '\\'; break;
+                default:
+                    buf[w++] = '\\';
+                    buf[w++] = e;
+                    break;
+            }
+        } else {
+            if (c == quote) continue;
+            buf[w++] = c;
+        }
+    }
+    ObjString* s = copy_string(buf, w);
+    free(buf);
+    return s;
+}
+
+static void maybe_capture_function_docstring(void) {
+    if (!check(TOKEN_STRING)) return;
+    Token first = parser.current;
+    Lexer peek = lexer;
+    Token next = scan_token(&peek);
+    if (!(next.type == TOKEN_DEDENT || next.type == TOKEN_EOF || next.line > first.line)) return;
+    advance();
+    current->function->doc = string_from_token(parser.previous);
+}
+
 static int token_is_int(Token token) {
     for (int i = 0; i < token.length; i++) {
         char c = token.start[i];
@@ -325,52 +375,7 @@ static void number(int can_assign) {
 
 static void string(int can_assign) {
     (void)can_assign;
-
-    // Check if this is a multiline string [[...]]
-    if (parser.previous.length >= 4 &&
-        parser.previous.start[0] == '[' &&
-        parser.previous.start[1] == '[') {
-        // Multiline string - no escape sequences, just copy content
-        const char* src = parser.previous.start + 2;  // Skip [[
-        int raw_len = parser.previous.length - 4;      // Exclude [[ and ]]
-    ObjString* s = copy_string(src, raw_len);
-    emit_constant(OBJ_VAL(s));
-    type_push(TYPEHINT_STR);
-    return;
-    }
-
-    // Regular quoted string ("..." or '...') - process escape sequences
-    char quote = parser.previous.start[0];
-    const char* src = parser.previous.start + 1;
-    int raw_len = parser.previous.length - 2;
-    char* buf = (char*)malloc(raw_len + 1); // max size (shrinks after escapes)
-    int w = 0;
-    for (int i = 0; i < raw_len; i++) {
-        char c = src[i];
-        if (c == '\\' && i + 1 < raw_len) {
-            char e = src[++i];
-            switch (e) {
-                case 'n': buf[w++] = '\n'; break;
-                case 't': buf[w++] = '\t'; break;
-                case 'r': buf[w++] = '\r'; break;
-                case '\'': buf[w++] = '\''; break;
-                case '"': buf[w++] = '"'; break;
-                case '\\': buf[w++] = '\\'; break;
-                default: // unknown escape, keep as-is
-                    buf[w++] = '\\';
-                    buf[w++] = e;
-                    break;
-            }
-        } else {
-            if (c == quote) {
-                // Should not occur (lexer terminates on unescaped quote), but keep safe.
-                continue;
-            }
-            buf[w++] = c;
-        }
-    }
-    ObjString* s = copy_string(buf, w);
-    free(buf);
+    ObjString* s = string_from_token(parser.previous);
     emit_constant(OBJ_VAL(s));
     type_push(TYPEHINT_STR);
 }
@@ -2007,7 +2012,7 @@ static void function_body(FunctionType type) {
                     current->function->defaults = (Value*)realloc(current->function->defaults, sizeof(Value) * current->function->defaults_count);
                     current->function->defaults[current->function->defaults_count - 1] = NUMBER_VAL(num);
                 } else if (match(TOKEN_STRING)) {
-                    ObjString* str = copy_string(parser.previous.start + 1, parser.previous.length - 2);
+                    ObjString* str = string_from_token(parser.previous);
                     current->function->defaults_count++;
                     current->function->defaults = (Value*)realloc(current->function->defaults, sizeof(Value) * current->function->defaults_count);
                     current->function->defaults[current->function->defaults_count - 1] = OBJ_VAL(str);
@@ -2043,6 +2048,7 @@ static void function_body(FunctionType type) {
     int header_line = parser.previous.line;
     
     if (match(TOKEN_INDENT)) {
+        maybe_capture_function_docstring();
         block();
         match(TOKEN_DEDENT);
     } else {
@@ -2055,6 +2061,7 @@ static void function_body(FunctionType type) {
             if (body_indent <= header_indent) {
                 error("Expected indented block for function body.");
             } else {
+                maybe_capture_function_docstring();
                 while (!check(TOKEN_EOF) &&
                        !check(TOKEN_RIGHT_BRACE) &&
                        parser.current.line > header_line &&
@@ -2063,7 +2070,10 @@ static void function_body(FunctionType type) {
                 }
             }
         } else {
-            statement();
+            maybe_capture_function_docstring();
+            if (!check(TOKEN_EOF) && !check(TOKEN_DEDENT) && !check(TOKEN_RIGHT_BRACE)) {
+                statement();
+            }
         }
     }
     
