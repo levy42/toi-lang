@@ -1,0 +1,12 @@
+from lib.test import assert_eq
+
+global gx = "global"
+
+fn f()
+  gx = gx or "local"
+  return gx
+
+assert_eq(f(), "local")
+assert_eq(gx, "global")
+
+print "forward local assignment ok"

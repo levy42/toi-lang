@@ -216,6 +216,7 @@ static void init_compiler(Compiler* compiler, FunctionType type) {
     compiler->type = type;
 
     compiler->local_count = 0;
+    compiler->explicit_global_count = 0;
     compiler->upvalue_count = 0;
     compiler->scope_depth = 0;
     compiler->loop_context = NULL;
@@ -393,9 +394,17 @@ static void literal(int can_assign) {
 // Forward declarations for fstring
 void expression(void);
 int emit_simple_fstring_expr(const char* expr_start, int expr_len);
+static int is_generator_comprehension_start(int start_line);
+static void generator_comprehension(int can_assign);
 
 static void grouping(int can_assign) {
     (void)can_assign;
+    if (parser.current.type != TOKEN_LEFT_PAREN &&
+        is_generator_comprehension_start(parser.previous.line)) {
+        generator_comprehension(can_assign);
+        consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
+        return;
+    }
     expression();
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
 }
@@ -545,6 +554,27 @@ int resolve_local(Compiler* compiler, Token* name) {
         }
     }
     return -1;
+}
+
+int is_explicit_global_name(Compiler* compiler, Token* name) {
+    for (int i = 0; i < compiler->explicit_global_count; i++) {
+        Token* declared = &compiler->explicit_globals[i];
+        if (name->length == declared->length &&
+            memcmp(name->start, declared->start, name->length) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void register_explicit_global(Token name) {
+    if (current == NULL || current->type == TYPE_SCRIPT) return;
+    if (is_explicit_global_name(current, &name)) return;
+    if (current->explicit_global_count == UINT8_MAX + 1) {
+        error("Too many global declarations in function.");
+        return;
+    }
+    current->explicit_globals[current->explicit_global_count++] = name;
 }
 
 static int add_upvalue(Compiler* compiler, uint8_t index, int is_local) {
@@ -808,11 +838,12 @@ static void parse_array_literal_from_comma_list(void);
 
 void named_variable(Token name, int can_assign) {
     uint8_t get_op, set_op;
+    int declared_global = is_explicit_global_name(current, &name);
     int arg = resolve_local(current, &name);
     if (arg != -1) {
         get_op = OP_GET_LOCAL;
         set_op = OP_SET_LOCAL;
-    } else if ((arg = resolve_upvalue(current, &name)) != -1) {
+    } else if (!declared_global && (arg = resolve_upvalue(current, &name)) != -1) {
         get_op = OP_GET_UPVALUE;
         set_op = OP_SET_UPVALUE;
     } else {
@@ -823,6 +854,23 @@ void named_variable(Token name, int can_assign) {
 
     if (can_assign && (match(TOKEN_EQUALS) || match(TOKEN_WALRUS))) {
         TokenType assign_tok = parser.previous.type;
+        int predeclared_local = 0;
+        int predeclared_local_index = -1;
+        if (current->type == TYPE_FUNCTION &&
+            !declared_global &&
+            set_op == OP_SET_GLOBAL &&
+            assign_tok == TOKEN_EQUALS) {
+            predeclared_local_index = current->local_count;
+            add_local(name);
+            mark_initialized();
+            emit_byte(OP_NIL);
+            emit_bytes(OP_SET_LOCAL, (uint8_t)predeclared_local_index);
+            emit_byte(OP_POP);
+            get_op = OP_GET_LOCAL;
+            set_op = OP_SET_LOCAL;
+            arg = predeclared_local_index;
+            predeclared_local = 1;
+        }
         int start_line = parser.current.line;
         if (assign_tok == TOKEN_EQUALS && rhs_has_top_level_comma(start_line)) {
             parse_array_literal_from_comma_list();
@@ -830,8 +878,23 @@ void named_variable(Token name, int can_assign) {
             expression();
         }
         uint8_t rhs_type = type_pop();
-        if (assign_tok == TOKEN_WALRUS && set_op == OP_SET_GLOBAL) {
-            emit_bytes(OP_SET_GLOBAL, (uint8_t)arg);
+
+        if (declared_global) {
+            emit_bytes(OP_SET_GLOBAL, identifier_constant(&name));
+        } else if (set_op == OP_SET_LOCAL) {
+            emit_bytes(OP_SET_LOCAL, (uint8_t)arg);
+            update_local_type(arg, rhs_type);
+        } else if (set_op == OP_SET_UPVALUE) {
+            emit_bytes(OP_SET_UPVALUE, (uint8_t)arg);
+        } else if (current->type == TYPE_FUNCTION && !predeclared_local) {
+            // Python-like function scoping: assignment binds local unless explicit global.
+            int local_index = current->local_count;
+            add_local(name);
+            mark_initialized();
+            emit_bytes(OP_SET_LOCAL, (uint8_t)local_index);
+            set_local_type(local_index, rhs_type);
+        } else if (assign_tok == TOKEN_WALRUS && set_op == OP_SET_GLOBAL) {
+            emit_bytes(OP_SET_GLOBAL, identifier_constant(&name));
         } else {
             emit_assignment_store(name, get_op, set_op, arg, rhs_type);
         }
@@ -843,16 +906,43 @@ void named_variable(Token name, int can_assign) {
         TokenType compound_op;
         if (match_compound_assign(&compound_op)) {
             uint8_t lhs_type = TYPEHINT_ANY;
-            emit_bytes(get_op, (uint8_t)arg);
-            if (get_op == OP_GET_LOCAL && arg >= 0 && arg < current->local_count) {
-                lhs_type = current->locals[arg].type;
+            if (declared_global) {
+                emit_bytes(OP_GET_GLOBAL, identifier_constant(&name));
+            } else if (get_op == OP_GET_LOCAL) {
+                emit_bytes(OP_GET_LOCAL, (uint8_t)arg);
+                if (arg >= 0 && arg < current->local_count) {
+                    lhs_type = current->locals[arg].type;
+                }
+            } else if (get_op == OP_GET_UPVALUE) {
+                emit_bytes(OP_GET_UPVALUE, (uint8_t)arg);
+            } else if (current->type == TYPE_FUNCTION) {
+                // x += y in a function implicitly targets a local.
+                // If not previously assigned, this behaves like an unbound local.
+                emit_byte(OP_NIL);
+            } else {
+                emit_bytes(get_op, (uint8_t)arg);
             }
             type_push(lhs_type);
             expression();
             uint8_t rhs_type = type_pop();
             uint8_t lhs_popped = type_pop();
             uint8_t out_type = emit_compound_op(compound_op, lhs_popped, rhs_type);
-            emit_assignment_store(name, get_op, set_op, arg, out_type);
+            if (declared_global) {
+                emit_bytes(OP_SET_GLOBAL, identifier_constant(&name));
+            } else if (set_op == OP_SET_LOCAL) {
+                emit_bytes(OP_SET_LOCAL, (uint8_t)arg);
+                update_local_type(arg, out_type);
+            } else if (set_op == OP_SET_UPVALUE) {
+                emit_bytes(OP_SET_UPVALUE, (uint8_t)arg);
+            } else if (current->type == TYPE_FUNCTION) {
+                int local_index = current->local_count;
+                add_local(name);
+                mark_initialized();
+                emit_bytes(OP_SET_LOCAL, (uint8_t)local_index);
+                set_local_type(local_index, out_type);
+            } else {
+                emit_assignment_store(name, get_op, set_op, arg, out_type);
+            }
             type_push(out_type);
             return;
         }
@@ -1085,9 +1175,11 @@ static void subscript(int can_assign) {
 static void parse_table_entries();
 static void table(int can_assign);
 static int is_table_comprehension_start(int start_line);
+static int is_generator_comprehension_start(int start_line);
 static void table_comprehension(int can_assign);
+static void generator_comprehension(int can_assign);
 static void compile_expression_from_string(const char* src_start, size_t src_len);
-static int find_comprehension_for(const char** for_start);
+static int find_comprehension_for_until(TokenType end_token, const char** for_start);
 static const char* find_comprehension_assign(const char* expr_start, const char* expr_end);
 static int is_implicit_table_separator(void);
 
@@ -1354,20 +1446,34 @@ static void compile_expression_from_string(const char* src_start, size_t src_len
     type_stack_top = saved_type_top;
 }
 
-static int find_comprehension_for(const char** for_start) {
+static int find_comprehension_for_until(TokenType end_token, const char** for_start) {
     Lexer peek = lexer;
     int paren = 0, bracket = 0, brace = 0;
     for (;;) {
         Token tok = scan_token(&peek);
         switch (tok.type) {
             case TOKEN_LEFT_PAREN: paren++; break;
-            case TOKEN_RIGHT_PAREN: if (paren > 0) paren--; break;
             case TOKEN_LEFT_BRACKET: bracket++; break;
             case TOKEN_RIGHT_BRACKET: if (bracket > 0) bracket--; break;
             case TOKEN_LEFT_BRACE: brace++; break;
+            case TOKEN_RIGHT_PAREN:
+                if (paren > 0) {
+                    paren--;
+                    break;
+                }
+                if (end_token == TOKEN_RIGHT_PAREN && bracket == 0 && brace == 0) {
+                    return 0;
+                }
+                break;
             case TOKEN_RIGHT_BRACE:
-                if (brace > 0) { brace--; break; }
-                return 0;
+                if (brace > 0) {
+                    brace--;
+                    break;
+                }
+                if (end_token == TOKEN_RIGHT_BRACE && paren == 0 && bracket == 0) {
+                    return 0;
+                }
+                break;
             case TOKEN_FOR:
                 if (paren == 0 && bracket == 0 && brace == 0) {
                     *for_start = tok.start;
@@ -1564,12 +1670,242 @@ static int is_table_comprehension_start(int start_line) {
     }
 }
 
+static int is_generator_comprehension_start(int start_line) {
+    Lexer peek = lexer;
+    int paren = 0, bracket = 0, brace = 0;
+    for (;;) {
+        Token tok = scan_token(&peek);
+        if (tok.line > start_line && paren == 0 && bracket == 0 && brace == 0) {
+            return 0;
+        }
+        switch (tok.type) {
+            case TOKEN_LEFT_PAREN: paren++; break;
+            case TOKEN_RIGHT_PAREN:
+                if (paren == 0 && bracket == 0 && brace == 0) return 0;
+                if (paren > 0) paren--;
+                break;
+            case TOKEN_LEFT_BRACKET: bracket++; break;
+            case TOKEN_RIGHT_BRACKET: if (bracket > 0) bracket--; break;
+            case TOKEN_LEFT_BRACE: brace++; break;
+            case TOKEN_RIGHT_BRACE: if (brace > 0) brace--; break;
+            case TOKEN_FOR:
+                if (paren == 0 && bracket == 0 && brace == 0) return 1;
+                break;
+            case TOKEN_EOF:
+                return 0;
+            default:
+                break;
+        }
+    }
+}
+
+static void generator_comprehension(int can_assign) {
+    (void)can_assign;
+
+    const char* expr_start = parser.current.start;
+    const char* for_start = NULL;
+    if (!find_comprehension_for_until(TOKEN_RIGHT_PAREN, &for_start)) {
+        error("Expected generator comprehension 'expr for ...'.");
+        return;
+    }
+    size_t expr_len = (size_t)(for_start - expr_start);
+
+    while (!(parser.current.type == TOKEN_FOR && parser.current.start == for_start)) {
+        if (parser.current.type == TOKEN_EOF) {
+            error("Expected 'for' in generator comprehension.");
+            return;
+        }
+        advance();
+    }
+
+    Compiler compiler;
+    Compiler* enclosing = current;
+    init_compiler(&compiler, TYPE_FUNCTION);
+    begin_scope();
+    current->function->is_generator = 1;
+
+    consume(TOKEN_FOR, "Expect 'for' in generator comprehension.");
+
+    consume(TOKEN_IDENTIFIER, "Expect variable name.");
+    Token name = parser.previous;
+    int has_index_sigil = 0;
+    if (check(TOKEN_HASH)) {
+        const char* expected = name.start + name.length;
+        if (parser.current.start == expected) {
+            advance();
+            has_index_sigil = 1;
+        } else {
+            error_at_current("Whitespace is not allowed before '#'.");
+            advance();
+            has_index_sigil = 1;
+        }
+    }
+
+    Token loop_vars[2];
+    int var_count = 1;
+    loop_vars[0] = name;
+
+    if (match(TOKEN_COMMA)) {
+        consume(TOKEN_IDENTIFIER, "Expect second variable name.");
+        loop_vars[var_count++] = parser.previous;
+    }
+
+    consume(TOKEN_IN, "Expect 'in'.");
+
+    int expr_count = 0;
+    int is_range_expr = 0;
+    int eligible_for_range = (var_count == 1 && !has_index_sigil);
+    in_for_range_header = eligible_for_range;
+    expression();
+    in_for_range_header = 0;
+    expr_count = 1;
+    is_range_expr = eligible_for_range && last_expr_was_range;
+
+    if (is_range_expr && check(TOKEN_COMMA)) {
+        error("Range expression cannot be used with multiple iterator expressions.");
+        return;
+    }
+    if (is_range_expr) {
+        emit_byte(OP_RANGE);
+    }
+
+    while (match(TOKEN_COMMA) && expr_count < 3) {
+        expression();
+        expr_count++;
+    }
+
+    if (expr_count == 1 && !is_range_expr) {
+        Token iterable_token = {TOKEN_IDENTIFIER, "(iterable)", 10, parser.previous.line};
+        add_local(iterable_token);
+        mark_initialized();
+        int iterable_slot = current->local_count - 1;
+        emit_bytes(OP_GET_LOCAL, (uint8_t)iterable_slot);
+    }
+
+    if (is_range_expr) {
+        // OP_RANGE already produced iter/state/control.
+    } else if (expr_count > 1) {
+        while (expr_count < 3) {
+            emit_byte(OP_NIL);
+            expr_count++;
+        }
+    } else {
+        if (has_index_sigil) {
+            emit_byte(OP_ITER_PREP_IPAIRS);
+        } else {
+            emit_byte(OP_ITER_PREP);
+        }
+    }
+
+    if (has_index_sigil && expr_count > 1) {
+        error("Index loop syntax 'i#' only works with implicit table iteration.");
+    }
+
+    if (var_count == 1 && !has_index_sigil) {
+        Token key_token = {TOKEN_IDENTIFIER, "(key)", 5, parser.previous.line};
+        loop_vars[1] = loop_vars[0];
+        loop_vars[0] = key_token;
+        var_count = 2;
+    }
+
+    Token iter_token = {TOKEN_IDENTIFIER, "(iter)", 6, parser.previous.line};
+    Token state_token = {TOKEN_IDENTIFIER, "(state)", 7, parser.previous.line};
+    Token control_token = {TOKEN_IDENTIFIER, "(control)", 9, parser.previous.line};
+
+    int iter_slot = current->local_count;
+    add_local(iter_token);
+    int state_slot = current->local_count;
+    add_local(state_token);
+    int control_slot = current->local_count;
+    add_local(control_token);
+    mark_initialized_count(3);
+
+    int loop_start = current_chunk()->count;
+
+    emit_bytes(OP_GET_LOCAL, (uint8_t)iter_slot);
+    emit_bytes(OP_GET_LOCAL, (uint8_t)state_slot);
+    emit_bytes(OP_GET_LOCAL, (uint8_t)control_slot);
+    emit_call(2);
+
+    for (int i = var_count; i < 2; i++) {
+        emit_byte(OP_POP);
+    }
+
+    for (int i = 0; i < var_count; i++) {
+        add_local(loop_vars[i]);
+    }
+    mark_initialized_count(var_count);
+
+    emit_bytes(OP_GET_LOCAL, (uint8_t)(current->local_count - var_count));
+    emit_byte(OP_NIL);
+    emit_byte(OP_EQUAL);
+    int exit_jump = emit_jump(OP_JUMP_IF_TRUE);
+    emit_byte(OP_POP);
+
+    emit_bytes(OP_GET_LOCAL, (uint8_t)(current->local_count - var_count));
+    emit_bytes(OP_SET_LOCAL, (uint8_t)(current->local_count - var_count - 1));
+    emit_byte(OP_POP);
+
+    int has_if = 0;
+    int skip_jump = -1;
+    int end_jump = -1;
+    if (match(TOKEN_IF)) {
+        has_if = 1;
+        expression();
+        skip_jump = emit_jump(OP_JUMP_IF_FALSE);
+        emit_byte(OP_POP);
+    }
+
+    ObjString* coroutine_module = copy_string("coroutine", 9);
+    Token yield_token = {TOKEN_IDENTIFIER, "yield", 5, parser.previous.line};
+    emit_bytes(OP_IMPORT, make_constant(OBJ_VAL(coroutine_module)));
+    emit_bytes(OP_CONSTANT, identifier_constant(&yield_token));
+    emit_byte(OP_GET_TABLE);
+    compile_expression_from_string(expr_start, expr_len);
+    emit_call(1);
+
+    if (has_if) {
+        end_jump = emit_jump(OP_JUMP);
+        patch_jump(skip_jump);
+        emit_byte(OP_POP);
+        patch_jump(end_jump);
+    }
+
+    for (int i = 0; i < var_count; i++) {
+        if (current->locals[current->local_count - 1].is_captured) {
+            emit_byte(OP_CLOSE_UPVALUE);
+        } else {
+            emit_byte(OP_POP);
+        }
+        current->local_count--;
+    }
+
+    emit_loop(loop_start);
+
+    patch_jump(exit_jump);
+    for (int i = 0; i < var_count; i++) {
+        emit_byte(OP_POP);
+    }
+    emit_byte(OP_POP);
+
+    ObjFunction* function = end_compiler();
+    current = enclosing;
+    emit_bytes(OP_CLOSURE, make_constant(OBJ_VAL(function)));
+    for (int i = 0; i < compiler.upvalue_count; i++) {
+        emit_byte(compiler.upvalues[i].is_local ? 1 : 0);
+        emit_byte(compiler.upvalues[i].index);
+    }
+    emit_call(0);
+    type_push(TYPEHINT_ANY);
+    last_expr_ends_with_call = 1;
+}
+
 static void table_comprehension(int can_assign) {
     (void)can_assign;
 
     const char* expr_start = parser.current.start;
     const char* for_start = NULL;
-    if (!find_comprehension_for(&for_start)) {
+    if (!find_comprehension_for_until(TOKEN_RIGHT_BRACE, &for_start)) {
         error("Expected table comprehension 'expr for ...'.");
         return;
     }
@@ -1629,12 +1965,30 @@ static void table_comprehension(int can_assign) {
     consume(TOKEN_IN, "Expect 'in'.");
 
     int expr_count = 0;
-    do {
+    int is_range_expr = 0;
+    int eligible_for_range = (var_count == 1 && !has_index_sigil);
+    in_for_range_header = eligible_for_range;
+    expression();
+    in_for_range_header = 0;
+    expr_count = 1;
+    is_range_expr = eligible_for_range && last_expr_was_range;
+
+    if (is_range_expr && check(TOKEN_COMMA)) {
+        error("Range expression cannot be used with multiple iterator expressions.");
+        return;
+    }
+    if (is_range_expr) {
+        // In range-aware headers, `1..n` leaves start/end on stack.
+        // Convert that pair into iterator triplet for generic for-in path.
+        emit_byte(OP_RANGE);
+    }
+
+    while (match(TOKEN_COMMA) && expr_count < 3) {
         expression();
         expr_count++;
-    } while (match(TOKEN_COMMA) && expr_count < 3);
+    }
 
-    if (expr_count == 1) {
+    if (expr_count == 1 && !is_range_expr) {
         Token iterable_token = {TOKEN_IDENTIFIER, "(iterable)", 10, parser.previous.line};
         add_local(iterable_token);
         mark_initialized();
@@ -1642,7 +1996,9 @@ static void table_comprehension(int can_assign) {
         emit_bytes(OP_GET_LOCAL, (uint8_t)iterable_slot);
     }
 
-    if (expr_count > 1) {
+    if (is_range_expr) {
+        // Already have iterator triplet from OP_RANGE.
+    } else if (expr_count > 1) {
         while (expr_count < 3) {
             emit_byte(OP_NIL);
             expr_count++;
@@ -2039,6 +2395,7 @@ static void function_body(FunctionType type) {
         } while (match(TOKEN_COMMA));
     }
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+
     // Parameters are initialized at function entry.
     for (int i = 0; i < current->local_count; i++) {
         if (current->locals[i].depth == -1) {
@@ -2120,6 +2477,7 @@ void global_declaration(void) {
 
     do {
         consume(TOKEN_IDENTIFIER, "Expect variable name.");
+        register_explicit_global(parser.previous);
         globals[var_count] = identifier_constant(&parser.previous);
         var_count++;
         if (var_count > 255) {
@@ -2127,6 +2485,11 @@ void global_declaration(void) {
             return;
         }
     } while (match(TOKEN_COMMA));
+
+    if (current->type == TYPE_FUNCTION && !check(TOKEN_EQUALS)) {
+        // Python-like `global x` only declares binding intent for this function.
+        return;
+    }
 
     if (match(TOKEN_EQUALS)) {
         int expr_count = 0;
@@ -2297,6 +2660,15 @@ static void parse_call(int can_assign) {
                 }
                 if (has_spread_arg) {
                     error("Positional arguments cannot follow spread argument.");
+                }
+                if (arg_count == 0 && parser.current.type != TOKEN_LEFT_PAREN) {
+                    const char* for_start = NULL;
+                    if (find_comprehension_for_until(TOKEN_RIGHT_PAREN, &for_start)) {
+                        generator_comprehension(can_assign);
+                        type_pop();
+                        arg_count++;
+                        break;
+                    }
                 }
                 expression();
                 type_pop();
