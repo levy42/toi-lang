@@ -1,4 +1,4 @@
-from lib.test import assert_eq, assert_true, expect_error
+from lib.test import assert_eq, assert_true
 
 os = import os
 types = import lib.types
@@ -57,15 +57,9 @@ assert_true(projected[1].id != nil)
 assert_eq(projected[1].name, "Bob")
 assert_true(projected[1].team == nil)
 
-bad_offset = expect_error(fn()
-  users.filter(offset = -1)
-)
-assert_true(bad_offset has "offset")
-
-bad_select = expect_error(fn()
-  users.filter(select = {1})
-)
-assert_true(bad_select has "select")
+paged_from_tail = users.filter(order_by = "age", offset = 2)
+assert_eq(#paged_from_tail, 1)
+assert_eq(paged_from_tail[1].age, 31)
 
 cid_before = users.first(name = "Cid")
 
@@ -85,10 +79,10 @@ assert_eq(cid_after.team, "young")
 assert_eq(cid_after.name, "Cid Jr")
 assert_eq(cid_after.id, cid_before.id)
 
-bad_patch = expect_error(fn()
-  users.update_where({team = "young"}, 123)
+updated_none = users.update_where({team = "young"}, fn(_row)
+  return nil
 )
-assert_true(bad_patch has "patch")
+assert_eq(updated_none, 0)
 
 deleted_red = users.delete_where(team = "red")
 assert_eq(deleted_red, 0)

@@ -8,6 +8,7 @@ Type.__index = Type
 fn type_new(self, obj)
   if obj == nil obj = {}
   setmetatable(obj, self)
+  obj.__index = obj
   return obj
 
 Type.__new = type_new
@@ -17,7 +18,7 @@ fn at_path(path, msg)
   return "at " + path + ": " + msg
 
 fn fail(path, msg)
-  error(at_path(path, msg))
+  error(at_path(path, msg), "ValidationError")
 
 fn child_path(path, key)
   if path == nil path = "$"
@@ -29,12 +30,12 @@ fn wants_coerce(opts)
   return opts != nil and opts.coerce
 
 fn parse_bool(value)
-  if type(value) == "boolean" return true, value
-  if type(value) == "number"
+  if istype(value, 'boolean') return true, value
+  if istype(value, 'number')
     if value == 1 return true, true
     if value == 0 return true, false
     return false, nil
-  if type(value) == "string"
+  if istype(value, 'string')
     s = string_mod.lower(value)
     if s == "true" or s == "1" or s == "yes" return true, true
     if s == "false" or s == "0" or s == "no" return true, false
@@ -84,49 +85,43 @@ fn check_string(self, value, path = nil, opts = nil)
     if type(value) == "number" or type(value) == "boolean"
       return str(value)
   fail(path, "Expected string, got " + type(value))
-String = Type {
-  check = check_string
-}
-String.__index = String
+
+String = Type {check = check_string}
 
 fn check_number(self, value, path = nil, opts = nil)
   if type(value) == "number" return value
   if wants_coerce(opts) and type(value) == "string"
-    local okn, n = parse_number(value)
+    okn, n = parse_number(value)
     if okn return n
   fail(path, "Expected number, got " + type(value))
-Number = Type {
-  check = check_number
-}
-Number.__index = Number
+
+Number = Type {check = check_number}
 
 fn check_bool(self, value, path = nil, opts = nil)
   if type(value) == "boolean" return value
   if wants_coerce(opts)
-    local okb, b = parse_bool(value)
+    okb, b = parse_bool(value)
     if okb return b
   fail(path, "Expected boolean, got " + type(value))
+
 Boolean = Type {
   check = check_bool
 }
-Boolean.__index = Boolean
 
 fn check_int(self, value, path = nil, opts = nil)
   n = value
   if type(n) != "number"
     if not wants_coerce(opts) or type(value) != "string"
       fail(path, "Expected number (integer), got " + type(value))
-    local okn, nn = parse_number(value)
+    okn, nn = parse_number(value)
     if not okn fail(path, "Expected number (integer), got " + type(value))
     n = nn
 
   if n == nil or n % 1 != 0
     fail(path, "Expected integer, got float")
   return n
-Integer = Type {
-  check = check_int
-}
-Integer.__index = Integer
+
+Integer = Type {check = check_int}
 
 -- List(inner)
 List = {}
@@ -205,10 +200,10 @@ fn check_literal_type(self, value, path = nil, opts = nil)
 
     if wants_coerce(opts)
       if type(lit) == "number" and type(value) == "string"
-        local okn, n = parse_number(value)
+        okn, n = parse_number(value)
         if okn and n == lit return lit
       if type(lit) == "boolean"
-        local okb, b = parse_bool(value)
+        okb, b = parse_bool(value)
         if okb and b == lit return lit
       if type(lit) == "string" and (type(value) == "number" or type(value) == "boolean")
         if str(value) == lit return lit
@@ -300,14 +295,14 @@ fn check_constraints_type(self, value, path = nil, opts = nil)
   if c.pattern != nil
     if type(v) != "string"
       fail(path, "Constraint pattern requires string value")
-    local start_i, end_i = string_mod.find(v, c.pattern)
+    start_i, end_i = string_mod.find(v, c.pattern)
     if start_i == nil
       fail(path, "String does not match pattern")
 
   if c.custom != nil
     if type(c.custom) != "function"
       fail(path, "Constraint custom must be a function")
-    local cok, cerr = c.custom(v)
+    cok, cerr = c.custom(v)
     if not cok
       if cerr == nil
         fail(path, "Custom constraint failed")

@@ -400,14 +400,10 @@ int core_tostring(VM* vm, int arg_count, Value* args) {
     RETURN_OBJ(str);
 }
 
-static void raise_error_table_cstr(VM* vm, const char* type_name, const char* code, const char* msg) {
+static void raise_error_table_cstr(VM* vm, const char* type_name, const char* msg) {
     ObjTable* ex = new_table();
     table_set(&ex->table, copy_string("type", 4),
               OBJ_VAL(copy_string(type_name, (int)strlen(type_name))));
-    if (code != NULL) {
-        table_set(&ex->table, copy_string("code", 4),
-                  OBJ_VAL(copy_string(code, (int)strlen(code))));
-    }
     table_set(&ex->table, copy_string("msg", 3),
               OBJ_VAL(copy_string(msg, (int)strlen(msg))));
 
@@ -416,13 +412,10 @@ static void raise_error_table_cstr(VM* vm, const char* type_name, const char* co
     vm_current_thread(vm)->last_error = vm_current_thread(vm)->exception;
 }
 
-static void raise_error_table_value(VM* vm, const char* type_name, Value code_val, Value msg_val) {
+static void raise_error_table_value(VM* vm, const char* type_name, Value msg_val) {
     ObjTable* ex = new_table();
     table_set(&ex->table, copy_string("type", 4),
               OBJ_VAL(copy_string(type_name, (int)strlen(type_name))));
-    if (!IS_NIL(code_val)) {
-        table_set(&ex->table, copy_string("code", 4), code_val);
-    }
     table_set(&ex->table, copy_string("msg", 3), msg_val);
 
     vm_current_thread(vm)->has_exception = 1;
@@ -433,6 +426,10 @@ static void raise_error_table_value(VM* vm, const char* type_name, Value code_va
 
 static int global_error(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
+    if (arg_count > 2) {
+        vm_runtime_error(vm, "error() expects 1 or 2 arguments.");
+        return 0;
+    }
     Value message = args[0];
     if (arg_count == 1 && IS_TABLE(message)) {
         vm_current_thread(vm)->has_exception = 1;
@@ -441,16 +438,12 @@ static int global_error(VM* vm, int arg_count, Value* args) {
         return 0;
     }
 
-    Value code_val = NIL_VAL;
-    const char* type_name = "RuntimeError";
+    const char* type_name = "Error";
     if (arg_count >= 2) {
-        code_val = args[1];
+        ASSERT_STRING(1);
+        type_name = AS_CSTRING(args[1]);
     }
-    if (arg_count >= 3) {
-        ASSERT_STRING(2);
-        type_name = AS_CSTRING(args[2]);
-    }
-    raise_error_table_value(vm, type_name, code_val, message);
+    raise_error_table_value(vm, type_name, message);
     return 0; // Signal failure to vm_run
 }
 
@@ -465,29 +458,74 @@ static int exit_native(VM* vm, int arg_count, Value* args) {
     return 0;
 }
 
+typedef struct {
+    const char* name;
+    int len;
+} TypeName;
+
+static TypeName value_type_name(Value val) {
+    if (IS_NIL(val)) {
+        return (TypeName){"nil", 3};
+    } else if (IS_BOOL(val)) {
+        return (TypeName){"boolean", 7};
+    } else if (IS_NUMBER(val)) {
+        return (TypeName){"number", 6};
+    } else if (IS_STRING(val)) {
+        return (TypeName){"string", 6};
+    } else if (IS_TABLE(val)) {
+        return (TypeName){"table", 5};
+    } else if (IS_CLOSURE(val) || IS_NATIVE(val)) {
+        return (TypeName){"function", 8};
+    } else if (IS_THREAD(val)) {
+        if (AS_THREAD(val)->is_generator) {
+            return (TypeName){"generator", 9};
+        }
+        return (TypeName){"thread", 6};
+    } else if (IS_USERDATA(val)) {
+        return (TypeName){"userdata", 8};
+    }
+    return (TypeName){"unknown", 7};
+}
+
 static int type_native(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
-    Value val = args[0];
+    TypeName tn = value_type_name(args[0]);
+    RETURN_STRING(tn.name, tn.len);
+}
 
-    if (IS_NIL(val)) {
-        RETURN_STRING("nil", 3);
-    } else if (IS_BOOL(val)) {
-        RETURN_STRING("boolean", 7);
-    } else if (IS_NUMBER(val)) {
-        RETURN_STRING("number", 6);
-    } else if (IS_STRING(val)) {
-        RETURN_STRING("string", 6);
-    } else if (IS_TABLE(val)) {
-        RETURN_STRING("table", 5);
-    } else if (IS_CLOSURE(val) || IS_NATIVE(val)) {
-        RETURN_STRING("function", 8);
-    } else if (IS_THREAD(val)) {
-        RETURN_STRING("thread", 6);
-    } else if (IS_USERDATA(val)) {
-        RETURN_STRING("userdata", 8);
-    } else {
-        RETURN_STRING("unknown", 7);
+static int istype_native(VM* vm, int arg_count, Value* args) {
+    if (arg_count < 2) {
+        vm_runtime_error(vm, "istype() expects a value and at least one type name.");
+        return 0;
     }
+
+    TypeName actual = value_type_name(args[0]);
+    for (int i = 1; i < arg_count; i++) {
+        if (!IS_STRING(args[i])) {
+            vm_runtime_error(vm, "istype() type names must be strings.");
+            return 0;
+        }
+        ObjString* candidate = AS_STRING(args[i]);
+        if (candidate->length == 4 && memcmp(candidate->chars, "bool", 4) == 0) {
+            if (actual.len == 7 && memcmp(actual.name, "boolean", 7) == 0) {
+                RETURN_TRUE;
+            }
+            continue;
+        }
+        if ((candidate->length == 3 && memcmp(candidate->chars, "int", 3) == 0) ||
+            (candidate->length == 5 && memcmp(candidate->chars, "float", 5) == 0)) {
+            if (actual.len == 6 && memcmp(actual.name, "number", 6) == 0) {
+                RETURN_TRUE;
+            }
+            continue;
+        }
+        if (candidate->length == actual.len &&
+            memcmp(candidate->chars, actual.name, (size_t)actual.len) == 0) {
+            RETURN_TRUE;
+        }
+    }
+
+    RETURN_FALSE;
 }
 
 static int is_falsey_simple(Value v) {
@@ -580,18 +618,18 @@ static int int_native(VM* vm, int arg_count, Value* args) {
         char* end = NULL;
         long num = strtol(str, &end, 10);
         if (end == str) {
-            raise_error_table_cstr(vm, "ValueError", "E_INT_PARSE", "int() expects a valid base-10 string.");
+            raise_error_table_cstr(vm, "ValueError", "int() expects a valid base-10 string.");
             return 0;
         }
         while (*end != '\0' && isspace((unsigned char)*end)) end++;
         if (*end != '\0') {
-            raise_error_table_cstr(vm, "ValueError", "E_INT_PARSE", "int() expects a valid base-10 string.");
+            raise_error_table_cstr(vm, "ValueError", "int() expects a valid base-10 string.");
             return 0;
         }
         RETURN_NUMBER((double)num);
     }
 
-    raise_error_table_cstr(vm, "TypeError", "E_INT_TYPE", "int() expects number, string, or bool.");
+    raise_error_table_cstr(vm, "TypeError", "int() expects number, string, or bool.");
     return 0;
 }
 
@@ -610,18 +648,18 @@ static int float_native(VM* vm, int arg_count, Value* args) {
         char* end = NULL;
         double num = strtod(str, &end);
         if (end == str) {
-            raise_error_table_cstr(vm, "ValueError", "E_FLOAT_PARSE", "float() expects a valid number string.");
+            raise_error_table_cstr(vm, "ValueError", "float() expects a valid number string.");
             return 0;
         }
         while (*end != '\0' && isspace((unsigned char)*end)) end++;
         if (*end != '\0') {
-            raise_error_table_cstr(vm, "ValueError", "E_FLOAT_PARSE", "float() expects a valid number string.");
+            raise_error_table_cstr(vm, "ValueError", "float() expects a valid number string.");
             return 0;
         }
         RETURN_NUMBER(num);
     }
 
-    raise_error_table_cstr(vm, "TypeError", "E_FLOAT_TYPE", "float() expects number, string, or bool.");
+    raise_error_table_cstr(vm, "TypeError", "float() expects number, string, or bool.");
     return 0;
 }
 
@@ -720,6 +758,69 @@ static int sum_native(VM* vm, int arg_count, Value* args) {
             }
             sum += AS_NUMBER(val);
         }
+        RETURN_NUMBER(sum);
+    }
+
+    if (arg_count == 1 && IS_THREAD(args[0])) {
+        ObjThread* thread = AS_THREAD(args[0]);
+        Value gen_next = NIL_VAL;
+        ObjString* gen_next_name = copy_string("gen_next", 8);
+        if (!table_get(&vm->globals, gen_next_name, &gen_next) ||
+            (!IS_NATIVE(gen_next) && !IS_CLOSURE(gen_next))) {
+            vm_runtime_error(vm, "sum: global 'gen_next' not found or not callable.");
+            return 0;
+        }
+
+        double sum = 0.0;
+        int index = 0;
+        Value control = NIL_VAL;
+
+        for (;;) {
+            ObjThread* caller = vm_current_thread(vm);
+            int saved_frame_count = caller->frame_count;
+            CallFrame* frame = &caller->frames[saved_frame_count - 1];
+            uint8_t* ip = frame->ip;
+
+            push(vm, gen_next);
+            push(vm, OBJ_VAL(thread));
+            push(vm, control);
+
+            if (!call_value(vm, gen_next, 2, &frame, &ip)) {
+                return 0;
+            }
+
+            if (vm_current_thread(vm) != caller) {
+                InterpretResult run_result = vm_run_until_thread(vm, saved_frame_count, caller);
+                if (run_result != INTERPRET_OK) {
+                    return 0;
+                }
+            } else if (IS_CLOSURE(gen_next)) {
+                InterpretResult run_result = vm_run(vm, saved_frame_count);
+                if (run_result != INTERPRET_OK) {
+                    return 0;
+                }
+            }
+
+            if (vm_current_thread(vm)->stack_top - vm_current_thread(vm)->stack < 2) {
+                vm_runtime_error(vm, "sum: generator iterator produced invalid result.");
+                return 0;
+            }
+
+            Value value = pop(vm);
+            Value key = pop(vm);
+
+            if (IS_NIL(key)) break;
+
+            index++;
+            if (!IS_NUMBER(value)) {
+                vm_runtime_error(vm, "sum: element %d is not a number", index);
+                return 0;
+            }
+
+            sum += AS_NUMBER(value);
+            control = key;
+        }
+
         RETURN_NUMBER(sum);
     }
 
@@ -962,6 +1063,7 @@ void register_core(VM* vm) {
         {"getmetatable", getmetatable_native},
         {"error", global_error},
         {"type", type_native},
+        {"istype", istype_native},
         {NULL, NULL}
     };
     register_module(vm, NULL, core_funcs); // Register as global functions

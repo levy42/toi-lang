@@ -1,0 +1,10 @@
+from lib.test import assert_eq, assert_true
+
+sys = import sys
+
+assert_eq(sys.write("", 1), 0)
+bad, err = sys.write("", 3)
+assert_true(bad == nil)
+assert_eq(type(err), "string")
+
+print "sys.write ok"

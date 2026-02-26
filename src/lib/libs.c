@@ -11,6 +11,7 @@ void register_math(VM* vm);
 void register_time(VM* vm);
 #endif
 void register_io(VM* vm);
+void register_sys(VM* vm);
 #ifndef TOI_WASM
 void register_os(VM* vm);
 void register_stat(VM* vm);
@@ -68,6 +69,7 @@ static int load_math(VM* vm) { return load_registered_module(vm, "math", registe
 static int load_time(VM* vm) { return load_registered_module(vm, "time", register_time); }
 #endif
 static int load_io(VM* vm) { return load_registered_module(vm, "io", register_io); }
+static int load_sys(VM* vm) { return load_registered_module(vm, "sys", register_sys); }
 #ifndef TOI_WASM
 static int load_os(VM* vm) { return load_registered_module(vm, "os", register_os); }
 static int load_stat(VM* vm) { return load_registered_module(vm, "stat", register_stat); }
@@ -109,6 +111,7 @@ static const ModuleReg native_modules[] = {
     {"time", load_time},
 #endif
     {"io", load_io},
+    {"sys", load_sys},
 #ifndef TOI_WASM
     {"os", load_os},
     {"stat", load_stat},

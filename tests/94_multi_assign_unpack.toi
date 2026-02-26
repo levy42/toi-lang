@@ -1,0 +1,17 @@
+from lib.test import assert_eq, assert_true
+
+a, b = {1, 2}
+assert_eq(a, 1)
+assert_eq(b, 2)
+
+x, y = "rvrv ebvrs".split()
+assert_eq(x, "rvrv")
+assert_eq(y, "ebvrs")
+
+sentinel = 999
+u, v = "one"
+assert_eq(u, "one")
+assert_true(v == nil)
+assert_eq(sentinel, 999)
+
+print "multi assignment unpack ok"

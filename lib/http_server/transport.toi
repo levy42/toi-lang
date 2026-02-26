@@ -20,7 +20,7 @@ fn set_nonblocking(sock)
 fn ensure_tls_on_client(server, client)
   if server == nil or not server.ssl
     return true
-  local ok, err = client.tls_server(client, server.ssl_cert, server.ssl_key)
+  ok, err = client.tls_server(client, server.ssl_cert, server.ssl_key)
   if ok
     return true
   if err
@@ -72,7 +72,7 @@ fn upsert_response_header(raw_response, key, value)
   if type(raw_response) != "string"
     return raw_response
 
-  local head_i, head_j = string.find(raw_response, "\r\n\r\n")
+  head_i, head_j = string.find(raw_response, "\r\n\r\n")
   if head_i == nil
     return raw_response
 
@@ -89,7 +89,7 @@ fn upsert_response_header(raw_response, key, value)
   if #lines > 1
     for i in 2..#lines
       line = lines[i]
-      local colon_i, colon_j = string.find(line, ":")
+      colon_i, colon_j = string.find(line, ":")
       if colon_i and colon_i > 1
         name = string.lower(string.trim(string.sub(line, 1, colon_i - 1)))
         if name == target
@@ -170,7 +170,7 @@ fn recv_next_chunk(server, client)
     if should_force_close(server)
       return nil, "closed", client
 
-    local data, err = client.recv(client, 4096)
+    data, err = client.recv(client, 4096)
     if data and string.len(data) > 0
       return data, nil, client
 
@@ -207,7 +207,7 @@ fn handle_connection(server, client)
           req = parsed
           break
 
-      local chunk, err, next_client = recv_next_chunk(server, client)
+      chunk, err, next_client = recv_next_chunk(server, client)
       client = next_client or client
       if chunk == nil
         if is_closed_error(err) or err == "closed"
@@ -266,7 +266,7 @@ fn handle_connection(server, client)
 fn start_connection(server, client)
   co = coroutine.create(handle_connection)
   conn = {sock = client, coro = co, mode = "read"}
-  local ok, mode = coroutine.resume(co, server, client)
+  ok, mode = coroutine.resume(co, server, client)
   update_connection_state(server, conn, mode)
   return conn
 
@@ -316,12 +316,12 @@ fn run_coroutine_loop(server)
       if conn.mode == "read"
         selector.add_read(sel, conn.sock)
 
-    local ready_read, ready_write = selector.wait(sel, 0.1)
+    ready_read, ready_write = selector.wait(sel, 0.1)
 
     if ready_read
       for sock in ready_read
         if accepting and sock == server.socket
-          local client, ip = server.socket.accept(server.socket)
+          client, ip = server.socket.accept(server.socket)
           if client
             tls_err = ensure_tls_on_client(server, client)
             if tls_err != true
@@ -340,7 +340,7 @@ fn run_coroutine_loop(server)
           idx = find_connection_index(connections, sock)
           if idx > 0
             conn = connections[idx]
-            local ok, mode = coroutine.resume(conn.coro, conn.sock)
+            ok, mode = coroutine.resume(conn.coro, conn.sock)
             update_connection_state(server, conn, mode)
 
     connections = compact_connections(connections)
@@ -363,7 +363,7 @@ fn run_worker_loop(server, queue, select_timeout)
         for conn in connections
           close_connection(conn)
         return "stopped"
-      local item, ok = queue.tryrecv(queue)
+      item, ok = queue.tryrecv(queue)
       if not ok
         break
       got_new = true
@@ -396,13 +396,13 @@ fn run_worker_loop(server, queue, select_timeout)
         selector.add_read(sel, conn.sock)
 
     if selector.read_count(sel) > 0
-      local ready_read, ready_write = selector.wait(sel, select_timeout)
+      ready_read, ready_write = selector.wait(sel, select_timeout)
       if ready_read
         for sock in ready_read
           idx = find_connection_index(connections, sock)
           if idx > 0
             conn = connections[idx]
-            local ok, mode = coroutine.resume(conn.coro, conn.sock)
+            ok, mode = coroutine.resume(conn.coro, conn.sock)
             update_connection_state(server, conn, mode)
     else
       thread.sleep(select_timeout)
@@ -443,9 +443,9 @@ fn run_threaded_loop(server)
     if accepting
       selector.clear(accept_selector)
       selector.add_read(accept_selector, server.socket)
-      local ready_read, ready_write = selector.wait(accept_selector, 0.1)
+      ready_read, ready_write = selector.wait(accept_selector, 0.1)
       if ready_read and #ready_read > 0
-        local client, ip = server.socket.accept(server.socket)
+        client, ip = server.socket.accept(server.socket)
         if client
           tls_err = ensure_tls_on_client(server, client)
           if tls_err != true
@@ -496,7 +496,7 @@ Transport.run = fn(self, server_override = nil)
     scheme = "HTTPS"
   print(scheme + " Server running on " + server.host + ":" + str(server.port))
 
-  local out = nil
+  out = nil
   try
     if server.worker_threads and server.worker_threads > 0
       out = run_threaded_loop(server)

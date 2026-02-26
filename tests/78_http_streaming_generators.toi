@@ -3,7 +3,7 @@ from lib.test import assert_eq, assert_true
 http_server = import lib.http_server
 
 fn assert_has(haystack, needle)
-  local i, j = string.find(haystack, needle)
+  i, j = string.find(haystack, needle)
   if i == nil
     error("assert_has failed: missing '" + needle + "'")
 
@@ -33,7 +33,7 @@ fn stream3()
 r1 = app.handler({method = "GET", path = "/stream1"})
 assert_true(type(r1) == "table")
 assert_true(r1.__stream == true)
-assert_true(type(r1.stream) == "thread")
+assert_true(type(r1.stream) == "generator")
 
 v1 = coroutine.resume(r1.stream)
 v2 = coroutine.resume(r1.stream)

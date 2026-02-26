@@ -1,0 +1,22 @@
+from lib.test import assert_true, assert_eq
+
+assert_true(istype(nil, "nil"))
+assert_true(istype(true, "boolean"))
+assert_true(istype(12.5, "number"))
+assert_true(istype("x", "string"))
+assert_true(istype({1, 2}, "table"))
+f = fn()
+  return 1
+assert_true(istype(f, "function"))
+
+assert_true(istype("x", "number", "string"))
+assert_true(not istype("x", "number", "table"))
+assert_true(istype(true, "bool"))
+assert_true(istype(12.5, "int"))
+assert_true(istype(12.5, "float"))
+
+assert_eq(type("x"), "string")
+assert_eq(istype("x", "string"), true)
+assert_eq(istype("x", "table"), false)
+
+print "istype ok"

@@ -155,23 +155,24 @@ int vm_handle_op_slice(VM* vm, CallFrame** frame, uint8_t** ip) {
         return 1;
     }
 
-    if (IS_NIL(start) || IS_NIL(end)) {
-        int len = 0;
-        if (IS_TABLE(obj)) {
-            ObjTable* t = AS_TABLE(obj);
-            for (int i = 1; ; i++) {
-                Value val;
-                if (!table_get_array(&t->table, i, &val) || IS_NIL(val)) {
-                    len = i - 1;
-                    break;
-                }
+    int len = 0;
+    if (IS_TABLE(obj)) {
+        ObjTable* t = AS_TABLE(obj);
+        for (int i = 1; ; i++) {
+            Value val;
+            if (!table_get_array(&t->table, i, &val) || IS_NIL(val)) {
+                len = i - 1;
+                break;
             }
-        } else if (IS_STRING(obj)) {
-            len = AS_STRING(obj)->length;
-        } else {
-            vm_runtime_error(vm, "slice expects table or string.");
-            return 0;
         }
+    } else if (IS_STRING(obj)) {
+        len = AS_STRING(obj)->length;
+    } else {
+        vm_runtime_error(vm, "slice expects table or string.");
+        return 0;
+    }
+
+    if (IS_NIL(start) || IS_NIL(end)) {
         if (IS_NIL(start)) {
             start = NUMBER_VAL(step_num < 0 ? (double)len : 1.0);
         }
@@ -183,6 +184,23 @@ int vm_handle_op_slice(VM* vm, CallFrame** frame, uint8_t** ip) {
         vm_runtime_error(vm, "slice start/end must be numbers.");
         return 0;
     }
+
+    double raw_start = AS_NUMBER(start);
+    double raw_end = AS_NUMBER(end);
+    int start_int = (int)raw_start;
+    int end_int = (int)raw_end;
+    if ((double)start_int != raw_start || (double)end_int != raw_end) {
+        vm_runtime_error(vm, "slice start/end must be integer for '..' syntax.");
+        return 0;
+    }
+    if (start_int < 0) {
+        start_int = len + start_int + 1;
+    }
+    if (end_int < 0) {
+        end_int = len + end_int;
+    }
+    start = NUMBER_VAL((double)start_int);
+    end = NUMBER_VAL((double)end_int);
 
     Value slice_fn = NIL_VAL;
     if (!table_get(&vm->globals, vm->slice_name, &slice_fn)) {

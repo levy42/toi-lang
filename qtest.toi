@@ -1,1 +1,3 @@
-a = {gffg=4, ggg=5}
+import log
+
+log.info('gbfg')

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <stdarg.h>
 #include <time.h>
 #include <signal.h>
@@ -171,6 +172,37 @@ static void apply_pending_set_local(VM* vm) {
     thread->pending_set_local_count--;
 }
 
+static int vm_handle_op_unpack(VM* vm, CallFrame* frame, uint8_t** ip) {
+    uint8_t base_depth = *(*ip)++;
+    uint8_t target_count = *(*ip)++;
+    Value* base = frame->slots + base_depth;
+    ptrdiff_t available = vm_current_thread(vm)->stack_top - base;
+    if (available < 0) {
+        vm_runtime_error(vm, "Internal error: invalid stack state in unpack.");
+        return 0;
+    }
+
+    if (available == 1 && IS_TABLE(base[0])) {
+        ObjTable* values = AS_TABLE(base[0]);
+        for (int i = 0; i < target_count; i++) {
+            Value element = NIL_VAL;
+            table_get_array(&values->table, i + 1, &element);
+            base[i] = element;
+        }
+        vm_current_thread(vm)->stack_top = base + target_count;
+        return 1;
+    }
+
+    int have = (int)available;
+    if (have < target_count) {
+        for (int i = have; i < target_count; i++) {
+            base[i] = NIL_VAL;
+        }
+    }
+    vm_current_thread(vm)->stack_top = base + (have > target_count ? have : target_count);
+    return 1;
+}
+
 extern void register_libs(VM* vm);
 extern void free_object(struct Obj* object);
 void collect_garbage(VM* vm); // Defined later in this file
@@ -199,28 +231,21 @@ static void report_exception(VM* vm) {
     if (!vm_current_thread(vm)->has_exception) return;
     Value ex = vm_current_thread(vm)->exception;
     if (IS_STRING(ex)) {
-        fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "%s\n", AS_CSTRING(ex));
+        fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s\n", AS_CSTRING(ex));
     } else if (IS_TABLE(ex)) {
         ObjTable* t = AS_TABLE(ex);
         Value msg = NIL_VAL;
         Value type = NIL_VAL;
-        Value code = NIL_VAL;
         ObjString* msg_key = copy_string("msg", 3);
         ObjString* type_key = copy_string("type", 4);
-        ObjString* code_key = copy_string("code", 4);
         table_get(&t->table, msg_key, &msg);
         table_get(&t->table, type_key, &type);
-        table_get(&t->table, code_key, &code);
 
         const char* msg_s = IS_STRING(msg) ? AS_CSTRING(msg) : "<exception>";
         const char* type_s = IS_STRING(type) ? AS_CSTRING(type) : "Error";
-        if (IS_STRING(code)) {
-            fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "%s [%s:%s]\n", msg_s, type_s, AS_CSTRING(code));
-        } else {
-            fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "%s [%s]\n", msg_s, type_s);
-        }
+        fprintf(stderr, COLOR_RED "%s: " COLOR_RESET "%s\n", type_s, msg_s);
     } else {
-        fprintf(stderr, COLOR_RED "Runtime Error: " COLOR_RESET "<exception>\n");
+        fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "<exception>\n");
     }
 
     for (int i = vm_current_thread(vm)->frame_count - 1; i >= 0; i--) {
@@ -1035,6 +1060,8 @@ Value get_metamethod(VM* vm, Value val, const char* name) {
     return method;
 }
 
+static ObjThread* run_stop_thread = NULL;
+
 InterpretResult vm_run(VM* vm, int min_frame_count) {
     CallFrame* frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
     uint8_t* ip = frame->ip;
@@ -1046,6 +1073,9 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
 #define READ_STRING() AS_STRING(READ_CONSTANT())
 
     for (;;) {
+        if (run_stop_thread != NULL && vm_current_thread(vm) == run_stop_thread) {
+            return INTERPRET_OK;
+        }
         if (interrupt_requested) {
             interrupt_requested = 0;
             vm_runtime_error(vm, "Interrupted.");
@@ -1196,8 +1226,9 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                 break;
             }
             case OP_PRINT: {
+                uint8_t arg_count = READ_BYTE();
                 InterpretResult print_result = INTERPRET_OK;
-                int print_status = vm_handle_op_print(vm, &frame, &ip, &print_result);
+                int print_status = vm_handle_op_print(vm, &frame, &ip, arg_count, &print_result);
                 if (print_status < 0) goto runtime_error;
                 if (print_status == 0) return print_result;
                 break;
@@ -1471,6 +1502,10 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                 #endif
                 break;
             }
+            case OP_UNPACK: {
+                if (!vm_handle_op_unpack(vm, frame, &ip)) goto runtime_error;
+                break;
+            }
             case OP_ADD_CONST: {
                 Value b = READ_CONSTANT();
                 if (!vm_handle_op_add_const(vm, &frame, &ip, b)) goto runtime_error;
@@ -1546,6 +1581,10 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
                 if (!vm_handle_op_has(vm, &frame, &ip)) goto runtime_error;
                 break;
             }
+            case OP_IN: {
+                if (!vm_handle_op_in(vm, &frame, &ip)) goto runtime_error;
+                break;
+            }
             case OP_POWER: {
                 if (!vm_handle_op_power(vm, &frame, &ip)) goto runtime_error;
                 break;
@@ -1611,6 +1650,14 @@ runtime_error:
 #undef READ_SHORT
 #undef READ_CONSTANT
 #undef READ_STRING
+}
+
+InterpretResult vm_run_until_thread(VM* vm, int min_frame_count, ObjThread* stop_thread) {
+    ObjThread* saved_stop_thread = run_stop_thread;
+    run_stop_thread = stop_thread;
+    InterpretResult result = vm_run(vm, min_frame_count);
+    run_stop_thread = saved_stop_thread;
+    return result;
 }
 
 InterpretResult interpret(VM* vm, ObjFunction* function) {

@@ -9,7 +9,7 @@ CERT = "tests/fixtures/tls/server.crt"
 KEY = "tests/fixtures/tls/server.key"
 
 fn assert_has(haystack, needle)
-  local i, j = string.find(haystack, needle)
+  i, j = string.find(haystack, needle)
   if i == nil
     error("assert_has failed: missing '" + needle + "'")
 
@@ -72,7 +72,7 @@ else
     fn root()
       return "secure hello"
 
-    local h, spawn_err = thread.spawn(fn()
+    h, spawn_err = thread.spawn(fn()
       return app.run()
     )
     assert_true(h != nil, "spawn failed")
@@ -95,7 +95,7 @@ else
     response = ""
     i = 1
     while i <= 20
-      local chunk, recv_err = client.recv(client, 4096)
+      chunk, recv_err = client.recv(client, 4096)
       if chunk == nil
         if recv_err == "timeout"
           break

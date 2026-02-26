@@ -13,6 +13,7 @@ typedef enum {
     PREC_AND,
     PREC_EQUALITY,
     PREC_COMPARISON,
+    PREC_RANGE,
     PREC_TERM,
     PREC_FACTOR,
     PREC_UNARY,
@@ -53,6 +54,8 @@ typedef struct Compiler {
     struct Compiler* enclosing;
     Local locals[UINT8_MAX + 1];
     int local_count;
+    Token explicit_globals[UINT8_MAX + 1];
+    int explicit_global_count;
     Upvalue upvalues[UINT8_MAX + 1];
     int upvalue_count;
     int scope_depth;
@@ -106,6 +109,8 @@ void begin_scope(void);
 void end_scope(void);
 int resolve_local(Compiler* compiler, Token* name);
 int resolve_upvalue(Compiler* compiler, Token* name);
+int is_explicit_global_name(Compiler* compiler, Token* name);
+void register_explicit_global(Token name);
 void add_local(Token name);
 void mark_initialized(void);
 void mark_initialized_count(int count);

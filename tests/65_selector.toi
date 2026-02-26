@@ -15,7 +15,7 @@ selector.add_write(sel, s)
 assert_eq(selector.read_count(sel), 1)
 assert_eq(selector.write_count(sel), 1)
 
-local ready_read, ready_write = selector.wait(sel, 0.05)
+ready_read, ready_write = selector.wait(sel, 0.05)
 assert_eq(type(ready_read), "table")
 assert_eq(type(ready_write), "table")
 assert_eq(#ready_read, 0)

@@ -1,15 +1,12 @@
-io = import io
-os = import os
-string = import string
-table = import table
+import io, os, string, table
 
-LEVELS = {
-  trace = 10,
-  debug = 20,
-  info = 30,
-  warn = 40,
-  error = 50
-}
+TRACE = 10
+DEBUG = 20
+INFO = 30
+WARN = 40
+ERROR = 50
+FATAL = 60
+DEFAULT_LEVEL = INFO
 
 LEVEL_NAMES = {
   [10] = "TRACE",
@@ -29,84 +26,40 @@ LEVEL_COLORS = {
   [50] = ESC + "[31m"  -- red
 }
 
-fn parse_level(level)
-  if type(level) == "number"
-    return int(level)
-  if type(level) != "string"
-    return LEVELS.info
-  key = string.lower(string.trim(level))
-  value = LEVELS[key]
-  if type(value) == "number"
-    return value
-  return LEVELS.info
-
-fn level_name(level)
-  n = parse_level(level)
-  return LEVEL_NAMES[n] or ("L" + str(n))
-
-fn merge_fields(base, extra)
-  out = {}
-  if type(base) == "table"
-    for k, v in base
-      out[k] = v
-  if type(extra) == "table"
-    for k, v in extra
-      out[k] = v
-  return out
-
 fn fmt_fields(fields)
-  if type(fields) != "table"
-    return ""
+  if not istype(fields, 'table') return ""
   parts = {}
   for k, v in fields
     parts <+ f"{k}={v}"
-  if #parts == 0
-    return ""
+  if #parts == 0 return ""
   return " " + table.concat(parts, " ")
 
 fn default_formatter(record)
   ts = int(record.ts or 0)
-  lvl = level_name(record.level)
+  lvl = LEVEL_NAMES[record.level]
   logger_name = record.logger or "root"
   msg = str(record.msg or "")
   return string.format("%d %-5s [%s] %s%s", ts, lvl, logger_name, msg, fmt_fields(record.fields))
 
-fn should_color_console()
-  -- Colorize for typical terminal sessions; honor NO_COLOR.
-  no_color = os.getenv("NO_COLOR")
-  if no_color and no_color != ""
-    return false
-  term = os.getenv("TERM")
-  if term == nil or term == "" or term == "dumb"
-    return false
-  return true
-
 fn colorize_line(line, level)
-  if type(line) != "string"
+  if os.getenv("NO_COLOR") or not os.getenv("TERM")
     return line
-  color = LEVEL_COLORS[parse_level(level)]
-  if type(color) != "string"
-    return line
-  lvl = level_name(level)
-  local i, j = string.find(line, lvl)
+
+  color = LEVEL_COLORS[level]
+  lvl = LEVEL_NAMES[level]
+  i, j = line.find(lvl)
   if i == nil
     return color + line + ANSI_RESET
-  return string.sub(line, 1, i - 1) + color + lvl + ANSI_RESET + string.sub(line, j + 1)
+  return line[1..i-1] + color + lvl + ANSI_RESET + line[j+1..]
 
 fn console_handler(record, line)
-  out = line
-  if should_color_console()
-    out = colorize_line(line, record.level)
-  print(out)
+  print(colorize_line(line, record.level))
   return true
 
 fn file_handler(path, append = true)
-  if type(path) != "string" or path == ""
-    error("file_handler(path): path must be a non-empty string")
+  assert path and istype(path, 'string'), "file_handler(path): path must be a non-empty string"
   mode = append ? "a" : "w"
-  local file, open_err = io.open(path, mode)
-  if file == nil
-    error("file_handler open failed: " + str(open_err))
+  file = io.open(path, mode)
   return fn(record, line)
     file.write(line + "\n")
     return true
@@ -115,21 +68,17 @@ Logger = {}
 Logger.__index = Logger
 
 fn logger_new(cls, name = "root", opts = nil)
-  if opts == nil
-    opts = {}
+  if opts == nil opts = {}
   obj = {}
-  obj.name = type(name) == "string" and name != "" ? name : "root"
-  obj.level = parse_level(opts.level or LEVELS.info)
+  obj.name = name
+  obj.level = opts.level or DEFAULT_LEVEL
   obj.handlers = {}
   obj.formatter = opts.formatter or default_formatter
-  obj.context = merge_fields(nil, opts.context)
+  obj.context = opts.context
 
-  if type(opts.handlers) == "table"
-    for h in opts.handlers
-      if type(h) == "function"
-        obj.handlers <+ h
-
-  if #obj.handlers == 0
+  for h in (opts.handlers or {})
+    obj.handlers <+ h
+  if not obj.handlers
     obj.handlers <+ console_handler
 
   setmetatable(obj, cls)
@@ -140,11 +89,11 @@ LoggerMeta.__call = logger_new
 setmetatable(Logger, LoggerMeta)
 
 Logger.set_level = fn(self, level)
-  self.level = parse_level(level)
+  self.level = level
   return self
 
 Logger.is_enabled = fn(self, level)
-  return parse_level(level) >= self.level
+  return (level or DEFAULT_LEVEL) >= self.level
 
 Logger.add_handler = fn(self, handler)
   if type(handler) == "function"
@@ -155,93 +104,80 @@ Logger.clear_handlers = fn(self)
   self.handlers = {}
   return self
 
-Logger.with_fields = fn(self, fields)
-  child = Logger(self.name, {
+fn spawn_child_logger(self, child_name, fields = nil)
+  return Logger(child_name, {
     level = self.level,
     handlers = self.handlers,
     formatter = self.formatter,
-    context = merge_fields(self.context, fields)
+    context = self.context + fields
   })
-  return child
+
+Logger.with_fields = fn(self, fields)
+  return spawn_child_logger(self, self.name, fields)
 
 Logger.child = fn(self, suffix, fields = nil)
   child_name = self.name
   if type(suffix) == "string" and suffix != ""
     child_name = self.name + "." + suffix
-  child = Logger(child_name, {
-    level = self.level,
-    handlers = self.handlers,
-    formatter = self.formatter,
-    context = merge_fields(self.context, fields)
-  })
-  return child
+  return spawn_child_logger(self, child_name, fields)
 
-Logger.log = fn(self, level, msg, fields = nil)
-  lvl = parse_level(level)
-  if lvl < self.level
+Logger.log = fn(self, level:int, msg:str, fields = nil)
+  if level < self.level
     return false
 
   record = {
     ts = int(os.clock()),
-    level = lvl,
+    level = level,
     logger = self.name,
     msg = msg,
-    fields = merge_fields(self.context, fields)
+    fields = fields? (self.context + fields): self.context
   }
   line = self.formatter(record)
 
   for h in self.handlers
-    if type(h) == "function"
-      try
-        h(record, line)
-      except e
-        nil
+    try
+      h(record, line)
+    except e
+      nil
   return true
 
 Logger.trace = fn(self, msg, fields = nil)
-  return self.log("trace", msg, fields)
+  return self.log(TRACE, msg, fields)
 
 Logger.debug = fn(self, msg, fields = nil)
-  return self.log("debug", msg, fields)
+  return self.log(DEBUG, msg, fields)
 
 Logger.info = fn(self, msg, fields = nil)
-  return self.log("info", msg, fields)
+  return self.log(INFO, msg, fields)
 
 Logger.warn = fn(self, msg, fields = nil)
-  return self.log("warn", msg, fields)
+  return self.log(WARN, msg, fields)
 
 Logger.error = fn(self, msg, fields = nil)
-  return self.log("error", msg, fields)
+  return self.log(ERROR, msg, fields)
 
 _registry = {}
 _root = Logger("root")
 _registry["root"] = _root
 
-fn get_logger(name = "root")
-  n = type(name) == "string" and name != "" ? name : "root"
-  existing = _registry[n]
-  if existing
-    return existing
-  logger = Logger(n)
-  _registry[n] = logger
+fn get_logger(name:str = "root")
+  if _registry[name] return _registry[name]
+  logger = Logger(name)
+  _registry[name] = logger
   return logger
 
 fn configure(level = nil, handlers = nil, formatter = nil, context = nil)
-  if type(level) == "table"
-    error("log.configure(level=..., handlers=..., formatter=..., context=...) expects named args, not options table")
-  if level != nil
-    _root.set_level(level)
+  if level != nil _root.set_level(level)
   if formatter
     _root.formatter = formatter
-  if type(context) == "table"
-    _root.context = merge_fields(nil, context)
+  if context
+    _root.context = context
   if handlers
     _root.handlers = {}
-    if type(handlers) == "table"
+    if handlers
       for h in handlers
-        if type(h) == "function"
-          _root.handlers <+ h
-    if #_root.handlers == 0
+        _root.handlers <+ h
+    elif not _root.handlers
       _root.handlers <+ console_handler
   return _root
 
@@ -264,9 +200,6 @@ fn error_(msg, fields = nil)
   return _root.error(msg, fields)
 
 return {
-  LEVELS = LEVELS,
-  level_name = level_name,
-  parse_level = parse_level,
   default_formatter = default_formatter,
   console_handler = console_handler,
   file_handler = file_handler,
@@ -274,10 +207,6 @@ return {
   get_logger = get_logger,
   configure = configure,
   root = _root,
-  log = log,
-  trace = trace,
-  debug = debug,
-  info = info,
-  warn = warn,
-  error = error_
+  log = log,trace = trace, debug = debug, info = info, warn = warn, error = error_,
+  DEBUG = DEBUG, ERROR = ERROR, TRACE = TRACE, INFO = INFO, WARN = WARN,
 }

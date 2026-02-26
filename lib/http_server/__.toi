@@ -157,7 +157,8 @@ fn accepts_gzip(req)
     i = 2
     while i <= #parts
       param = string.trim(parts[i] or "")
-      local eq_i, eq_j = string.find(param, "=")
+      eq_i = string.find(param, "=")
+      eq_j = eq_i == nil ? nil : eq_i
       if eq_i and eq_i > 1
         key = string.trim(string.sub(param, 1, eq_i - 1))
         if key == "q"
@@ -174,11 +175,11 @@ fn accepts_gzip(req)
   return false
 
 fn read_file(path)
-  local f, err = io.open(path, "r")
+  f = io.open(path, "r")
   if f == nil
     return nil
 
-  local data = nil
+  data = nil
   try
     data = f.read()
   except e
@@ -206,7 +207,7 @@ fn parse_nonneg_int(raw)
   token = string.trim(raw)
   if token == ""
     return nil
-  local n = nil
+  n = nil
   try
     n = int(token)
   except e
@@ -259,7 +260,8 @@ fn parse_single_byte_range(raw_range, size)
   if string.find(spec, ",")
     return false, "invalid"
 
-  local dash_i, dash_j = string.find(spec, "-")
+  dash_i = string.find(spec, "-")
+  dash_j = dash_i == nil ? nil : dash_i
   if dash_i == nil
     return false, "invalid"
 
@@ -303,7 +305,7 @@ fn maybe_gzip_body(mount, req, body, headers)
   if not accepts_gzip(req)
     return body
 
-  local zipped = nil
+  zipped = nil
   try
     zipped = mount.gzip_mod.compress(body)
   except e
@@ -332,8 +334,8 @@ fn serve_mount_file(mount, req)
   if not os.isfile(file_path)
     return true, http.response(404, nil, "Not Found")
 
-  local file_stat, file_stat_err = stat.stat(file_path)
-  if file_stat == nil
+  file_stat = stat.stat(file_path)
+  if type(file_stat) != "table"
     return true, http.response(404, nil, "Not Found")
 
   file_size = int(file_stat.size or 0)
@@ -356,7 +358,7 @@ fn serve_mount_file(mount, req)
   range_enabled = false
   range_req = request_header(req, "range")
   if type(range_req) == "string" and range_req != ""
-    local parsed_range, range_err = parse_single_byte_range(range_req, file_size)
+    parsed_range, range_err = parse_single_byte_range(range_req, file_size)
     if parsed_range == false
       if range_err == "unsat"
         return true, http.response(416, {
@@ -384,7 +386,7 @@ fn serve_mount_file(mount, req)
 
 fn dispatch_static_mounts(app, req)
   for mount in app.static_mounts
-    local handled, res = serve_mount_file(mount, req)
+    handled, res = serve_mount_file(mount, req)
     if handled
       return res
 

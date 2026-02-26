@@ -27,24 +27,24 @@ assert_eq(string.upper("ab"), "AB")
 assert_eq(string.sub("hello", 2, 4), "ell")
 
 -- io userdata __index (function)
-local f = io.open("tests/tmp_io.txt", "w")
+f = io.open("tests/tmp_io.txt", "w")
 f.write("line1\nline2\nXYZ")
 f.close()
 
-local r = io.open("tests/tmp_io.txt", "r")
+r = io.open("tests/tmp_io.txt", "r")
 line = r.readline()
 assert_eq(line, "line1")
 chunk = r.read(2)
 assert_eq(chunk, "li")
 r.close()
 
-local r_all = io.open("tests/tmp_io.txt", "r")
+r_all = io.open("tests/tmp_io.txt", "r")
 all = r_all.read()
 assert_eq(all, "line1\nline2\nXYZ")
 r_all.close()
 
 -- io seek/tell
-local s = io.open("tests/tmp_io.txt", "r")
+s = io.open("tests/tmp_io.txt", "r")
 assert_eq(s.tell(), 0)
 assert_eq(s.seek("end", 0), 15)
 assert_eq(s.tell(), 15)
@@ -69,6 +69,7 @@ assert_eq(buf.tell(), 10)
 assert_eq(buf.seek("set", 8), 8)
 assert_eq(buf.read(), "DD")
 buf.close()
+
 os.remove("tests/tmp_io.txt")
 
 -- table module

@@ -65,3 +65,15 @@ ss = "hello"[2..4:1]
 assert_eq(ss, "ell")
 ss2 = "hello"[..3]
 assert_eq(ss2, "hel")
+ss2b = "hello"[..-1]
+assert_eq(ss2b, "hell")
+ss2c = "hello"[-2..-1]
+assert_eq(ss2c, "l")
+ss5 = "hello"[5..1:-1]
+assert_eq(ss5, "olleh")
+ss6 = "hello"[2..1:-1]
+assert_eq(ss6, "eh")
+
+syn_neg = {10, 20, 30, 40, 50}[..-1]
+assert_eq(syn_neg[1], 10)
+assert_eq(syn_neg[4], 40)

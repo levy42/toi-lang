@@ -53,6 +53,7 @@ fn f()
 
 - Named args: `f(a=1, b=2)`
 - Spread args: `f(*arr)`
+- Generator comprehension arg: `f(x for x in iterable)`
 
 Note: named call arguments use `=`.
 Expression assignment uses `:=` (walrus), for example: `x := expr`.

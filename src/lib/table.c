@@ -21,6 +21,91 @@ static int value_equals_for_find(Value a, Value b) {
     return 0;
 }
 
+typedef struct {
+    ObjTable* src;
+    ObjTable* dst;
+} TableClonePair;
+
+static int table_clone_recursive(VM* vm, ObjTable* source, int deep,
+                                 TableClonePair** seen, int* seen_count, int* seen_capacity,
+                                 ObjTable** out) {
+    if (deep) {
+        for (int i = 0; i < *seen_count; i++) {
+            if ((*seen)[i].src == source) {
+                *out = (*seen)[i].dst;
+                return 1;
+            }
+        }
+    }
+
+    ObjTable* clone = new_table();
+    push(vm, OBJ_VAL(clone)); // GC protection while populating.
+    clone->metatable = source->metatable;
+    clone->is_module = source->is_module;
+
+    if (deep) {
+        if (*seen_count >= *seen_capacity) {
+            int new_capacity = *seen_capacity == 0 ? 8 : (*seen_capacity) * 2;
+            TableClonePair* grown = (TableClonePair*)realloc(*seen, sizeof(TableClonePair) * (size_t)new_capacity);
+            if (grown == NULL) {
+                pop(vm);
+                vm_runtime_error(vm, "table.clone: out of memory");
+                return 0;
+            }
+            *seen = grown;
+            *seen_capacity = new_capacity;
+        }
+        (*seen)[*seen_count].src = source;
+        (*seen)[*seen_count].dst = clone;
+        (*seen_count)++;
+    }
+
+    if (source->table.array_capacity > 0) {
+        clone->table.array = (Value*)malloc(sizeof(Value) * (size_t)source->table.array_capacity);
+        if (clone->table.array == NULL) {
+            pop(vm);
+            vm_runtime_error(vm, "table.clone: out of memory");
+            return 0;
+        }
+        clone->table.array_capacity = source->table.array_capacity;
+        clone->table.array_max = source->table.array_max;
+
+        for (int i = 0; i < source->table.array_capacity; i++) {
+            Value v = source->table.array[i];
+            if (deep && IS_TABLE(v)) {
+                ObjTable* child = NULL;
+                if (!table_clone_recursive(vm, AS_TABLE(v), 1, seen, seen_count, seen_capacity, &child)) {
+                    pop(vm);
+                    return 0;
+                }
+                v = OBJ_VAL(child);
+            }
+            clone->table.array[i] = v;
+        }
+    }
+
+    for (int i = 0; i < source->table.capacity; i++) {
+        Entry* entry = &source->table.entries[i];
+        if (entry->key == NULL || IS_NIL(entry->value)) continue;
+
+        Value v = entry->value;
+        if (deep && IS_TABLE(v)) {
+            ObjTable* child = NULL;
+            if (!table_clone_recursive(vm, AS_TABLE(v), 1, seen, seen_count, seen_capacity, &child)) {
+                pop(vm);
+                return 0;
+            }
+            v = OBJ_VAL(child);
+        }
+
+        table_set(&clone->table, entry->key, v);
+    }
+
+    pop(vm);
+    *out = clone;
+    return 1;
+}
+
 static int call_unary_lookup(VM* vm, Value fn, Value arg, Value* out) {
     if (IS_CLOSURE(fn)) {
         int saved_frame_count = vm_current_thread(vm)->frame_count;
@@ -506,11 +591,52 @@ static int table_find_index(VM* vm, int arg_count, Value* args) {
     RETURN_NUMBER(0);
 }
 
+// table.clone(t, deep?) - clone table shallowly by default, recursively when deep=true
+static int table_clone(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    ASSERT_TABLE(0);
+    if (arg_count > 2) {
+        vm_runtime_error(vm, "table.clone: expected 1 to 2 arguments.");
+        return 0;
+    }
+
+    int deep = 0;
+    if (arg_count == 2) {
+        if (IS_BOOL(args[1])) {
+            deep = AS_BOOL(args[1]) ? 1 : 0;
+        } else if (IS_TABLE(args[1])) {
+            Value deep_value = NIL_VAL;
+            ObjString* deep_key = copy_string("deep", 4);
+            if (table_get(&GET_TABLE(1)->table, deep_key, &deep_value)) {
+                if (!IS_BOOL(deep_value)) {
+                    vm_runtime_error(vm, "table.clone: deep must be a bool.");
+                    return 0;
+                }
+                deep = AS_BOOL(deep_value) ? 1 : 0;
+            }
+        } else {
+            vm_runtime_error(vm, "table.clone: deep must be a bool.");
+            return 0;
+        }
+    }
+
+    TableClonePair* seen = NULL;
+    int seen_count = 0;
+    int seen_capacity = 0;
+    ObjTable* clone = NULL;
+    int ok = table_clone_recursive(vm, GET_TABLE(0), deep, &seen, &seen_count, &seen_capacity, &clone);
+    free(seen);
+    if (!ok) return 0;
+
+    RETURN_OBJ(clone);
+}
+
 void register_table(VM* vm) {
     const NativeReg table_funcs[] = {
         {"remove", table_remove},
         {"push", table_push},
         {"reserve", table_reserve},
+        {"clone", table_clone},
         {"concat", table_concat},
         {"sort", table_sort},
         {"insert", table_insert},

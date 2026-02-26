@@ -50,10 +50,8 @@ assert_true(formatted has "ERR")
 
 formatted2 = cli._format("[red+underline]ERR[/]")
 assert_true(type(formatted2) == "string")
-local i31, j31 = string.find(formatted2, "[31m")
-local i4, j4 = string.find(formatted2, "[4m")
-assert_true(i31 != nil)
-assert_true(i4 != nil)
+assert_true(formatted2 has "[31m")
+assert_true(formatted2 has "[4m")
 
 st = cli.status("loading")
 assert_true(st.line != nil)

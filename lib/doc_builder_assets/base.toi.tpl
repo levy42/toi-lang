@@ -13,7 +13,24 @@
     <img class="brand-logo" src="{{ logo_href }}" alt="Toi logo">
     <span>Toi Docs</span>
     </a>
-    {{ nav_html }}
+    <ul class="nav">
+    {% for item in nav_entries %}
+    {% if item.kind == "page" %}
+    <li{% if item.active %} class="active"{% endif %}><a href="{{ item.href }}">{{ item.title }}</a></li>
+    {% else %}
+    <li class="nav-collapsible">
+    <details class="nav-group{% if item.open %} active{% endif %}"{% if item.open %} open{% endif %}>
+    <summary>{{ item.label }}</summary>
+    <ul class="subnav">
+    {% for child in item.children %}
+    <li{% if child.active %} class="active"{% endif %}><a href="{{ child.href }}">{{ child.title }}</a></li>
+    {% endfor %}
+    </ul>
+    </details>
+    </li>
+    {% endif %}
+    {% endfor %}
+    </ul>
     </aside>
     <main>{{ body_html }}</main>
 </body>

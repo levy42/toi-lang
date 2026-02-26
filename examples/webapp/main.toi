@@ -6,7 +6,7 @@ template = import template
 global table = import table
 
 fn read_all(path)
-  local f, err = io.open(path, "r")
+  f, err = io.open(path, "r")
   if f == nil
     error("cannot open template: " + path)
   content = f.read()

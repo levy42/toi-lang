@@ -102,6 +102,7 @@ Notes:
 
 - If declaration has no initializer, values default to `nil`.
 - For single-variable declarations/assignments, `a = x, y, z` is parsed as an array literal (`{x, y, z}`), not multi-assignment.
+- For multi-target assignment with a single RHS expression (`a, b = expr`), if `expr` evaluates to one table value it is unpacked from array slots (`expr[1]`, `expr[2]`, ...); otherwise extra targets are filled with `nil`.
 
 ### 3.3 Statements
 
@@ -298,7 +299,7 @@ Highest to lowest:
 2. Unary: `not`, unary `-`, length `#`
 3. Multiplicative: `*`, `/`, `//`, `%`, `**`
 4. Additive and range: `+`, `-`, `<+`, `..`
-5. Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`, `has`
+5. Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`, `in`, `not in`, `has`
 6. Logical `and`
 7. Logical `or`
 8. Ternary `?:`
@@ -308,6 +309,7 @@ Notes:
 
 - `a ? b : c` is supported and right-associative.
 - `..` is both range operator and part of slice syntax.
+- `elem in container` is equivalent to `container has elem`.
 - `<+` appends to a table (`t <+ v`), returning the appended index. If a `__append`
   metamethod exists, it is called as `__append(lhs, rhs)` instead.
 

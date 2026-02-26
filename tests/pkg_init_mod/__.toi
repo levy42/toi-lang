@@ -1,6 +1,6 @@
-local answer = 7
+answer = 7
 
-local inc = fn(x)
+inc = fn(x)
   return x + 1
 
 return {

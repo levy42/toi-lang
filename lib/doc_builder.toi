@@ -31,8 +31,8 @@ fn read_file(file_path)
 fn write_file(file_path, content)
   parent = path.dirname(file_path)
   if parent != ""
-    local ok, err = os.mkdir(parent, true)
-    if ok != true
+    ok, err = os.mkdir(parent, true)
+    if not ok
       die(f"mkdir failed for '{parent}': {err}")
 
   f = io.open(file_path, "w")
@@ -63,8 +63,8 @@ fn extract_title(md, fallback)
 fn walk_markdown(root, rel, out)
   dir_path = rel == "" ? root : path.join(root, rel)
 
-  local names, err = os.listdir(dir_path)
-  if names == nil
+  names, err = os.listdir(dir_path)
+  if err
     die(f"listdir failed for '{dir_path}': {err}")
 
   table.sort(names)
@@ -74,12 +74,11 @@ fn walk_markdown(root, rel, out)
     if os.isdir(full)
       walk_markdown(root, child_rel, out)
       continue
-    if name.ends_with(".md")
-      out <+ child_rel
+    if name.ends_with(".md") out <+ child_rel
 
-fn nav_html(pages, current_html)
+fn nav_entries(pages, current_html)
   cur_dir = path.dirname(current_html)
-  items = {}
+  entries = {}
   root_pages = {}
   group_pages = {}
   group_names = {}
@@ -98,8 +97,12 @@ fn nav_html(pages, current_html)
 
   for p in root_pages
     href = relative_link(cur_dir, p.rel_html)
-    cls = p.rel_html == current_html ? " class=\"active\"" : ""
-    items <+ f"<li{cls}><a href=\"{html_escape(href)}\">{html_escape(p.title)}</a></li>"
+    entries <+ {
+      kind = "page",
+      href = html_escape(href),
+      title = html_escape(p.title),
+      active = p.rel_html == current_html,
+    }
 
   table.sort(group_names)
   for group in group_names
@@ -109,21 +112,24 @@ fn nav_html(pages, current_html)
     elif group == "language"
       group_label = "Language"
 
-    sub_items = {}
+    children = {}
     for p in group_pages[group]
       href = relative_link(cur_dir, p.rel_html)
-      cls = p.rel_html == current_html ? " class=\"active\"" : ""
-      sub_items <+ f"<li{cls}><a href=\"{html_escape(href)}\">{html_escape(p.title)}</a></li>"
+      children <+ {
+        href = html_escape(href),
+        title = html_escape(p.title),
+        active = p.rel_html == current_html,
+      }
 
     is_open = current_html.starts_with(group + "/")
-    open_attr = is_open ? " open" : ""
-    group_cls = is_open ? " class=\"nav-group active\"" : " class=\"nav-group\""
-    subnav = "<ul class=\"subnav\">" + table.concat(sub_items, "") + "</ul>"
-    details = f"<details{group_cls}{open_attr}><summary>{html_escape(group_label)}</summary>{subnav}</details>"
-    items <+ f"<li class=\"nav-collapsible\">{details}</li>"
+    entries <+ {
+      kind = "group",
+      label = html_escape(group_label),
+      open = is_open,
+      children = children,
+    }
 
-  nav_items = table.concat(items, "")
-  return "<ul class=\"nav\">" + nav_items + "</ul>"
+  return entries
 
 fn page_from_md(src_root, rel_md)
   src_path = path.join(src_root, rel_md)
@@ -145,14 +151,14 @@ fn collect_pages(src_root, md_paths)
   table.sort(pages, fn(a, b) return a.rel_html < b.rel_html)
   return pages
 
-fn render_page(tmpl_src, title, nav, body, css_href, logo_href, home_href, favicon_href)
+fn render_page(tmpl_src, title, nav_entries, body, css_href, logo_href, home_href, favicon_href)
   return template.render(tmpl_src, {
     title = html_escape(title),
     css_href = html_escape(css_href),
     logo_href = html_escape(logo_href),
     home_href = html_escape(home_href),
     favicon_href = html_escape(favicon_href),
-    nav_html = nav,
+    nav_entries = nav_entries,
     body_html = body,
   })
 
@@ -170,8 +176,8 @@ fn build_with_opts(opts)
   if os.exists(out_root)
     os.system(f"rm -rf {out_root}")
 
-  local ok, err = os.mkdir(out_root, true)
-  if ok != true
+  ok, err = os.mkdir(out_root, true)
+  if not ok
     die(f"mkdir failed for '{out_root}': {err}")
 
   template_path = path.join(assets_root, DEFAULT_TEMPLATE_FILE)
@@ -196,7 +202,7 @@ fn build_with_opts(opts)
 
   index_html = nil
   for p in pages
-    nav = nav_html(pages, p.rel_html)
+    nav = nav_entries(pages, p.rel_html)
     page_dir = path.dirname(p.rel_html)
     css_href = relative_link(page_dir, DEFAULT_CSS_FILE)
     logo_href = relative_link(page_dir, logo_file)
@@ -209,7 +215,7 @@ fn build_with_opts(opts)
 
   if index_html == nil and #pages > 0
     first = pages[1]
-    nav = nav_html(pages, first.rel_html)
+    nav = nav_entries(pages, first.rel_html)
     page_dir = path.dirname(first.rel_html)
     css_href = relative_link(page_dir, DEFAULT_CSS_FILE)
     logo_href = relative_link(page_dir, logo_file)

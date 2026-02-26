@@ -47,6 +47,7 @@ static int instr_length(Chunk* chunk, int offset) {
         case OP_MUL_LOCAL_CONST:
         case OP_DIV_LOCAL_CONST:
         case OP_MOD_LOCAL_CONST:
+        case OP_UNPACK:
             return 3;
         case OP_FOR_PREP:
         case OP_FOR_LOOP:

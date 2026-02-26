@@ -18,15 +18,17 @@ fn parse_url(raw_url)
   scheme = "http"
   rest = url
 
-  local si, sj = string.find(url, "://")
-  if si
+  sj = string.find(url, "://")
+  si = sj == nil ? nil : (sj - 2)
+  if sj
     scheme = string.lower(string.sub(url, 1, si - 1))
     rest = string.sub(url, sj + 1)
 
   if scheme != "http" and scheme != "https"
     error("unsupported scheme: " + scheme + " (use http or https)")
 
-  local slash_i, slash_j = string.find(rest, "/")
+  slash_j = string.find(rest, "/")
+  slash_i = slash_j == nil ? nil : slash_j
   hostport = rest
   path = "/"
   if slash_i
@@ -38,7 +40,8 @@ fn parse_url(raw_url)
   host = hostport
   port = (scheme == "https") ? 443 : 80
 
-  local colon_i, colon_j = string.find(hostport, ":")
+  colon_j = string.find(hostport, ":")
+  colon_i = colon_j == nil ? nil : colon_j
   if colon_i and colon_i > 1
     host = string.sub(hostport, 1, colon_i - 1)
     raw_port = string.sub(hostport, colon_j + 1)
@@ -75,7 +78,8 @@ fn build_request(method, target, host)
 fn parse_status_code(response)
   if response == nil or response == ""
     return nil
-  local line_end_i, line_end_j = string.find(response, "\r\n")
+  line_end_j = string.find(response, "\r\n")
+  line_end_i = line_end_j == nil ? nil : (line_end_j - 1)
   if not line_end_i
     return nil
   status_line = string.sub(response, 1, line_end_i - 1)
@@ -94,18 +98,18 @@ fn run_one(request, cfg)
 
   client.settimeout(client, cfg.timeout_sec)
 
-  local conn_ok, conn_err = client.connect(client, cfg.host, cfg.port)
+  conn_ok, conn_err = client.connect(client, cfg.host, cfg.port)
   if not conn_ok
     client.close(client)
     return false, nil, 0, conn_err or conn_ok or "connect failed"
 
   if cfg.scheme == "https"
-    local tls_ok, tls_err = client.tls(client, cfg.host, cfg.verify_tls)
+    tls_ok, tls_err = client.tls(client, cfg.host, cfg.verify_tls)
     if not tls_ok
       client.close(client)
       return false, nil, 0, tls_err or tls_ok or "tls failed"
 
-  local sent, send_err = client.send(client, request)
+  sent, send_err = client.send(client, request)
   if type(sent) != "number"
     client.close(client)
     return false, nil, 0, send_err or sent or "send failed"
@@ -113,7 +117,7 @@ fn run_one(request, cfg)
   chunks = {}
   saw_data = false
   while true
-    local chunk, recv_err = client.recv(client, 4096)
+    chunk, recv_err = client.recv(client, 4096)
     if chunk == nil
       if recv_err == "timeout"
         if saw_data
@@ -158,7 +162,7 @@ fn worker_loop(cfg)
   deadline = os.clock() + cfg.duration_sec
   while os.clock() < deadline
     stats.attempts = stats.attempts + 1
-    local ok, code, nbytes, err = run_one(req, cfg)
+    ok, code, nbytes, err = run_one(req, cfg)
     if ok
       stats.responses = stats.responses + 1
       stats.bytes = stats.bytes + nbytes
@@ -183,7 +187,7 @@ fn worker_entry(cfg, ch)
   ch.send(ch, worker_loop(cfg))
   return true
 
-app = cli.App(name = "loadtest")
+app = cli.App(name="loadtest")
 
 @app.command
 fn rps(url, duration_sec: int = 10, concurrency: int = 10, timeout_ms: int = 2000, verify_tls: bool = false)
@@ -213,7 +217,12 @@ fn rps(url, duration_sec: int = 10, concurrency: int = 10, timeout_ms: int = 200
     verify_tls = verify_tls
   }
 
-  cli.printc(string.format("[cyan]target[/] %s://%s:%d%s  [cyan]duration[/] %ds  [cyan]concurrency[/] %d", cfg.scheme, cfg.host, cfg.port, cfg.path, d, c))
+  cli.printc(
+    string.format(
+      "[cyan]target[/] %s://%s:%d%s  [cyan]duration[/] %ds  [cyan]concurrency[/] %d",
+      cfg.scheme, cfg.host, cfg.port, cfg.path, d, c
+    )
+  )
 
   started = os.clock()
   total = {attempts = 0, responses = 0, ok = 0, fail = 0, bytes = 0}
@@ -228,7 +237,7 @@ fn rps(url, duration_sec: int = 10, concurrency: int = 10, timeout_ms: int = 200
 
     for i in 1..c
       worker_stats = ch.recv(ch)
-      if type(worker_stats) == "table"
+      if istype(worker_stats, 'table')
         total = merge_stats(total, worker_stats)
 
     for h in handles
@@ -242,15 +251,15 @@ fn rps(url, duration_sec: int = 10, concurrency: int = 10, timeout_ms: int = 200
   ok_rps = total.ok / elapsed
   mbps = (total.bytes / (1024.0 * 1024.0)) / elapsed
 
-  print ""
-  print "Summary"
-  print "  requests:    " + str(total.responses) + " responses (" + str(total.attempts) + " attempts)"
-  print "  ok/fail:     " + str(total.ok) + " / " + str(total.fail)
-  print "  elapsed:     " + string.format("%.3fs", elapsed)
-  print "  rps:         " + string.format("%.2f", rps)
-  print "  ok rps:      " + string.format("%.2f", ok_rps)
-  print "  throughput:  " + string.format("%.2f MiB/s", mbps)
-  return {
+  print f[[
+      Summary
+      requests: {total.responses} responses ({total.attempts} attempts)"
+      ok/fail: {total.ok} / {total.fail}
+      elapsed: {elapsed:.3f}s
+      rps: {rps:.2f}
+      ok rps: {ok_rps:.2f}
+      throughput: {mbps:.2f} MiB/s"
+  ]]
     requests = total.responses,
     attempts = total.attempts,
     ok = total.ok,

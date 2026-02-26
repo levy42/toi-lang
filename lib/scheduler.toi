@@ -25,7 +25,7 @@ Scheduler.run = fn()
     next_tasks = {}
     for co in Scheduler.tasks
       if coroutine.status(co) != "dead"
-        local status, cmd, arg = coroutine.resume(co)
+        status, cmd, arg = coroutine.resume(co)
 
         if coroutine.status(co) != "dead"
           if cmd == "sleep"

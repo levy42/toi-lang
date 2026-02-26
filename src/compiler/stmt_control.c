@@ -5,9 +5,34 @@
 #include "stmt.h"
 
 static void print_statement() {
-    type_stack_top = 0;
-    expression();
-    emit_byte(OP_PRINT);
+    uint8_t arg_count = 0;
+
+    if (match(TOKEN_LEFT_PAREN)) {
+        if (!check(TOKEN_RIGHT_PAREN)) {
+            do {
+                type_stack_top = 0;
+                expression();
+                if (arg_count == 255) {
+                    error("Can't print more than 255 values.");
+                    return;
+                }
+                arg_count++;
+            } while (match(TOKEN_COMMA));
+        }
+        consume(TOKEN_RIGHT_PAREN, "Expect ')' after print arguments.");
+    } else {
+        do {
+            type_stack_top = 0;
+            expression();
+            if (arg_count == 255) {
+                error("Can't print more than 255 values.");
+                return;
+            }
+            arg_count++;
+        } while (match(TOKEN_COMMA));
+    }
+
+    emit_bytes(OP_PRINT, arg_count);
 }
 
 static void delete_variable(Token name) {
@@ -122,35 +147,108 @@ static int match_identifier_keyword(const char* keyword) {
     return 1;
 }
 
+static int tokens_equal(Token a, Token b) {
+    return a.length == b.length && memcmp(a.start, b.start, (size_t)a.length) == 0;
+}
+
+static int token_indent_local(Token token) {
+    const char* p = token.start;
+    const char* line_start = p;
+    while (line_start > lexer.source_start && line_start[-1] != '\n') {
+        line_start--;
+    }
+    int indent = 0;
+    while (line_start < p) {
+        if (*line_start == ' ') indent++;
+        else if (*line_start == '\t') indent += 4;
+        else break;
+        line_start++;
+    }
+    return indent;
+}
+
+static void parse_statement_suite(int header_line, const char* indent_error) {
+    if (match(TOKEN_INDENT)) {
+        block();
+        match(TOKEN_DEDENT);
+        return;
+    }
+
+    if (parser.current.line > header_line) {
+        if (!in_table_entry_expression) {
+            error(indent_error);
+            statement();
+            return;
+        }
+
+        int header_indent = token_indent_local(parser.previous);
+        int body_indent = token_indent_local(parser.current);
+        if (body_indent <= header_indent) {
+            error(indent_error);
+            statement();
+            return;
+        }
+
+        while (!check(TOKEN_EOF) &&
+               !check(TOKEN_RIGHT_BRACE) &&
+               !check(TOKEN_DEDENT) &&
+               parser.current.line > header_line &&
+               token_indent_local(parser.current) > header_indent) {
+            statement();
+        }
+        return;
+    }
+
+    statement();
+}
+
 static void assign_name_from_stack(Token name, uint8_t rhs_type) {
-    uint8_t set_op;
     int arg = resolve_local(current, &name);
     if (arg != -1) {
-        set_op = OP_SET_LOCAL;
-        emit_bytes(set_op, (uint8_t)arg);
+        emit_bytes(OP_SET_LOCAL, (uint8_t)arg);
         update_local_type(arg, rhs_type);
         return;
     }
 
-    arg = resolve_upvalue(current, &name);
-    if (arg != -1) {
-        set_op = OP_SET_UPVALUE;
-        emit_bytes(set_op, (uint8_t)arg);
+    if (is_explicit_global_name(current, &name)) {
+        emit_bytes(OP_SET_GLOBAL, identifier_constant(&name));
         return;
     }
 
-    arg = identifier_constant(&name);
-    if (current->type == TYPE_SCRIPT) {
-        emit_byte(OP_DUP);
-        emit_bytes(OP_DEFINE_GLOBAL, (uint8_t)arg);
-    } else {
-        // Local-by-default, consistent with single-target assignment semantics.
+    if (current->type == TYPE_FUNCTION) {
+        arg = resolve_upvalue(current, &name);
+        if (arg != -1) {
+            emit_bytes(OP_SET_UPVALUE, (uint8_t)arg);
+            return;
+        }
+
+        // Function assignment binds local unless explicit global.
         int local_index = current->local_count;
         add_local(name);
         mark_initialized();
         emit_bytes(OP_SET_LOCAL, (uint8_t)local_index);
         set_local_type(local_index, rhs_type);
+        return;
     }
+
+    arg = resolve_upvalue(current, &name);
+    if (arg != -1) {
+        emit_bytes(OP_SET_UPVALUE, (uint8_t)arg);
+        return;
+    }
+
+    if (is_repl_mode && current->type == TYPE_SCRIPT) {
+        arg = identifier_constant(&name);
+        emit_byte(OP_DUP);
+        emit_bytes(OP_DEFINE_GLOBAL, (uint8_t)arg);
+        return;
+    }
+
+    int local_index = current->local_count;
+    add_local(name);
+    mark_initialized();
+    emit_bytes(OP_SET_LOCAL, (uint8_t)local_index);
+    set_local_type(local_index, rhs_type);
 }
 
 static int is_multi_assignment_statement(void) {
@@ -189,34 +287,66 @@ static void multi_assignment_statement(void) {
         }
     } while (match(TOKEN_COMMA));
 
+    if (!(is_repl_mode && current->type == TYPE_SCRIPT)) {
+        int declared = 0;
+        for (int i = 0; i < target_count; i++) {
+            if (is_explicit_global_name(current, &targets[i])) continue;
+            if (resolve_local(current, &targets[i]) != -1) continue;
+
+            int seen = 0;
+            for (int j = 0; j < i; j++) {
+                if (tokens_equal(targets[j], targets[i])) {
+                    seen = 1;
+                    break;
+                }
+            }
+            if (seen) continue;
+
+            add_local(targets[i]);
+            declared++;
+        }
+        if (declared > 0) {
+            mark_initialized_count(declared);
+        }
+    }
+
     consume(TOKEN_EQUALS, "Expect '=' in assignment.");
 
-    // Evaluate RHS expressions into a temporary table in positional order.
-    emit_byte(OP_NEW_TABLE);
-    int expr_index = 1;
+    // Normalize evaluation stack to local slot depth before RHS evaluation.
+    emit_bytes(OP_ADJUST_STACK, (uint8_t)current->local_count);
+
+    int expr_count = 0;
     do {
-        emit_byte(OP_DUP);
-        emit_constant(NUMBER_VAL(expr_index++));
         type_stack_top = 0;
         expression();
-        emit_byte(OP_SET_TABLE);
-        emit_byte(OP_POP);
+        expr_count++;
     } while (match(TOKEN_COMMA));
 
-    // Assign each target from temp table index 1..N.
-    type_stack_top = 0;
-    for (int i = 0; i < target_count; i++) {
-        emit_byte(OP_DUP);
-        emit_constant(NUMBER_VAL(i + 1));
-        emit_byte(OP_GET_TABLE);
+    // For explicit multi-expression RHS, pad missing values with nil.
+    if (expr_count > 1) {
+        while (expr_count < target_count) {
+            emit_byte(OP_NIL);
+            expr_count++;
+        }
+    } else {
+        // Normalize single-expression RHS for multi-assignment:
+        // - preserve multi-return call values
+        // - expand single table RHS into positional values
+        // - pad missing values with nil
+        emit_byte(OP_UNPACK);
+        emit_byte((uint8_t)current->local_count);
+        emit_byte((uint8_t)target_count);
+    }
+
+    // Assign from right to left so stack order lines up with targets.
+    for (int i = target_count - 1; i >= 0; i--) {
         assign_name_from_stack(targets[i], TYPEHINT_ANY);
-        // Always discard the assignment value in multi-assign to keep
-        // the temporary RHS table at the top for the next target.
         emit_byte(OP_POP);
     }
 
-    // Pop temp table.
-    emit_byte(OP_POP);
+    // Keep evaluation stack above local slots even when RHS returned fewer
+    // values than targets (avoids clobbering live locals on later pushes).
+    emit_bytes(OP_ADJUST_STACK, (uint8_t)current->local_count);
 }
 
 static void if_statement() {
@@ -228,15 +358,7 @@ static void if_statement() {
     emit_byte(OP_POP); 
     
     begin_scope();
-    if (match(TOKEN_INDENT)) {
-        block();
-        match(TOKEN_DEDENT);
-    } else {
-        if (parser.current.line > header_line) {
-            error("Expected indented block after 'if'.");
-        }
-        statement();
-    }
+    parse_statement_suite(header_line, "Expected indented block after 'if'.");
     end_scope();
     int else_jump = emit_jump(OP_JUMP);
     
@@ -249,15 +371,7 @@ static void if_statement() {
         if (match(TOKEN_ELSE)) {
             int else_line = parser.previous.line;
             begin_scope();
-            if (match(TOKEN_INDENT)) {
-                block();
-                match(TOKEN_DEDENT);
-            } else {
-                if (parser.current.line > else_line) {
-                    error("Expected indented block after 'else'.");
-                }
-                statement();
-            }
+            parse_statement_suite(else_line, "Expected indented block after 'else'.");
             end_scope();
         }
     }

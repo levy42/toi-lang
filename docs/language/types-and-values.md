@@ -8,6 +8,7 @@ Runtime `type(x)` strings include:
 - `string`
 - `table`
 - `function`
+- `generator`
 - `thread`
 - `userdata`
 

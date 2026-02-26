@@ -1,8 +1,8 @@
-local server = import lib.http_server
-local http = import http
-local os = import os
-local io = import io
-local template = import template
+server = import lib.http_server
+http = import http
+os = import os
+io = import io
+template = import template
 
 fn read_all(path)
   f, err = io.open(path, "r")

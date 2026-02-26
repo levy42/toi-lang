@@ -6,7 +6,7 @@ WORKERS = 4
 ITER = 200
 
 fn worker_inc(mu, counter, n)
-  local j = 1
+  j = 1
   while j <= n
     mu.lock(mu)
     counter.n = counter.n + 1
@@ -20,21 +20,21 @@ handles = {}
 
 i = 1
 while i <= WORKERS
-  local h, err = thread.spawn(worker_inc, mu, counter, ITER)
+  h = thread.spawn(worker_inc, mu, counter, ITER)
   assert_true(h != nil, "spawn failed")
   handles[i] = h
   i = i + 1
 
 i = 1
 while i <= WORKERS
-  local ok, err = thread.join(handles[i])
+  ok = thread.join(handles[i])
   assert_true(ok == true, "join failed")
   i = i + 1
 
 assert_eq(counter.n, WORKERS * ITER)
 
 fn producer(ch, id, n)
-  local j = 1
+  j = 1
   while j <= n
     ch.send(ch, id * 100000 + j)
     j = j + 1
@@ -46,7 +46,7 @@ producers = {}
 
 i = 1
 while i <= WORKERS
-  local p, err = thread.spawn(producer, ch, i, ITER)
+  p = thread.spawn(producer, ch, i, ITER)
   assert_true(p != nil, "producer spawn failed")
   producers[i] = p
   i = i + 1
@@ -65,7 +65,7 @@ while done < WORKERS
 
 i = 1
 while i <= WORKERS
-  local count, err = thread.join(producers[i])
+  count = thread.join(producers[i])
   assert_true(count != nil, "producer join failed")
   assert_eq(count, ITER)
   i = i + 1

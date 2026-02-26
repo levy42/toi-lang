@@ -433,6 +433,19 @@ static void unary(int can_assign) {
     last_expr_ends_with_call = 0;
 }
 
+static void not_in(int can_assign) {
+    (void)can_assign;
+    consume(TOKEN_IN, "Expect 'in' after 'not'.");
+    ParseRule* rule = get_rule(TOKEN_IN);
+    parse_precedence((Precedence)(rule->precedence + 1));
+    type_pop();
+    type_pop();
+    emit_byte(OP_IN);
+    emit_byte(OP_NOT);
+    type_push(TYPEHINT_BOOL);
+    last_expr_ends_with_call = 0;
+}
+
 static void binary(int can_assign) {
     (void)can_assign;
     TokenType operator_type = parser.previous.type;
@@ -468,6 +481,10 @@ static void binary(int can_assign) {
             break;
         case TOKEN_HAS:
             emit_byte(OP_HAS);
+            out_type = TYPEHINT_BOOL;
+            break;
+        case TOKEN_IN:
+            emit_byte(OP_IN);
             out_type = TYPEHINT_BOOL;
             break;
         case TOKEN_APPEND:
@@ -1119,7 +1136,8 @@ static void subscript(int can_assign) {
             advance();
             emit_byte(OP_NIL); // start
         } else {
-            parse_precedence((Precedence)(PREC_TERM + 1));
+            // Parse the start bound as a full arithmetic expression and stop before '..'.
+            parse_precedence(PREC_TERM);
             consume(TOKEN_DOT_DOT, "Expect '..' in slice.");
         }
         if (check(TOKEN_COLON) || check(TOKEN_RIGHT_BRACKET)) {
@@ -2140,7 +2158,7 @@ ParseRule rules[] = {
     [TOKEN_RIGHT_BRACKET] = {NULL,     NULL,   PREC_NONE},
     [TOKEN_COMMA]         = {NULL,     NULL,   PREC_NONE},
     [TOKEN_DOT]           = {NULL,     dot,    PREC_CALL},
-    [TOKEN_DOT_DOT]       = {NULL,     range_, PREC_TERM},
+    [TOKEN_DOT_DOT]       = {NULL,     range_, PREC_RANGE},
     [TOKEN_MINUS]         = {unary,    binary, PREC_TERM},
     [TOKEN_PLUS]          = {NULL,     binary, PREC_TERM},
     [TOKEN_SEMICOLON]     = {NULL,     NULL,   PREC_NONE},
@@ -2168,6 +2186,7 @@ ParseRule rules[] = {
     [TOKEN_LESS]          = {NULL,     binary, PREC_COMPARISON},
     [TOKEN_LESS_EQUAL]    = {NULL,     binary, PREC_COMPARISON},
     [TOKEN_APPEND]        = {NULL,     binary, PREC_TERM},
+    [TOKEN_IN]            = {NULL,     binary, PREC_COMPARISON},
     [TOKEN_HAS]           = {NULL,     binary, PREC_COMPARISON},
     [TOKEN_IDENTIFIER]    = {variable, NULL,   PREC_NONE},
     [TOKEN_STRING]        = {string,   NULL,   PREC_NONE},
@@ -2184,7 +2203,7 @@ ParseRule rules[] = {
     [TOKEN_RETURN]        = {NULL,     NULL,   PREC_NONE},
     [TOKEN_YIELD]         = {NULL,     NULL,   PREC_NONE},
     [TOKEN_TRUE]          = {literal,  NULL,   PREC_NONE},
-    [TOKEN_NOT]           = {unary,    NULL,   PREC_NONE},
+    [TOKEN_NOT]           = {unary,    not_in, PREC_COMPARISON},
     [TOKEN_LOCAL]         = {NULL,     NULL,   PREC_NONE},
     [TOKEN_GLOBAL]        = {NULL,     NULL,   PREC_NONE},
     [TOKEN_WHILE]         = {NULL,     NULL,   PREC_NONE},

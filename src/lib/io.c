@@ -295,6 +295,67 @@ static int file_readline(VM* vm, int arg_count, Value* args) {
     RETURN_OBJ(out);
 }
 
+static int file_next(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(2);
+    ASSERT_USERDATA(0);
+
+    ObjUserdata* udata = GET_USERDATA(0);
+    FILE* fp = (FILE*)udata->data;
+    if (!fp) {
+        push(vm, NIL_VAL);
+        push(vm, NIL_VAL);
+        return 1;
+    }
+
+    double line_no = 1;
+    if (!IS_NIL(args[1])) {
+        if (!IS_NUMBER(args[1])) {
+            vm_runtime_error(vm, "file.__next control must be number or nil.");
+            return 0;
+        }
+        line_no = AS_NUMBER(args[1]) + 1;
+    }
+
+    size_t cap = 128;
+    size_t len = 0;
+    char* buffer = (char*)malloc(cap);
+    if (!buffer) {
+        vm_runtime_error(vm, "Out of memory in file.__next().");
+        return 0;
+    }
+
+    int ch = 0;
+    while ((ch = fgetc(fp)) != EOF) {
+        if (ch == '\n') break;
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char* grown = (char*)realloc(buffer, cap);
+            if (!grown) {
+                free(buffer);
+                vm_runtime_error(vm, "Out of memory in file.__next().");
+                return 0;
+            }
+            buffer = grown;
+        }
+        buffer[len++] = (char)ch;
+    }
+
+    if (ch == EOF && len == 0) {
+        free(buffer);
+        push(vm, NIL_VAL);
+        push(vm, NIL_VAL);
+        return 1;
+    }
+
+    buffer[len] = '\0';
+    ObjString* out = copy_string(buffer, (int)len);
+    free(buffer);
+
+    push(vm, NUMBER_VAL(line_no));
+    push(vm, OBJ_VAL(out));
+    return 1;
+}
+
 static int file_write(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(2);
     ASSERT_USERDATA(0);
@@ -382,6 +443,39 @@ static int buffer_readline(VM* vm, int arg_count, Value* args) {
     b->pos = end;
     if (b->pos < b->len && b->data[b->pos] == '\n') b->pos++;
     RETURN_OBJ(out);
+}
+
+static int buffer_next(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(2);
+    ASSERT_USERDATA(0);
+    ObjUserdata* udata = GET_USERDATA(0);
+    BufferData* b = buffer_from_userdata(udata);
+    if (b == NULL || b->closed || b->pos >= b->len) {
+        push(vm, NIL_VAL);
+        push(vm, NIL_VAL);
+        return 1;
+    }
+
+    double line_no = 1;
+    if (!IS_NIL(args[1])) {
+        if (!IS_NUMBER(args[1])) {
+            vm_runtime_error(vm, "buffer.__next control must be number or nil.");
+            return 0;
+        }
+        line_no = AS_NUMBER(args[1]) + 1;
+    }
+
+    size_t start = b->pos;
+    size_t end = start;
+    while (end < b->len && b->data[end] != '\n') end++;
+
+    ObjString* out = copy_string(b->data + start, (int)(end - start));
+    b->pos = end;
+    if (b->pos < b->len && b->data[b->pos] == '\n') b->pos++;
+
+    push(vm, NUMBER_VAL(line_no));
+    push(vm, OBJ_VAL(out));
+    return 1;
 }
 
 static int buffer_write(VM* vm, int arg_count, Value* args) {
@@ -566,6 +660,7 @@ void register_io(VM* vm) {
         {"close", file_close},
         {"read", file_read},
         {"readline", file_readline},
+        {"__next", file_next},
         {"write", file_write},
         {"seek", file_seek},
         {"tell", file_tell},
@@ -611,6 +706,7 @@ void register_io(VM* vm) {
         {"close", buffer_close},
         {"read", buffer_read},
         {"readline", buffer_readline},
+        {"__next", buffer_next},
         {"write", buffer_write},
         {"seek", buffer_seek},
         {"tell", buffer_tell},

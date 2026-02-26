@@ -83,3 +83,55 @@ int vm_handle_op_has(VM* vm, CallFrame** frame, uint8_t** ip) {
     vm_runtime_error(vm, "Left operand of 'has' must be a string or table.");
     return 0;
 }
+
+int vm_handle_op_in(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Value container = pop(vm);
+    Value needle = pop(vm);
+    Value method = get_metamethod(vm, container, "__has");
+    if (IS_NIL(method)) method = get_metamethod(vm, needle, "__has");
+    if (!IS_NIL(method)) {
+        push(vm, method);
+        push(vm, container);
+        push(vm, needle);
+        (*frame)->ip = *ip;
+        if (!call(vm, AS_CLOSURE(method), 2)) return 0;
+        *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
+        *ip = (*frame)->ip;
+        return 1;
+    }
+    if (IS_STRING(container)) {
+        if (!IS_STRING(needle)) {
+            vm_runtime_error(vm, "Left operand of 'in' must be a string when right operand is a string.");
+            return 0;
+        }
+        push(vm, BOOL_VAL(string_contains_local(AS_STRING(container), AS_STRING(needle))));
+        return 1;
+    }
+    if (IS_TABLE(container)) {
+        ObjTable* t = AS_TABLE(container);
+        int found = 0;
+        int max = t->table.array_max;
+        if (max > t->table.array_capacity) max = t->table.array_capacity;
+        for (int i = 0; i < max; i++) {
+            Value v = t->table.array[i];
+            if (!IS_NIL(v) && values_equal_simple_local(v, needle)) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            for (int i = 0; i < t->table.capacity; i++) {
+                Entry* entry = &t->table.entries[i];
+                if (entry->key != NULL && values_equal_simple_local(entry->value, needle)) {
+                    found = 1;
+                    break;
+                }
+            }
+        }
+        push(vm, BOOL_VAL(found));
+        return 1;
+    }
+
+    vm_runtime_error(vm, "Right operand of 'in' must be a string or table.");
+    return 0;
+}

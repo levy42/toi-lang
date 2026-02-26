@@ -83,12 +83,12 @@ else
   port_ch = thread.channel(1)
   result_ch = thread.channel(1)
 
-  local h, err = thread.spawn(server_worker, port_ch, result_ch)
+  h = thread.spawn(server_worker, port_ch, result_ch)
   assert_true(h != nil, "spawn failed")
 
   port_or_skip = port_ch.recv(port_ch)
   if type(port_or_skip) == "string" and starts_with(port_or_skip, "skip:")
-    local joined = thread.join(h)
+    joined = thread.join(h)
     assert_true(joined == true)
     print "socket tls loopback skipped (" + string.sub(port_or_skip, 6) + ")"
   else

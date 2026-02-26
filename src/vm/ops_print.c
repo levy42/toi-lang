@@ -2,8 +2,7 @@
 
 #include "ops_print.h"
 
-int vm_handle_op_print(VM* vm, CallFrame** frame, uint8_t** ip, InterpretResult* out_result) {
-    Value v = pop(vm);
+static int vm_print_value(VM* vm, CallFrame** frame, uint8_t** ip, Value v, InterpretResult* out_result) {
 
     ObjTable* metatable = NULL;
     if (IS_TABLE(v)) {
@@ -39,7 +38,6 @@ int vm_handle_op_print(VM* vm, CallFrame** frame, uint8_t** ip, InterpretResult*
                 } else {
                     print_value(str_result);
                 }
-                printf("\n");
                 return 1;
             }
             return -1;
@@ -51,6 +49,33 @@ int vm_handle_op_print(VM* vm, CallFrame** frame, uint8_t** ip, InterpretResult*
         fwrite(s->chars, 1, (size_t)s->length, stdout);
     } else {
         print_value(v);
+    }
+    return 1;
+}
+
+int vm_handle_op_print(
+    VM* vm,
+    CallFrame** frame,
+    uint8_t** ip,
+    uint8_t arg_count,
+    InterpretResult* out_result
+) {
+    if (arg_count == 0) {
+        printf("\n");
+        return 1;
+    }
+
+    Value values[UINT8_MAX];
+    for (int i = (int)arg_count - 1; i >= 0; i--) {
+        values[i] = pop(vm);
+    }
+
+    for (uint8_t i = 0; i < arg_count; i++) {
+        int print_status = vm_print_value(vm, frame, ip, values[i], out_result);
+        if (print_status <= 0) return print_status;
+        if (i + 1 < arg_count) {
+            printf(" ");
+        }
     }
     printf("\n");
     return 1;

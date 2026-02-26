@@ -79,6 +79,8 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return byte_instruction("OP_RETURN_N", chunk, offset);
         case OP_ADJUST_STACK:
             return byte_instruction("OP_ADJUST_STACK", chunk, offset);
+        case OP_UNPACK:
+            return double_byte_instruction("OP_UNPACK", chunk, offset);
         case OP_TRY:
             return try_instruction("OP_TRY", chunk, offset);
         case OP_END_TRY:
@@ -174,7 +176,7 @@ int disassemble_instruction(Chunk* chunk, int offset) {
         case OP_LENGTH:
             return simple_instruction("OP_LENGTH", offset);
         case OP_PRINT:
-            return simple_instruction("OP_PRINT", offset);
+            return byte_instruction("OP_PRINT", chunk, offset);
         case OP_JUMP:
             return jump_instruction("OP_JUMP", 1, chunk, offset);
         case OP_JUMP_IF_FALSE:
@@ -237,6 +239,8 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return simple_instruction("OP_LESS", offset);
         case OP_HAS:
             return simple_instruction("OP_HAS", offset);
+        case OP_IN:
+            return simple_instruction("OP_IN", offset);
         case OP_POWER:
             return simple_instruction("OP_POWER", offset);
         case OP_INT_DIV:

@@ -9,7 +9,7 @@ fn gen(n)
     i += 1
 
 g = gen(5)
-assert_eq(type(g), "thread")
+assert_eq(type(g), "generator")
 
 sum = 0
 for v in g

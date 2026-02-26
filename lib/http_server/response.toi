@@ -4,6 +4,7 @@ http = import http
 
 Response = {}
 JSON_SCALAR_TYPES = {number = true, boolean = true, ["nil"] = true}
+STREAM_TYPES = {thread = true, generator = true}
 
 fn stream_response(status, headers, stream)
   return {
@@ -20,11 +21,11 @@ Response.normalize = fn(res)
       return res
     return http.response(200, {["Content-Type"] = "text/plain"}, res)
 
-  if res_type == "thread"
+  if STREAM_TYPES[res_type]
     return stream_response(200, {}, res)
 
   if res_type == "table"
-    if res.__stream or res.stream or type(res.body) == "thread"
+    if res.__stream or res.stream or STREAM_TYPES[type(res.body)]
       return stream_response(res.status, res.headers, res.stream or res.body)
     if res.status or res.headers or res.body
       return http.response(res.status or 200, res.headers, res.body or "")

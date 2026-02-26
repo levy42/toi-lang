@@ -18,7 +18,7 @@ assert_eq(sum(1, 2, 3, 4), 10)
 
 fn pair()
   return 7, 9
-local p, q = pair()
+p, q = pair()
 assert_eq(p, 7)
 assert_eq(q, 9)
 

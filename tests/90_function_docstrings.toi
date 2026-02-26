@@ -17,7 +17,7 @@ line b]]
   return 4
 
 fn not_first()
-  local x = 1
+  x = 1
   "later"
   return x
 

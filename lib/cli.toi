@@ -1,14 +1,4 @@
-inspect = import inspect
-io = import io
-os = import os
-string = import string
-table = import table
-types = import lib.types
-thread = nil
-try
-  thread = import thread
-except e
-  thread = nil
+import inspect, os, string, sys, table, lib.types, thread
 
 ESC = string.char(27)
 ANSI = {
@@ -71,9 +61,9 @@ fn _format(text)
         i = i + 1
         consumed = true
 
-      close_i = string.find(text, "]", i + 1)
+      close_i = text.find("]", i + 1)
       if close_i and close_i > i
-        tag = string.sub(text, i + 1, close_i - 1)
+        tag = text.sub(i + 1, close_i - 1)
         code = _tag_code(tag)
         if code
           out <+ code
@@ -87,34 +77,18 @@ fn _format(text)
 
   if used_color
     out <+ ANSI.reset
-  return table.concat(out, "")
+  return "".join(out)
 
 fn printc(text)
   print _format(text)
 
-_stdout_file = nil
-_stdout_failed = false
-
-fn _stdout()
-  if _stdout_failed
-    return nil
-  if _stdout_file == nil
-    try
-      _stdout_file = io.open("/dev/stdout", "w")
-    except e
-      _stdout_failed = true
-      _stdout_file = nil
-  return _stdout_file
-
 fn _term_write(s)
   if type(s) != "string"
     s = str(s)
-  f = _stdout()
-  if f
-    f.write(s)
-    return true
-  print s
-  return false
+  wrote, err = sys.write(s)
+  if wrote == nil
+    error("sys.write failed: " + str(err))
+  return true
 
 fn _repeat_char(ch, n)
   if n <= 0
@@ -145,7 +119,7 @@ fn _write_final(obj, raw)
 
 fn _auto_loop(step, obj, stop_ch, interval)
   while true
-    local item, ok = stop_ch.tryrecv(stop_ch)
+    item, ok = stop_ch.tryrecv(stop_ch)
     if ok
       return true
     step(obj)
@@ -163,7 +137,7 @@ fn _auto_start(obj, step, interval, fallback = nil)
   if interval == nil or interval <= 0
     interval = 0.08
   obj.auto_stop = thread.channel(1)
-  local h, err = thread.spawn(_auto_loop, step, obj, obj.auto_stop, interval)
+  h = thread.spawn(_auto_loop, step, obj, obj.auto_stop, interval)
   if h == nil
     obj.auto_stop = nil
     if fallback

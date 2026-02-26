@@ -148,33 +148,33 @@ static int string_sub(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(2);
     ASSERT_STRING(0);
     ASSERT_NUMBER(1);
-    
+
     ObjString* str = GET_STRING(0);
     int start = (int)GET_NUMBER(1);
     int end = str->length;
-    
+
     if (arg_count >= 3) { ASSERT_NUMBER(2); end = (int)GET_NUMBER(2); }
-    
+
     // Adjust 1-based indexing to 0-based
-    start--; 
-    
+    start--;
+
     // Handle negative indices
-    if (start < 0) start = str->length + start + 1; 
+    if (start < 0) start = str->length + start + 1;
     if (end < 0) end = str->length + end + 1;
-    
+
     // Clamp
     if (start < 0) start = 0;
     if (end > str->length) end = str->length;
-    
+
     int len = end - start;
     if (len <= 0) {
         RETURN_STRING("", 0);
     }
-    
+
     char* sub = (char*)malloc(len + 1);
     memcpy(sub, str->chars + start, len);
     sub[len] = '\0';
-    
+
     RETURN_OBJ(take_string(sub, len));
 }
 
@@ -251,13 +251,13 @@ static int string_upper(VM* vm, int arg_count, Value* args) {
 static int string_char(VM* vm, int arg_count, Value* args) {
     int len = arg_count;
     char* buf = (char*)malloc(len + 1);
-    
+
     for (int i = 0; i < len; i++) {
         ASSERT_NUMBER(i);
         buf[i] = (char)GET_NUMBER(i);
     }
     buf[len] = '\0';
-    
+
     RETURN_OBJ(take_string(buf, len));
 }
 
@@ -301,23 +301,30 @@ static int string_find(VM* vm, int arg_count, Value* args) {
 }
 
 static int string_trim(VM* vm, int arg_count, Value* args) {
-    ASSERT_ARGC_EQ(1);
+    ASSERT_ARGC_GE(1);
     ASSERT_STRING(0);
 
+    char ch;
     ObjString* str = GET_STRING(0);
+    ObjString* chs = GET_STRING(1);
     const char* s = str->chars;
+    if (chs->length == 0) {
+        ch = ' ';
+    } else {
+        ch = chs->chars[0];
+    }
     int len = str->length;
 
     // Trim leading whitespace
     int start = 0;
-    while (start < len && (s[start] == ' ' || s[start] == '\t' ||
+    while (start < len && (s[start] == ch || s[start] == '\t' ||
            s[start] == '\n' || s[start] == '\r')) {
         start++;
     }
 
     // Trim trailing whitespace
     int end = len;
-    while (end > start && (s[end-1] == ' ' || s[end-1] == '\t' ||
+    while (end > start && (s[end-1] == ch || s[end-1] == '\t' ||
            s[end-1] == '\n' || s[end-1] == '\r')) {
         end--;
     }
@@ -662,12 +669,12 @@ static int string_join(VM* vm, int arg_count, Value* args) {
     // Or should we use table->array_capacity?
     // Arrays in this language are 1-based.
     // Let's assume standard behavior: iterate 1..N until nil.
-    
+
     // Note: iterating until nil might stop early for sparse arrays.
     // But join/split usually implies dense arrays.
     // Alternatively, iterate array_capacity? No, array part might be sparse too or have holes.
     // Iterating until nil is safer for sequence.
-    
+
     while (1) {
         // Try array optimization first
         if (!table_get_array(&list->table, i, &val)) {
@@ -1006,21 +1013,21 @@ void register_string(VM* vm) {
             AS_NATIVE_OBJ(method)->is_self = 1;
         }
     }
-    
+
     // Add __call metamethod to string module to act as str() constructor
     Value string_module = peek(vm, 0); // peek string module
     ObjTable* mt = new_table();
     push(vm, OBJ_VAL(mt)); // protect
-    
+
     ObjString* call_str = copy_string("__call", 6);
     push(vm, OBJ_VAL(call_str));
     push(vm, OBJ_VAL(new_native(core_tostring, call_str)));
     table_set(&mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
     pop(vm); // native
     pop(vm); // call_str
-    
+
     AS_TABLE(string_module)->metatable = mt;
-    
+
     // Alias 'str' global to 'string' module so str(x) works via __call
     ObjString* str_name = copy_string("str", 3);
     push(vm, OBJ_VAL(str_name));
@@ -1072,7 +1079,7 @@ void register_string(VM* vm) {
     pop(vm);
     pop(vm);
     pop(vm); // mutable_mt
-    
+
     pop(vm); // pop mt
     pop(vm); // Pop string module
 }

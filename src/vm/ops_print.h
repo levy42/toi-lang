@@ -7,6 +7,12 @@
 //  1: handled successfully
 //  0: caller should return *out_result
 // -1: caller should jump to runtime_error
-int vm_handle_op_print(VM* vm, CallFrame** frame, uint8_t** ip, InterpretResult* out_result);
+int vm_handle_op_print(
+    VM* vm,
+    CallFrame** frame,
+    uint8_t** ip,
+    uint8_t arg_count,
+    InterpretResult* out_result
+);
 
 #endif

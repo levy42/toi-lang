@@ -5,6 +5,8 @@ These are global functions available without importing a module.
 ## Conversion and Type
 
 - `type(value) -> string`
+- Generator-backed coroutines report as `"generator"` (other coroutines remain `"thread"`).
+- `istype(value, type_name, ...) -> boolean` (true if `type(value)` matches any provided type string; aliases: `bool` -> `boolean`, `int`/`float` -> `number`)
 - `bool(value) -> boolean`
 - `int(value) -> number` (integer conversion)
 - `float(value) -> number`
@@ -14,7 +16,8 @@ These are global functions available without importing a module.
 
 - `print ...`
 - `input(prompt=nil) -> string|nil`
-- `error(message) -> throws`
+- `error(message, type="Error") -> throws`
+- `error(table_exception) -> throws` (rethrows/propagates the given table unchanged)
 - `exit(code=0)`
 
 ## Iteration Helpers

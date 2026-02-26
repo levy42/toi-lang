@@ -99,7 +99,7 @@ Route.dispatch = fn(app, req)
 
   saw_path = false
   for route in app.routes
-    local ok, params = Route.match(route, path)
+    ok, params = Route.match(route, path)
     if ok
       saw_path = true
       if route.method == method

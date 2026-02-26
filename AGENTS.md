@@ -28,21 +28,23 @@
 
 ## Toi Style Preferences
 - Toi is not released yet. If something in the language/runtime feels wrong, awkward, or inconvenient, call it out explicitly and suggest a concrete change instead of silently working around it.
-- Write clear, compact Toi. Prefer idiomatic syntax and simple control flow.
+- Write clear, compact Toi. !IMORTANT: Prefer idiomatic syntax and simple control flow, follow pythonic style as python is similar to Toi, but use Toi's idiomatic syntax and conventions.
 - Prefer readability first, then brevity.
 - Use Toi language features directly instead of verbose patterns.
 - Keep functions focused; return early to reduce nesting.
 - Assume types in normal code paths; avoid repetitive runtime type checks where type hints and calling conventions already define expectations.
 - Use table compahensions: `{v for v in table}` or `{k=v for k,v in table}` 
-- Prefer `if var` over `if var == true`, `if var == false`, `var != ""`, or `var != {}`.
+- Prefer `if var` over `if var == true`, `if var == false`, `var != ""`, or `var != {}` or `var != nill`.
 - Prefer `match/case` over long `if/elif/else` chains when matching by value or shape.
 - Use guard clauses and early `return`/`continue` instead of deep indentation.
 - Prefer `for k, v in table` or `for v in table` over index loops when the index is not required.
 - Use table append for push: `items <+ value`.
-- Use `table.sort`, `table.concat`, and iterator-style APIs over manual loops when clearer.
-- Prefer method-call style when available: `"hello".upper()` over `string.upper("hello")`; `", ".join({"a", "b"})` over `string.join`.
-- Prefer slice syntax for strings/tables when clearer: `s[1..5]`, `s[3..]`, `s[..5]`.
-- For larger string/HTML generation, build parts and `table.concat(parts, "")` instead of repeated concatenation.
+- Use `table.sort`, `table.concat`, and iterator-style APIs over manual loops when clearer, but use "".join(table) for easy joins.
+- Prefer method-call style when available: `"hello".upper()` over `string.upper("hello")`; `", ".join({"a", "b"})` over `string.join`, or `"".join({1,2,3})` over table.concat({1,2,3}, "")
+  - Prefer slice syntax for strings/tables when clearer: `s[1..5]`, `s[3..]`, `s[..5]` instead of stirng,sub.
+- Slice style policy: use `..` slice syntax only (`start..end[:step]`). Do not introduce Python-style `:`/`::` slice forms.
+- Negative slice bounds are allowed with `..` and mean offsets from the end (for example, `"hello"[..-1] == "hell"`).
+- For larger string/HTML generation, build parts and `table.concat(parts, "")` or `"".join(table)` instead of repeated concatenation.
 - Prefer interpolation for dynamic strings: `f"hello {name}"`; use `f[[...]]` for multiline templates.
 - Prefer direct operators for common patterns: `items <+ value`, `a ? b : c` when readable.
 - Prefer native helpers over re-implementing utilities (`string.*`, `path.*`, `os.mkdir(path, true)` for recursive creation).
@@ -54,9 +56,10 @@
 - Use `snake_case` for variables and functions.
 - Use clear names over abbreviations unless conventional (`i`, `k`, `v` in short loops).
 - Use `UPPER_SNAKE` for module-level constants.
+- Use concise imports `import os, io` instead of `os = import os; io = import io;`
 
 ## Toi Usage Guardrails
-- Prefer idiomatic Toi primitives first: use `table[key]` for key membership/maps and `has` for value containment; use method-call style where available.
+- Prefer idiomatic Toi primitives first: use `table[key]` for key membership/maps and `has` for value containmet, `if a in table` also works. Use method-call style where available.
 - Do not add defensive `type(...)` wrappers by default. At internal call sites, fail fast on invalid values instead of silently handling misuse.
 - If a workaround seems necessary, explicitly call out the language/runtime friction and propose a concrete change before coding around it.
 - Prefer data-driven designs (tables/specs) over long `if/or` chains for token/category classification.
@@ -68,6 +71,7 @@
 - Tests are Toi scripts in `tests/*.toi`.
 - Naming: keep tests descriptive and script-like (e.g., `tests/vm_tables.toi`).
 - Run with `make test`. Add a new test whenever you fix a bug or add a language feature.
+- Use `assert <expr> "<message>"` to verify expected behavior for simple expressions.
 
 ## Commit & Pull Request Guidelines
 - Commit messages in history are short and imperative (e.g., “Remove debug printf…”). Keep subject lines concise and action-oriented.

@@ -2,7 +2,7 @@ http_server = import lib.http_server
 string = import string
 
 fn assert_has(haystack, needle)
-  local i, j = string.find(haystack, needle)
+  i, j = string.find(haystack, needle)
   if i == nil
     error("assert_has failed")
 

@@ -27,7 +27,7 @@ fn stacked(x)
 -- @plus_one(@times(3)(fn)) => (x + 1) * 3 + 1
 assert_eq(stacked(2), 10)
 
-local t = {
+t = {
   prefix = "hi ",
   wrap = fn(p)
     return fn(fn_)

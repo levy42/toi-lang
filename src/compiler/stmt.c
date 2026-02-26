@@ -4,26 +4,21 @@
 #include "stmt.h"
 #include "stmt_control.h"
 
-static void import_statement() {
-    // Parse: import module_name[.submodule...]
-    consume(TOKEN_IDENTIFIER, "Expect module name after 'import'.");
+static Token parse_module_path(char module_path[256], int* out_len, const char* first_component_error) {
+    consume(TOKEN_IDENTIFIER, first_component_error);
 
-    // Build the full dotted module path
-    char module_path[256];
     int len = 0;
-    Token last_component = parser.previous;  // Track last component for variable name
+    Token last_component = parser.previous;
 
-    // Copy first identifier
     int first_len = parser.previous.length;
     if (first_len >= 256) first_len = 255;
     memcpy(module_path, parser.previous.start, first_len);
     len = first_len;
 
-    // Parse additional .submodule components
     while (match(TOKEN_DOT)) {
         if (len < 255) module_path[len++] = '.';
         consume(TOKEN_IDENTIFIER, "Expect module name after '.'.");
-        last_component = parser.previous;  // Update to last component
+        last_component = parser.previous;
         int part_len = parser.previous.length;
         if (len + part_len >= 256) part_len = 255 - len;
         if (part_len > 0) {
@@ -31,28 +26,38 @@ static void import_statement() {
             len += part_len;
         }
     }
+
     module_path[len] = '\0';
+    *out_len = len;
+    return last_component;
+}
 
-    // Use the last component as the variable name
-    parser.previous = last_component;
+static void import_statement() {
+    // Parse: import module_name[.submodule...][, module_name[.submodule...]]
+    do {
+        char module_path[256];
+        int len = 0;
+        Token last_component = parse_module_path(
+            module_path,
+            &len,
+            "Expect module name after 'import'."
+        );
 
-    // Declare the local variable using last component
-    declare_variable();
+        // Use the last path component as the variable name.
+        parser.previous = last_component;
+        declare_variable();
 
-    // Create a string constant with the full path
-    ObjString* path_string = copy_string(module_path, len);
-    uint8_t path_constant = make_constant(OBJ_VAL(path_string));
+        ObjString* path_string = copy_string(module_path, len);
+        uint8_t path_constant = make_constant(OBJ_VAL(path_string));
+        emit_bytes(OP_IMPORT, path_constant);
 
-    // Emit the import opcode with full path
-    emit_bytes(OP_IMPORT, path_constant);
-
-    // Define the variable.
-    if (current->scope_depth > 0) {
-        mark_initialized();
-    } else {
-        uint8_t var_name = identifier_constant(&last_component);
-        emit_bytes(OP_DEFINE_GLOBAL, var_name);
-    }
+        if (current->scope_depth > 0) {
+            mark_initialized();
+        } else {
+            uint8_t var_name = identifier_constant(&last_component);
+            emit_bytes(OP_DEFINE_GLOBAL, var_name);
+        }
+    } while (match(TOKEN_COMMA));
 }
 
 static void from_import_statement(void) {

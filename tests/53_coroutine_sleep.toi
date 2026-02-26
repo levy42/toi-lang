@@ -4,17 +4,17 @@ coroutine = import coroutine
 Scheduler = import scheduler
 
 fn sleeper()
-  local resumed = coroutine.sleep(0.01)
+  resumed = coroutine.sleep(0.01)
   return resumed
 
 co = coroutine.create(sleeper)
-local ok, cmd, secs = coroutine.resume(co)
+ok, cmd, secs = coroutine.resume(co)
 assert_true(ok)
 assert_eq(cmd, "sleep")
 assert_true(secs > 0)
 assert_eq(coroutine.status(co), "normal")
 
-local ok2, resumed = coroutine.resume(co, "wake")
+ok2, resumed = coroutine.resume(co, "wake")
 assert_true(ok2)
 assert_eq(resumed, "wake")
 assert_eq(coroutine.status(co), "dead")

@@ -20,9 +20,9 @@ safe_rm(ROOT + "/c.log")
 safe_rmdir(ROOT + "/sub")
 safe_rmdir(ROOT)
 
-local ok, err = os.mkdir(ROOT)
+ok = os.mkdir(ROOT)
 assert_true(ok == true, "mkdir ROOT failed")
-local ok2, err2 = os.mkdir(ROOT + "/sub")
+ok2 = os.mkdir(ROOT + "/sub")
 assert_true(ok2 == true, "mkdir sub failed")
 
 f = io.open(ROOT + "/a.txt", "w")

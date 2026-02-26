@@ -13,7 +13,7 @@ f = io.open(PATH, "w")
 f.write("hello")
 f.close()
 
-local st, err = stat.stat(PATH)
+st = stat.stat(PATH)
 assert_true(st != nil, "stat failed")
 assert_eq(type(st), "table")
 assert_true(st.is_file == true)
@@ -22,19 +22,18 @@ assert_true(st.size >= 5)
 assert_true(st.mode > 0)
 assert_true(st.mtime > 0)
 
-local lst, err2 = stat.lstat(PATH)
+lst = stat.lstat(PATH)
 assert_true(lst != nil, "lstat failed")
 assert_true(lst.is_file == true)
 
-local ok, err3 = stat.chmod(PATH, 384) -- 0600
+ok = stat.chmod(PATH, 384) -- 0600
 assert_true(ok == true, "chmod failed")
 
 old = stat.umask()
 assert_true(old >= 0)
 
-local miss, miss_err = stat.stat("tests/does_not_exist___stat")
-assert_true(miss == nil)
-assert_true(miss_err != nil)
+miss = stat.stat("tests/does_not_exist___stat")
+assert_true(type(miss) == "string")
 
 rm_ok = os.remove(PATH)
 assert_true(rm_ok == true)

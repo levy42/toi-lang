@@ -51,6 +51,7 @@ int call(VM* vm, ObjClosure* closure, int arg_count);
 int call_value(VM* vm, Value callee, int arg_count, CallFrame** frame, uint8_t** ip);
 void maybe_collect_garbage(VM* vm);
 InterpretResult vm_run(VM* vm, int min_frame_count);
+InterpretResult vm_run_until_thread(VM* vm, int min_frame_count, ObjThread* stop_thread);
 Value get_metamethod(VM* vm, Value val, const char* name);
 void vm_request_interrupt(void);
 ObjThread* vm_current_thread(VM* vm);

@@ -1,0 +1,31 @@
+from lib.test import assert_eq, assert_true
+
+table = import table
+
+orig = {1, 2, nested = {k = "v"}}
+shallow = table.clone(orig)
+assert_true(shallow != orig)
+assert_true(shallow.nested == orig.nested)
+orig.nested.k = "changed"
+assert_eq(shallow.nested.k, "changed")
+
+deep = table.clone(orig, true)
+assert_true(deep != orig)
+assert_true(deep.nested != orig.nested)
+assert_eq(deep.nested.k, "changed")
+orig.nested.k = "again"
+assert_eq(deep.nested.k, "changed")
+
+deep_named = table.clone(orig, deep=true)
+assert_true(deep_named != orig)
+assert_true(deep_named.nested != orig.nested)
+orig.nested.k = "named-change"
+assert_eq(deep_named.nested.k, "again")
+
+cyclic = {}
+cyclic.self = cyclic
+deep_cycle = table.clone(cyclic, true)
+assert_true(deep_cycle != cyclic)
+assert_true(deep_cycle.self == deep_cycle)
+
+print "table.clone ok"
