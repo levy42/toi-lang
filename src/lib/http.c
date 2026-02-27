@@ -6,6 +6,7 @@
 #ifndef TOI_WASM
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -779,6 +780,222 @@ static void free_fetch_url(FetchUrl* u) {
     u->target = NULL;
 }
 
+typedef enum {
+    HTTP_REQ_CONNECTING = 1,
+    HTTP_REQ_SENDING = 2,
+    HTTP_REQ_READING = 3,
+    HTTP_REQ_DONE = 4,
+    HTTP_REQ_ERROR = 5
+} HttpReqState;
+
+typedef struct {
+    int fd;
+    HttpReqState state;
+    int want_read;
+    int want_write;
+    char* req_buf;
+    size_t req_len;
+    size_t req_sent;
+    char* resp_buf;
+    size_t resp_len;
+    size_t resp_cap;
+    char err[256];
+} HttpRequest;
+
+static void http_request_set_error(HttpRequest* req, const char* msg) {
+    req->state = HTTP_REQ_ERROR;
+    req->want_read = 0;
+    req->want_write = 0;
+    if (msg == NULL) msg = "request error";
+    strncpy(req->err, msg, sizeof(req->err) - 1);
+    req->err[sizeof(req->err) - 1] = '\0';
+}
+
+static void http_request_cleanup(HttpRequest* req) {
+    if (req == NULL) return;
+    if (req->fd >= 0) {
+        close(req->fd);
+        req->fd = -1;
+    }
+    if (req->req_buf != NULL) {
+        free(req->req_buf);
+        req->req_buf = NULL;
+    }
+    if (req->resp_buf != NULL) {
+        free(req->resp_buf);
+        req->resp_buf = NULL;
+    }
+    req->req_len = 0;
+    req->req_sent = 0;
+    req->resp_len = 0;
+    req->resp_cap = 0;
+    req->want_read = 0;
+    req->want_write = 0;
+}
+
+static void http_request_finalizer(void* ptr) {
+    HttpRequest* req = (HttpRequest*)ptr;
+    if (req == NULL) return;
+    http_request_cleanup(req);
+    free(req);
+}
+
+static int http_lookup_request_metatable(VM* vm, ObjTable** out) {
+    ObjString* module_name = copy_string("http", 4);
+    Value module_val = NIL_VAL;
+    if ((!table_get(&vm->modules, module_name, &module_val) || !IS_TABLE(module_val)) &&
+        (!table_get(&vm->globals, module_name, &module_val) || !IS_TABLE(module_val))) {
+        return 0;
+    }
+
+    ObjString* mt_name = copy_string("_request_mt", 11);
+    Value mt = NIL_VAL;
+    if (!table_get(&AS_TABLE(module_val)->table, mt_name, &mt) || !IS_TABLE(mt)) {
+        return 0;
+    }
+    *out = AS_TABLE(mt);
+    return 1;
+}
+
+static int set_nonblocking_fd(int fd, const char** err) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        *err = "failed to get socket flags";
+        return 0;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        *err = "failed to set nonblocking mode";
+        return 0;
+    }
+    return 1;
+}
+
+static int build_http_request(
+    const FetchUrl* url,
+    const char* method,
+    int method_len,
+    ObjTable* headers,
+    const char* body,
+    int body_len,
+    char** out_req,
+    size_t* out_len) {
+    int has_host = headers != NULL && fetch_header_has(headers, "host");
+    int has_conn = headers != NULL && fetch_header_has(headers, "connection");
+    int has_clen = headers != NULL && fetch_header_has(headers, "content-length");
+
+    size_t req_len = (size_t)method_len + 1 + strlen(url->target) + 11;
+    req_len += 2;
+    req_len += has_host ? 0 : strlen("Host: \r\n") + strlen(url->host) + 8;
+    req_len += has_conn ? 0 : strlen("Connection: close\r\n");
+    req_len += body_len > 0 && !has_clen ? strlen("Content-Length: \r\n") + 20 : 0;
+
+    if (headers != NULL) {
+        for (int i = 0; i < headers->table.capacity; i++) {
+            Entry* entry = &headers->table.entries[i];
+            if (entry->key == NULL || !IS_STRING(entry->value)) continue;
+            ObjString* v = AS_STRING(entry->value);
+            req_len += (size_t)entry->key->length + 2 + (size_t)v->length + 2;
+        }
+    }
+    req_len += (size_t)body_len;
+
+    char* req = (char*)malloc(req_len + 1);
+    if (req == NULL) return 0;
+
+    int n = snprintf(req, req_len + 1, "%.*s %s HTTP/1.1\r\n", method_len, method, url->target);
+    size_t off = (size_t)n;
+    if (!has_host) {
+        n = snprintf(req + off, req_len + 1 - off, "Host: %s:%d\r\n", url->host, url->port);
+        off += (size_t)n;
+    }
+    if (!has_conn) {
+        n = snprintf(req + off, req_len + 1 - off, "Connection: close\r\n");
+        off += (size_t)n;
+    }
+    if (body_len > 0 && !has_clen) {
+        n = snprintf(req + off, req_len + 1 - off, "Content-Length: %d\r\n", body_len);
+        off += (size_t)n;
+    }
+    if (headers != NULL) {
+        for (int i = 0; i < headers->table.capacity; i++) {
+            Entry* entry = &headers->table.entries[i];
+            if (entry->key == NULL || !IS_STRING(entry->value)) continue;
+            ObjString* v = AS_STRING(entry->value);
+            memcpy(req + off, entry->key->chars, (size_t)entry->key->length);
+            off += (size_t)entry->key->length;
+            memcpy(req + off, ": ", 2);
+            off += 2;
+            memcpy(req + off, v->chars, (size_t)v->length);
+            off += (size_t)v->length;
+            memcpy(req + off, "\r\n", 2);
+            off += 2;
+        }
+    }
+    memcpy(req + off, "\r\n", 2);
+    off += 2;
+    if (body_len > 0) {
+        memcpy(req + off, body, (size_t)body_len);
+        off += (size_t)body_len;
+    }
+    req[off] = '\0';
+
+    *out_req = req;
+    *out_len = off;
+    return 1;
+}
+
+static int socket_connect_host_nonblocking(const char* host, int port, int* out_fd, int* out_connecting, const char** err) {
+    char port_buf[16];
+    snprintf(port_buf, sizeof(port_buf), "%d", port);
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo* res = NULL;
+    int gai = getaddrinfo(host, port_buf, &hints, &res);
+    if (gai != 0) {
+        *err = "host lookup failed";
+        return 0;
+    }
+
+    int fd = -1;
+    int connecting = 0;
+    for (struct addrinfo* it = res; it != NULL; it = it->ai_next) {
+        fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
+        if (fd < 0) continue;
+        if (!set_nonblocking_fd(fd, err)) {
+            close(fd);
+            fd = -1;
+            continue;
+        }
+
+        int rc = connect(fd, it->ai_addr, it->ai_addrlen);
+        if (rc == 0) {
+            connecting = 0;
+            break;
+        }
+        if (rc < 0 && (errno == EINPROGRESS || errno == EWOULDBLOCK)) {
+            connecting = 1;
+            break;
+        }
+
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+
+    if (fd < 0) {
+        *err = "connect failed";
+        return 0;
+    }
+
+    *out_fd = fd;
+    *out_connecting = connecting;
+    return 1;
+}
+
 static int parse_http_response_table(VM* vm, const char* src, int len, const char** err) {
     const char* src_end = src + len;
     const char* line_end = find_crlf(src, src_end);
@@ -1328,6 +1545,281 @@ static int http_fetch(VM* vm, int arg_count, Value* args) {
     }
     return 1;
 }
+
+static HttpRequest* http_request_from_userdata(VM* vm, Value v) {
+    if (!IS_USERDATA(v)) {
+        vm_runtime_error(vm, "request handle expected.");
+        return NULL;
+    }
+    ObjUserdata* u = AS_USERDATA(v);
+    HttpRequest* req = (HttpRequest*)u->data;
+    if (req == NULL) {
+        vm_runtime_error(vm, "request handle is closed.");
+        return NULL;
+    }
+    return req;
+}
+
+// http.request(url, opts?) -> handle | nil, err
+static int http_request(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    ASSERT_STRING(0);
+
+    ObjString* raw_url = GET_STRING(0);
+    ObjTable* options = NULL;
+    if (arg_count >= 2 && IS_TABLE(args[1])) {
+        options = GET_TABLE(1);
+    }
+
+    const char* method = "GET";
+    int method_len = 3;
+    ObjTable* headers = NULL;
+    const char* body = NULL;
+    int body_len = 0;
+    if (options != NULL) {
+        Value v;
+        if (fetch_table_get(options, "method", &v) && IS_STRING(v)) {
+            ObjString* m = AS_STRING(v);
+            method = m->chars;
+            method_len = m->length;
+        }
+        if (fetch_table_get(options, "headers", &v) && IS_TABLE(v)) {
+            headers = AS_TABLE(v);
+        }
+        if (fetch_table_get(options, "body", &v) && IS_STRING(v)) {
+            ObjString* b = AS_STRING(v);
+            body = b->chars;
+            body_len = b->length;
+        }
+    }
+
+    FetchUrl url = {0};
+    const char* err = NULL;
+    if (!parse_fetch_url(raw_url, &url, &err)) {
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string(err, (int)strlen(err))));
+        return 2;
+    }
+    if (url.use_tls) {
+        free_fetch_url(&url);
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string("http.request currently supports http:// only", 44)));
+        return 2;
+    }
+
+    char* req_buf = NULL;
+    size_t req_len = 0;
+    if (!build_http_request(&url, method, method_len, headers, body, body_len, &req_buf, &req_len)) {
+        free_fetch_url(&url);
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string("out of memory", 13)));
+        return 2;
+    }
+
+    int fd = -1;
+    int connecting = 0;
+    if (!socket_connect_host_nonblocking(url.host, url.port, &fd, &connecting, &err)) {
+        free(req_buf);
+        free_fetch_url(&url);
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string(err, (int)strlen(err))));
+        return 2;
+    }
+    free_fetch_url(&url);
+
+    HttpRequest* req = (HttpRequest*)malloc(sizeof(HttpRequest));
+    if (req == NULL) {
+        close(fd);
+        free(req_buf);
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string("out of memory", 13)));
+        return 2;
+    }
+    memset(req, 0, sizeof(HttpRequest));
+    req->fd = fd;
+    req->state = connecting ? HTTP_REQ_CONNECTING : HTTP_REQ_SENDING;
+    req->want_read = 0;
+    req->want_write = 1;
+    req->req_buf = req_buf;
+    req->req_len = req_len;
+    req->req_sent = 0;
+    req->resp_cap = 8192;
+    req->resp_buf = (char*)malloc(req->resp_cap);
+    if (req->resp_buf == NULL) {
+        http_request_cleanup(req);
+        free(req);
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string("out of memory", 13)));
+        return 2;
+    }
+    req->err[0] = '\0';
+
+    ObjUserdata* u = new_userdata_with_finalizer(req, http_request_finalizer);
+    ObjTable* mt = NULL;
+    if (http_lookup_request_metatable(vm, &mt)) {
+        u->metatable = mt;
+    }
+
+    push(vm, OBJ_VAL(u));
+    return 1;
+}
+
+// req:want_read() -> bool
+static int http_request_want_read(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    HttpRequest* req = http_request_from_userdata(vm, args[0]);
+    if (req == NULL) return 0;
+    RETURN_BOOL(req->want_read);
+}
+
+// req:want_write() -> bool
+static int http_request_want_write(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    HttpRequest* req = http_request_from_userdata(vm, args[0]);
+    if (req == NULL) return 0;
+    RETURN_BOOL(req->want_write);
+}
+
+// req:fileno() -> fd|nil
+static int http_request_fileno(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    HttpRequest* req = http_request_from_userdata(vm, args[0]);
+    if (req == NULL) return 0;
+    if (req->fd < 0) RETURN_NIL;
+    RETURN_NUMBER((double)req->fd);
+}
+
+// req:close() -> bool
+static int http_request_close(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    HttpRequest* req = http_request_from_userdata(vm, args[0]);
+    if (req == NULL) return 0;
+    http_request_cleanup(req);
+    req->state = HTTP_REQ_DONE;
+    RETURN_TRUE;
+}
+
+// req:step() -> done, res|nil, err|nil
+static int http_request_step(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(1);
+    HttpRequest* req = http_request_from_userdata(vm, args[0]);
+    if (req == NULL) return 0;
+
+    if (req->state == HTTP_REQ_DONE) {
+        push(vm, BOOL_VAL(1));
+        push(vm, NIL_VAL);
+        push(vm, NIL_VAL);
+        return 3;
+    }
+    if (req->state == HTTP_REQ_ERROR) {
+        push(vm, BOOL_VAL(1));
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string(req->err, (int)strlen(req->err))));
+        return 3;
+    }
+
+    if (req->state == HTTP_REQ_CONNECTING) {
+        int so_err = 0;
+        socklen_t so_len = sizeof(so_err);
+        if (getsockopt(req->fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) < 0) {
+            http_request_set_error(req, "connect failed");
+        } else if (so_err != 0) {
+            http_request_set_error(req, strerror(so_err));
+        } else {
+            req->state = HTTP_REQ_SENDING;
+            req->want_write = 1;
+            req->want_read = 0;
+        }
+    }
+
+    if (req->state == HTTP_REQ_SENDING) {
+        while (req->req_sent < req->req_len) {
+            ssize_t sent = send(req->fd, req->req_buf + req->req_sent, req->req_len - req->req_sent, 0);
+            if (sent > 0) {
+                req->req_sent += (size_t)sent;
+                continue;
+            }
+            if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                req->want_write = 1;
+                req->want_read = 0;
+                break;
+            }
+            if (sent < 0 && errno == EINTR) continue;
+            http_request_set_error(req, "send failed");
+            break;
+        }
+
+        if (req->state != HTTP_REQ_ERROR && req->req_sent >= req->req_len) {
+            req->state = HTTP_REQ_READING;
+            req->want_read = 1;
+            req->want_write = 0;
+        }
+    }
+
+    if (req->state == HTTP_REQ_READING) {
+        while (1) {
+            if (req->resp_len + 4096 + 1 > req->resp_cap) {
+                size_t next = req->resp_cap * 2;
+                char* grown = (char*)realloc(req->resp_buf, next);
+                if (grown == NULL) {
+                    http_request_set_error(req, "out of memory");
+                    break;
+                }
+                req->resp_buf = grown;
+                req->resp_cap = next;
+            }
+
+            ssize_t received = recv(req->fd, req->resp_buf + req->resp_len, 4096, 0);
+            if (received > 0) {
+                req->resp_len += (size_t)received;
+                continue;
+            }
+            if (received == 0) {
+                req->state = HTTP_REQ_DONE;
+                req->want_read = 0;
+                req->want_write = 0;
+                break;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                req->want_read = 1;
+                req->want_write = 0;
+                break;
+            }
+            if (errno == EINTR) continue;
+            http_request_set_error(req, "recv failed");
+            break;
+        }
+    }
+
+    if (req->state == HTTP_REQ_ERROR) {
+        push(vm, BOOL_VAL(1));
+        push(vm, NIL_VAL);
+        push(vm, OBJ_VAL(copy_string(req->err, (int)strlen(req->err))));
+        return 3;
+    }
+
+    if (req->state == HTTP_REQ_DONE) {
+        const char* parse_err = NULL;
+        int ok = parse_http_response_table(vm, req->resp_buf, (int)req->resp_len, &parse_err);
+        if (!ok) {
+            push(vm, BOOL_VAL(1));
+            push(vm, NIL_VAL);
+            push(vm, OBJ_VAL(copy_string(parse_err, (int)strlen(parse_err))));
+            return 3;
+        }
+        Value res = peek(vm, 0);
+        pop(vm);
+        push(vm, BOOL_VAL(1));
+        push(vm, res);
+        push(vm, NIL_VAL);
+        return 3;
+    }
+
+    push(vm, BOOL_VAL(0));
+    push(vm, NIL_VAL);
+    push(vm, NIL_VAL);
+    return 3;
+}
 #endif
 
 void register_http(VM* vm) {
@@ -1338,10 +1830,56 @@ void register_http(VM* vm) {
         {"parsequery", http_parsequery},
 #ifndef TOI_WASM
         {"fetch", http_fetch},
+        {"request", http_request},
 #endif
         {NULL, NULL}
     };
 
     register_module(vm, "http", http_funcs);
+#ifndef TOI_WASM
+    ObjTable* http_module = AS_TABLE(peek(vm, 0));
+
+    ObjTable* request_mt = new_table();
+    push(vm, OBJ_VAL(request_mt));
+
+    const NativeReg request_methods[] = {
+        {"step", http_request_step},
+        {"want_read", http_request_want_read},
+        {"want_write", http_request_want_write},
+        {"fileno", http_request_fileno},
+        {"close", http_request_close},
+        {NULL, NULL}
+    };
+
+    for (int i = 0; request_methods[i].name != NULL; i++) {
+        ObjString* name_str = copy_string(request_methods[i].name, (int)strlen(request_methods[i].name));
+        push(vm, OBJ_VAL(name_str));
+        ObjNative* method = new_native(request_methods[i].function, name_str);
+        method->is_self = 1;
+        push(vm, OBJ_VAL(method));
+        table_set(&request_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+        pop(vm);
+        pop(vm);
+    }
+
+    push(vm, OBJ_VAL(copy_string("__index", 7)));
+    push(vm, OBJ_VAL(request_mt));
+    table_set(&request_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
+    push(vm, OBJ_VAL(copy_string("__name", 6)));
+    push(vm, OBJ_VAL(copy_string("http.request", 12)));
+    table_set(&request_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
+    push(vm, OBJ_VAL(copy_string("_request_mt", 11)));
+    push(vm, OBJ_VAL(request_mt));
+    table_set(&http_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+    pop(vm); // request_mt
+#endif
     pop(vm);
 }

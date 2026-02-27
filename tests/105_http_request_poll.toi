@@ -1,0 +1,84 @@
+from lib.test import assert_eq, assert_true
+
+http = import http
+socket = import socket
+thread = import thread
+poll = import poll
+
+fn server_worker(port_ch, done_ch)
+  srv = socket.tcp()
+  if srv == nil
+    port_ch.send(port_ch, "skip:tcp failed")
+    return true
+
+  ok, err = srv.bind(srv, "127.0.0.1", 0)
+  if not ok
+    port_ch.send(port_ch, "skip:" + str(err or ok))
+    srv.close(srv)
+    return true
+
+  srv.listen(srv, 1)
+  host, port = srv.getsockname(srv)
+  _ = host
+  port_ch.send(port_ch, port)
+
+  client, ip = srv.accept(srv)
+  _ = ip
+  if client
+    req = client.recv(client, 4096)
+    _ = req
+    client.send(client, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\npong")
+    client.close(client)
+
+  srv.close(srv)
+  done_ch.send(done_ch, true)
+  return true
+
+port_ch = thread.channel(1)
+done_ch = thread.channel(1)
+h = thread.spawn(server_worker, port_ch, done_ch)
+
+port_or_skip = port_ch.recv(port_ch)
+if type(port_or_skip) == "string"
+  print "http request poll skipped (" + port_or_skip + ")"
+  assert_true(thread.join(h) == true)
+  print "http request poll ok"
+else
+  req, req_err = http.request(f"http://127.0.0.1:{port_or_skip}/ping")
+  assert_true(req_err == nil)
+  assert_true(req != nil)
+
+  done = false
+  res = nil
+  err = nil
+  spins = 0
+  while not done and spins < 1000
+    done, res, err = req.step()
+    if done
+      break
+
+    fd = req.fileno()
+    items = {}
+    if req.want_read()
+      items <+ {fd = fd, events = {"in"}}
+    if req.want_write()
+      items <+ {fd = fd, events = {"out"}}
+    assert_true(#items > 0)
+    poll.wait(items, 1000)
+    spins = spins + 1
+
+  assert_true(done == true)
+  assert_true(err == nil)
+  assert_eq(res.status, 200)
+  assert_eq(res.body, "pong")
+  assert_true(req.close() == true)
+
+  assert_true(done_ch.recv(done_ch) == true)
+  assert_true(thread.join(h) == true)
+
+  h2, e2 = http.request("https://example.com")
+  assert_true(h2 == nil)
+  assert_true(type(e2) == "string")
+  assert_true(e2 has "http://")
+
+  print "http request poll ok"
