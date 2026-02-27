@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <limits.h>
+#include <stdbool.h>
 #include "libs.h"
 #include "../object.h"
 #include "../value.h"
@@ -26,8 +28,10 @@ static void mutable_string_finalizer(void* ptr) {
 
 static ObjTable* string_lookup_metatable(VM* vm, const char* key, int key_len) {
     Value string_module = NIL_VAL;
-    if (!table_get(&vm->globals, vm->str_module_name, &string_module) || !IS_TABLE(string_module)) {
-        return NULL;
+    if (!table_get(&vm->modules, vm->str_module_name, &string_module) || !IS_TABLE(string_module)) {
+        if (!table_get(&vm->globals, vm->str_module_name, &string_module) || !IS_TABLE(string_module)) {
+            return NULL;
+        }
     }
 
     ObjString* key_str = copy_string(key, key_len);
@@ -304,15 +308,16 @@ static int string_trim(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(1);
     ASSERT_STRING(0);
 
-    char ch;
     ObjString* str = GET_STRING(0);
-    ObjString* chs = GET_STRING(1);
-    const char* s = str->chars;
-    if (chs->length == 0) {
-        ch = ' ';
-    } else {
-        ch = chs->chars[0];
+    char ch = ' ';
+    if (arg_count >= 2) {
+        ASSERT_STRING(1);
+        ObjString* chs = GET_STRING(1);
+        if (chs->length > 0) {
+            ch = chs->chars[0];
+        }
     }
+    const char* s = str->chars;
     int len = str->length;
 
     // Trim leading whitespace
@@ -569,43 +574,121 @@ static int string_split(VM* vm, int arg_count, Value* args) {
     ObjString* str = GET_STRING(0);
     const char* sep = " ";
     int sep_len = 1;
+    int max_splits = -1;
 
     if (arg_count >= 2) {
         ASSERT_STRING(1);
         sep = GET_CSTRING(1);
         sep_len = GET_STRING(1)->length;
     }
+    if (arg_count >= 3) {
+        max_splits = GET_NUMBER(2);
+    }
 
     ObjTable* result = new_table();
     push(vm, OBJ_VAL(result)); // Protect from GC
 
-    int index = 1;
     const char* s = str->chars;
     const char* end = s + str->length;
+    int index = 1;
 
     if (sep_len == 0) {
-        // Empty separator: split into characters
         for (int i = 0; i < str->length; i++) {
             Value val = OBJ_VAL(copy_string(s + i, 1));
             table_set_array(&result->table, index++, val);
         }
+        pop(vm);
+        RETURN_OBJ(result);
+    }
+
+    bool reverse = arg_count >= 3 && max_splits < 0;
+    int limit = reverse ? -max_splits : max_splits;
+
+    if (reverse) {
+        if (limit <= 0) {
+            Value val = OBJ_VAL(copy_string(s, (int)(end - s)));
+            table_set_array(&result->table, index++, val);
+        } else {
+            typedef struct {
+                const char* start;
+                const char* end;
+            } Range;
+
+            Range* segments = NULL;
+            int segments_capacity = 0;
+            int segments_count = 0;
+            const char* rest_end = end;
+
+            while (rest_end > s && segments_count < limit) {
+                int remaining = (int)(rest_end - s);
+                if (remaining < sep_len) {
+                    break;
+                }
+                const char* candidate = rest_end - sep_len;
+                const char* found = NULL;
+                while (candidate >= s) {
+                    if (memcmp(candidate, sep, (size_t)sep_len) == 0) {
+                        found = candidate;
+                        break;
+                    }
+                    candidate--;
+                }
+                if (found == NULL) {
+                    break;
+                }
+
+                if (segments_count == segments_capacity) {
+                    int new_capacity = segments_capacity == 0 ? 4 : segments_capacity * 2;
+                    if (new_capacity > limit) {
+                        new_capacity = limit;
+                    }
+                    Range* new_segments = (Range*)realloc(segments, sizeof(Range) * new_capacity);
+                    if (new_segments == NULL) {
+                        vm_runtime_error(vm, "string.split: out of memory");
+                        free(segments);
+                        return 0;
+                    }
+                    segments = new_segments;
+                    segments_capacity = new_capacity;
+                }
+
+                segments[segments_count].start = found + sep_len;
+                segments[segments_count].end = rest_end;
+                segments_count++;
+                rest_end = found;
+            }
+
+            Value prefix = OBJ_VAL(copy_string(s, (int)(rest_end - s)));
+            table_set_array(&result->table, index++, prefix);
+            for (int i = segments_count - 1; i >= 0; i--) {
+                int part_len = (int)(segments[i].end - segments[i].start);
+                Value part = OBJ_VAL(copy_string(segments[i].start, part_len));
+                table_set_array(&result->table, index++, part);
+            }
+
+            free(segments);
+        }
     } else {
-        while (s < end) {
+        int splits_remaining = INT_MAX;
+        if (arg_count >= 3 && max_splits >= 0) {
+            splits_remaining = limit;
+        }
+
+        while (splits_remaining > 0) {
             const char* found = strstr(s, sep);
             if (found == NULL) {
-                // No more separators, add rest of string
-                int len = (int)(end - s);
-                Value val = OBJ_VAL(copy_string(s, len));
-                table_set_array(&result->table, index++, val);
                 break;
-            } else {
-                // Add substring before separator
-                int len = (int)(found - s);
-                Value val = OBJ_VAL(copy_string(s, len));
-                table_set_array(&result->table, index++, val);
-                s = found + sep_len;
             }
+            int len = (int)(found - s);
+            Value val = OBJ_VAL(copy_string(s, len));
+            table_set_array(&result->table, index++, val);
+            s = found + sep_len;
+            splits_remaining--;
         }
+
+        int len = (int)(end - s);
+        Value val = OBJ_VAL(copy_string(s, len));
+        table_set_array(&result->table, index++, val);
     }
 
     pop(vm); // Pop result table (will be returned)
@@ -1004,15 +1087,7 @@ void register_string(VM* vm) {
         {NULL, NULL}
     };
     register_module(vm, "string", string_funcs);
-
     ObjTable* string_module_table = AS_TABLE(peek(vm, 0));
-    for (int i = 0; string_funcs[i].name != NULL; i++) {
-        ObjString* name_str = copy_string(string_funcs[i].name, (int)strlen(string_funcs[i].name));
-        Value method = NIL_VAL;
-        if (table_get(&string_module_table->table, name_str, &method) && IS_NATIVE(method)) {
-            AS_NATIVE_OBJ(method)->is_self = 1;
-        }
-    }
 
     // Add __call metamethod to string module to act as str() constructor
     Value string_module = peek(vm, 0); // peek string module

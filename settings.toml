@@ -1,0 +1,6 @@
+arg1 = "value1"
+arg2 = 44.5
+
+[extra]
+arg3 = 44
+arg4 = true

@@ -1,6 +1,6 @@
 from lib.test import assert_eq
 
-coroutine = import coroutine
+global coroutine = import coroutine
 
 fn seq_body()
   yield 2

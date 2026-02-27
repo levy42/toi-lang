@@ -23,6 +23,8 @@ Available native modules:
 - `socket`
 - `thread`
 - `json`
+- `toml`
+- `csv`
 - `template`
 - `http`
 - `inspect`

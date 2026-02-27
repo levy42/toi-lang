@@ -231,6 +231,14 @@ static char* read_file(const char* path) {
     return buffer;
 }
 
+static void set_global_value(VM* vm, ObjString* key, Value value) {
+    push(vm, OBJ_VAL(key));
+    push(vm, value);
+    table_set(&vm->globals, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+}
+
 static int run_file(const char* path, int script_argc, char* script_argv[]) {
     char* source = read_file(path);
     // printf("Source:\n%s\n---\n", source);
@@ -239,6 +247,12 @@ static int run_file(const char* path, int script_argc, char* script_argv[]) {
     init_vm(&vm);
     vm.cli_argc = script_argc;
     vm.cli_argv = script_argv;
+
+    ObjString* main_name = copy_string("__main", 6);
+    ObjString* file_name = copy_string(path, (int)strlen(path));
+    set_global_value(&vm, vm.module_name_key, OBJ_VAL(main_name));
+    set_global_value(&vm, vm.module_file_key, OBJ_VAL(file_name));
+    set_global_value(&vm, vm.module_main_key, BOOL_VAL(1));
     
     ObjFunction* function = compile(source);
     if (function == NULL) {

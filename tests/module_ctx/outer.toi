@@ -1,0 +1,11 @@
+inner = import tests.module_ctx.inner
+
+return {
+  name = __name,
+  file = __file,
+  main = __main,
+  inner = inner,
+  after_name = __name,
+  after_file = __file,
+  after_main = __main
+}

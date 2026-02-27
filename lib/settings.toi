@@ -1,0 +1,41 @@
+import types, os, io, toml
+
+load_dotenv = fn()
+  if not os.exists('.env')
+    return nil
+  with io.open('.env') as f
+    for line in f
+      l = line.trim()
+      key, value = l.split('=')
+      os.setenv(key.upper().trim(), value.trim())
+
+set_from_env = fn(self, prefix="")
+  data = {}
+  for k,v in self
+    if not k.starts_with('_')
+      if istype(v, "table")
+        data[k] = set_from_env(v, prefix + k + '__')
+      if (env_val:=os.getenv(prefix + k.upper().trim()))
+        data[k] = v.check(env_val, {coerce=true})
+  return data
+
+
+fn load_toml(path)
+  with io.open(path) as f
+    return toml.parse(f.read())
+
+DotEnvSettings = {
+  load = fn(self)
+    load_dotenv()
+    return load_toml()
+}
+
+TomlSettings = {
+  paths = {'settings.toml'},
+  load = fn(self)
+    data = {}
+    for path in self.paths if os.exists(path)
+      data += load_toml(path)
+    return data
+}
+return {<TomlSettings, DotEnvSettings, load_dotenv>}

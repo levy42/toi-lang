@@ -761,7 +761,7 @@ static uint8_t emit_compound_op(TokenType op, uint8_t lhs_type, uint8_t rhs_type
                     out_type = TYPEHINT_FLOAT;
                 }
             } else {
-                emit_byte(OP_ADD);
+                emit_byte(OP_ADD_INPLACE);
             }
             break;
         case TOKEN_MINUS:
@@ -1261,6 +1261,21 @@ static void parse_table_entries() {
                 emit_byte(OP_SET_TABLE);
                 emit_byte(OP_POP);
             }
+        } else if (match(TOKEN_LESS)) {
+            consume(TOKEN_IDENTIFIER, "Expect identifier after '<' in shorthand table fields.");
+            for (;;) {
+                Token name = parser.previous;
+                emit_constant(OBJ_VAL(copy_string(name.start, name.length)));
+                named_variable(name, false);
+                emit_byte(OP_SET_TABLE);
+                emit_byte(OP_POP);
+
+                if (!match(TOKEN_COMMA)) break;
+                if (check(TOKEN_GREATER)) break;
+                consume(TOKEN_IDENTIFIER, "Expect identifier in shorthand table fields.");
+                emit_byte(OP_DUP);
+            }
+            consume(TOKEN_GREATER, "Expect '>' after shorthand table fields.");
         } else {
             // Array item
             emit_constant(NUMBER_VAL(array_index++));

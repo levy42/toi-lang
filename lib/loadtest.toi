@@ -18,14 +18,10 @@ fn parse_url(raw_url)
   scheme = "http"
   rest = url
 
-  sj = string.find(url, "://")
-  si = sj == nil ? nil : (sj - 2)
-  if sj
-    scheme = string.lower(string.sub(url, 1, si - 1))
-    rest = string.sub(url, sj + 1)
+  if url.find("://")
+    scheme, rest = url.split("://")
 
-  if scheme != "http" and scheme != "https"
-    error("unsupported scheme: " + scheme + " (use http or https)")
+  assert scheme in {"http", "https"}, "unsupported scheme: " + scheme + " (use http or https)"
 
   slash_j = string.find(rest, "/")
   slash_i = slash_j == nil ? nil : slash_j
@@ -217,12 +213,8 @@ fn rps(url, duration_sec: int = 10, concurrency: int = 10, timeout_ms: int = 200
     verify_tls = verify_tls
   }
 
-  cli.printc(
-    string.format(
-      "[cyan]target[/] %s://%s:%d%s  [cyan]duration[/] %ds  [cyan]concurrency[/] %d",
-      cfg.scheme, cfg.host, cfg.port, cfg.path, d, c
-    )
-  )
+  target_msg = string.format("[cyan]target[/] %s://%s:%d%s  [cyan]duration[/] %ds  [cyan]concurrency[/] %d", cfg.scheme, cfg.host, cfg.port, cfg.path, d, c)
+  cli.printc(target_msg)
 
   started = os.clock()
   total = {attempts = 0, responses = 0, ok = 0, fail = 0, bytes = 0}
@@ -251,24 +243,7 @@ fn rps(url, duration_sec: int = 10, concurrency: int = 10, timeout_ms: int = 200
   ok_rps = total.ok / elapsed
   mbps = (total.bytes / (1024.0 * 1024.0)) / elapsed
 
-  print f[[
-      Summary
-      requests: {total.responses} responses ({total.attempts} attempts)"
-      ok/fail: {total.ok} / {total.fail}
-      elapsed: {elapsed:.3f}s
-      rps: {rps:.2f}
-      ok rps: {ok_rps:.2f}
-      throughput: {mbps:.2f} MiB/s"
-  ]]
-    requests = total.responses,
-    attempts = total.attempts,
-    ok = total.ok,
-    fail = total.fail,
-    elapsed = elapsed,
-    rps = rps,
-    ok_rps = ok_rps,
-    mbps = mbps
-  }
+  print string.format("Summary\nrequests: %d responses (%d attempts)\nok/fail: %d / %d\nelapsed: %.3fs\nrps: %.2f\nok rps: %.2f\nthroughput: %.2f MiB/s", total.responses, total.attempts, total.ok, total.fail, elapsed, rps, ok_rps, mbps)
 
 LoadTest = {
   app = app,
@@ -276,8 +251,5 @@ LoadTest = {
   build_request = build_request,
   parse_status_code = parse_status_code
 }
-
-if os.argv and #os.argv > 0
-  app.run()
 
 return LoadTest

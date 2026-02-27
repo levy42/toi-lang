@@ -26,6 +26,29 @@ LEVEL_COLORS = {
   [50] = ESC + "[31m"  -- red
 }
 
+fn parse_level(level)
+  if type(level) == "number"
+    return int(level)
+  if type(level) != "string"
+    return DEFAULT_LEVEL
+  token = string.lower(string.trim(level))
+  if token == "trace"
+    return TRACE
+  if token == "debug"
+    return DEBUG
+  if token == "info"
+    return INFO
+  if token == "warn" or token == "warning"
+    return WARN
+  if token == "error"
+    return ERROR
+  if token == "fatal"
+    return FATAL
+  return DEFAULT_LEVEL
+
+fn level_name(level)
+  return LEVEL_NAMES[parse_level(level)] or "INFO"
+
 fn fmt_fields(fields)
   if not istype(fields, 'table') return ""
   parts = {}
@@ -71,7 +94,7 @@ fn logger_new(cls, name = "root", opts = nil)
   if opts == nil opts = {}
   obj = {}
   obj.name = name
-  obj.level = opts.level or DEFAULT_LEVEL
+  obj.level = parse_level(opts.level or DEFAULT_LEVEL)
   obj.handlers = {}
   obj.formatter = opts.formatter or default_formatter
   obj.context = opts.context
@@ -89,7 +112,7 @@ LoggerMeta.__call = logger_new
 setmetatable(Logger, LoggerMeta)
 
 Logger.set_level = fn(self, level)
-  self.level = level
+  self.level = parse_level(level)
   return self
 
 Logger.is_enabled = fn(self, level)
@@ -167,7 +190,7 @@ fn get_logger(name:str = "root")
   return logger
 
 fn configure(level = nil, handlers = nil, formatter = nil, context = nil)
-  if level != nil _root.set_level(level)
+  if level != nil _root.set_level(parse_level(level))
   if formatter
     _root.formatter = formatter
   if context
@@ -200,6 +223,8 @@ fn error_(msg, fields = nil)
   return _root.error(msg, fields)
 
 return {
+  parse_level = parse_level,
+  level_name = level_name,
   default_formatter = default_formatter,
   console_handler = console_handler,
   file_handler = file_handler,

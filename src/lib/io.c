@@ -60,9 +60,14 @@ static int parse_buffer_mode(const char* mode, int* out_append, int* out_truncat
 }
 
 static ObjTable* io_lookup_metatable(VM* vm, const char* key, int key_len) {
-    Value io_val = NIL_VAL;
     ObjString* io_name = copy_string("io", 2);
-    if (!table_get(&vm->globals, io_name, &io_val) || !IS_TABLE(io_val)) {
+    Value io_val = NIL_VAL;
+    if (!table_get(&vm->modules, io_name, &io_val) || !IS_TABLE(io_val)) {
+        if (!table_get(&vm->globals, io_name, &io_val) || !IS_TABLE(io_val)) {
+            return NULL;
+        }
+    }
+    if (!IS_TABLE(io_val)) {
         return NULL;
     }
 

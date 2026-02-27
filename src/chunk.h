@@ -11,6 +11,7 @@ typedef enum {
     OP_CONSTANT,
     OP_APPEND,
     OP_ADD,
+    OP_ADD_INPLACE,
     OP_ADD_CONST,
     OP_SUBTRACT,
     OP_SUB_CONST,

@@ -23,8 +23,10 @@ typedef struct {
 static ObjTable* mmap_lookup_metatable(VM* vm, const char* key, int key_len) {
     ObjString* module_name = copy_string("mmap", 4);
     Value module_val = NIL_VAL;
-    if (!table_get(&vm->globals, module_name, &module_val) || !IS_TABLE(module_val)) {
-        return NULL;
+    if (!table_get(&vm->modules, module_name, &module_val) || !IS_TABLE(module_val)) {
+        if (!table_get(&vm->globals, module_name, &module_val) || !IS_TABLE(module_val)) {
+            return NULL;
+        }
     }
 
     ObjString* key_str = copy_string(key, key_len);

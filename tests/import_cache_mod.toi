@@ -1,0 +1,11 @@
+counter = 0
+try
+  counter = __import_cache_counter
+except e
+  counter = 0
+
+global __import_cache_counter = counter + 1
+
+return {
+  runs = __import_cache_counter
+}

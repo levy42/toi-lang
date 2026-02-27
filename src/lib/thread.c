@@ -52,6 +52,17 @@ typedef struct {
     int closed;
 } ChannelData;
 
+static int get_thread_module(VM* vm, Value* out) {
+    ObjString* thread_name = copy_string("thread", 6);
+    if (table_get(&vm->modules, thread_name, out) && IS_TABLE(*out)) {
+        return 1;
+    }
+    if (table_get(&vm->globals, thread_name, out) && IS_TABLE(*out)) {
+        return 1;
+    }
+    return 0;
+}
+
 static void thread_handle_mark(void* ptr) {
     ThreadData* data = (ThreadData*)ptr;
     if (data == NULL) return;
@@ -268,8 +279,7 @@ static int thread_spawn(VM* vm, int arg_count, Value* args) {
 
     // Set metatable
     Value thread_val;
-    ObjString* thread_name = copy_string("thread", 6);
-    if (table_get(&vm->globals, thread_name, &thread_val) && IS_TABLE(thread_val)) {
+    if (get_thread_module(vm, &thread_val)) {
         Value mt;
         ObjString* mt_name = copy_string("_thread_mt", 10);
         if (table_get(&AS_TABLE(thread_val)->table, mt_name, &mt) && IS_TABLE(mt)) {
@@ -359,8 +369,7 @@ static int thread_mutex(VM* vm, int arg_count, Value* args) {
 
     // Set metatable
     Value thread_val;
-    ObjString* thread_name = copy_string("thread", 6);
-    if (table_get(&vm->globals, thread_name, &thread_val) && IS_TABLE(thread_val)) {
+    if (get_thread_module(vm, &thread_val)) {
         Value mt;
         ObjString* mt_name = copy_string("_mutex_mt", 9);
         if (table_get(&AS_TABLE(thread_val)->table, mt_name, &mt) && IS_TABLE(mt)) {
@@ -438,8 +447,7 @@ static int thread_channel(VM* vm, int arg_count, Value* args) {
 
     // Set metatable
     Value thread_val;
-    ObjString* thread_name = copy_string("thread", 6);
-    if (table_get(&vm->globals, thread_name, &thread_val) && IS_TABLE(thread_val)) {
+    if (get_thread_module(vm, &thread_val)) {
         Value mt;
         ObjString* mt_name = copy_string("_channel_mt", 11);
         if (table_get(&AS_TABLE(thread_val)->table, mt_name, &mt) && IS_TABLE(mt)) {

@@ -90,10 +90,10 @@ static int os_getenv(VM* vm, int arg_count, Value* args) {
         return 0;
     }
     ASSERT_STRING(0);
-    
+
     const char* name = GET_CSTRING(0);
     char* value = getenv(name);
-    
+
     if (value != NULL) {
         RETURN_STRING(value, (int)strlen(value));
     }
@@ -105,14 +105,33 @@ static int os_getenv(VM* vm, int arg_count, Value* args) {
     RETURN_NIL;
 }
 
+// os.setenv(name, value)
+static int os_setenv(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(2);
+    if (arg_count > 2) {
+        vm_runtime_error(vm, "Expected at most 2 arguments but got %d.", arg_count);
+        return 0;
+    }
+    ASSERT_STRING(0);
+
+    const char* name = GET_CSTRING(0);
+    Value input = args[1];
+    if (!core_tostring(vm, 1, &input)) return 0;
+    Value string_val = pop(vm);
+    ObjString* converted = AS_STRING(string_val);
+    setenv(name, converted->chars, 1);
+
+    RETURN_NIL;
+}
+
 // os.system(command)
 static int os_system(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
-    
+
     const char* cmd = GET_CSTRING(0);
     int status = system(cmd);
-    
+
     RETURN_NUMBER((double)status);
 }
 
@@ -120,7 +139,7 @@ static int os_system(VM* vm, int arg_count, Value* args) {
 static int os_remove(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
-    
+
     const char* path = GET_CSTRING(0);
     if (remove(path) == 0) {
         RETURN_TRUE;
@@ -136,10 +155,10 @@ static int os_rename(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_STRING(0);
     ASSERT_STRING(1);
-    
+
     const char* old_path = GET_CSTRING(0);
     const char* new_path = GET_CSTRING(1);
-    
+
     if (rename(old_path, new_path) == 0) {
         RETURN_TRUE;
     } else {
@@ -341,6 +360,7 @@ void register_os(VM* vm) {
     const NativeReg os_funcs[] = {
         {"exit", os_exit},
         {"getenv", os_getenv},
+        {"setenv", os_setenv},
         {"system", os_system},
         {"remove", os_remove},
         {"rename", os_rename},

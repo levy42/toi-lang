@@ -8,7 +8,7 @@ fn assert_has(haystack, needle)
     error("assert_has failed: missing '" + needle + "'")
 
 string = import string
-coroutine = import coroutine
+global coroutine = import coroutine
 
 fn chunk_gen()
   yield "a"

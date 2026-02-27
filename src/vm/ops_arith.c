@@ -59,6 +59,27 @@ static void table_add_local(ObjTable* ta, ObjTable* tb, ObjTable* result) {
     table_add_all(&tb->table, &result->table);
 }
 
+static int table_add_inplace_local(ObjTable* ta, ObjTable* tb) {
+    int dst = 1;
+    for (;; dst++) {
+        Value val;
+        if (!table_get_array(&ta->table, dst, &val) || IS_NIL(val)) break;
+    }
+
+    for (int src = 1; ; src++) {
+        Value val;
+        if (!table_get_array(&tb->table, src, &val) || IS_NIL(val)) break;
+        if (!table_set_array(&ta->table, dst, val)) {
+            ObjString* key = number_key_string((double)dst);
+            table_set(&ta->table, key, val);
+        }
+        dst++;
+    }
+
+    table_add_all(&tb->table, &ta->table);
+    return 1;
+}
+
 int vm_handle_op_add_const(VM* vm, CallFrame** frame, uint8_t** ip, Value b) {
     Value a = peek(vm, 0);
     if (IS_STRING(a) && IS_STRING(b)) {
@@ -122,6 +143,46 @@ int vm_handle_op_add(VM* vm, CallFrame** frame, uint8_t** ip) {
         *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
         *ip = (*frame)->ip;
     }
+    return 1;
+}
+
+int vm_handle_op_add_inplace(VM* vm, CallFrame** frame, uint8_t** ip) {
+    if (IS_STRING(peek(vm, 0)) && IS_STRING(peek(vm, 1))) {
+        concatenate_local(vm);
+        return 1;
+    }
+    if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
+        double b = AS_NUMBER(pop(vm));
+        double a = AS_NUMBER(pop(vm));
+        push(vm, NUMBER_VAL(a + b));
+        return 1;
+    }
+    if (IS_TABLE(peek(vm, 0)) && IS_TABLE(peek(vm, 1))) {
+        ObjTable* tb = AS_TABLE(pop(vm));
+        ObjTable* ta = AS_TABLE(pop(vm));
+        if (!table_add_inplace_local(ta, tb)) {
+            vm_runtime_error(vm, "Table '+=' failed while appending.");
+            return 0;
+        }
+        push(vm, OBJ_VAL(ta));
+        return 1;
+    }
+
+    Value b = pop(vm);
+    Value a = pop(vm);
+    Value method = get_metamethod(vm, a, "__add");
+    if (IS_NIL(method)) method = get_metamethod(vm, b, "__add");
+    if (IS_NIL(method)) {
+        vm_runtime_error(vm, "Operands must be two numbers or two strings.");
+        return 0;
+    }
+    push(vm, method);
+    push(vm, a);
+    push(vm, b);
+    (*frame)->ip = *ip;
+    if (!call(vm, AS_CLOSURE(method), 2)) return 0;
+    *frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
+    *ip = (*frame)->ip;
     return 1;
 }
 

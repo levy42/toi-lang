@@ -1,0 +1,12 @@
+from lib.test import assert_eq
+
+global __import_cache_counter = 0
+
+first = import tests.import_cache_mod
+second = import tests.import_cache_mod
+
+assert_eq(__import_cache_counter, 1)
+assert_eq(first.runs, 1)
+assert_eq(second.runs, 1)
+
+print "import cache ok"

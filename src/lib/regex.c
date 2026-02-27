@@ -89,8 +89,10 @@ static int compile_or_error(VM* vm, regex_t* re, ObjString* pattern, Value flags
 static ObjTable* regex_lookup_metatable(VM* vm, const char* key, int key_len) {
     Value regex_module = NIL_VAL;
     ObjString* module_name = copy_string("regex", 5);
-    if (!table_get(&vm->globals, module_name, &regex_module) || !IS_TABLE(regex_module)) {
-        return NULL;
+    if (!table_get(&vm->modules, module_name, &regex_module) || !IS_TABLE(regex_module)) {
+        if (!table_get(&vm->globals, module_name, &regex_module) || !IS_TABLE(regex_module)) {
+            return NULL;
+        }
     }
 
     ObjString* key_str = copy_string(key, key_len);

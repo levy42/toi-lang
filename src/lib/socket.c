@@ -94,7 +94,11 @@ static SocketData* get_socket_data(ObjUserdata* udata) {
 static void set_socket_metatable(VM* vm, ObjUserdata* udata) {
     Value socket_val;
     ObjString* socket_name = copy_string("socket", 6);
-    if (table_get(&vm->globals, socket_name, &socket_val) && IS_TABLE(socket_val)) {
+    if ((!table_get(&vm->modules, socket_name, &socket_val) || !IS_TABLE(socket_val)) &&
+        (!table_get(&vm->globals, socket_name, &socket_val) || !IS_TABLE(socket_val))) {
+        return;
+    }
+    if (IS_TABLE(socket_val)) {
         Value mt;
         ObjString* mt_name = copy_string("_socket_mt", 10);
         if (table_get(&AS_TABLE(socket_val)->table, mt_name, &mt) && IS_TABLE(mt)) {

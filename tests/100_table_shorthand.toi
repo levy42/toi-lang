@@ -1,0 +1,24 @@
+from lib.test import assert_eq
+
+a = 10
+b = 20
+c = 30
+
+t = {<a,b,c>}
+assert_eq(t.a, 10)
+assert_eq(t.b, 20)
+assert_eq(t.c, 30)
+
+t_trailing = {<a,b,c,>}
+assert_eq(t_trailing.a, 10)
+assert_eq(t_trailing.b, 20)
+assert_eq(t_trailing.c, 30)
+
+t_mixed = {<a>, z = 99}
+assert_eq(t_mixed.a, 10)
+assert_eq(t_mixed.z, 99)
+
+nested = {{a = 1}}
+assert_eq(nested[1].a, 1)
+
+print "table shorthand ok"

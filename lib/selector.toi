@@ -1,20 +1,12 @@
 table = import table
 socket = import socket
-
-poll = nil
-try
-  poll = import poll
-except e
-  poll = nil
+poll = import poll
 
 fn fd_key(fd)
   return "fd:" + str(int(fd))
 
-fn has_sock(list, sock)
-  return table.find_index(list, sock) > 0
-
 fn ensure_event(events, name)
-  if not (events has name)
+  if name not in events
     events <+ name
 
 Selector = {}
@@ -28,12 +20,12 @@ Selector.clear = fn(sel)
   return sel
 
 Selector.add_read = fn(sel, sock)
-  if sock and not has_sock(sel.read_socks, sock)
+  if sock and sock not in sel.read_socks
     sel.read_socks <+ sock
   return sel
 
 Selector.add_write = fn(sel, sock)
-  if sock and not has_sock(sel.write_socks, sock)
+  if sock and sock not in sel.write_socks
     sel.write_socks <+ sock
   return sel
 
@@ -66,10 +58,10 @@ Selector.wait = fn(sel, timeout = nil)
 
   for sock in sel.read_socks
     f = sock.fileno
-    if type(f) != "function"
+    if not istype(f, 'function')
       continue
     fd = f(sock)
-    if type(fd) != "number"
+    if not istype(fd, 'number')
       continue
     key = fd_key(fd)
     read_by_fd[key] = sock
@@ -83,10 +75,10 @@ Selector.wait = fn(sel, timeout = nil)
 
   for sock in sel.write_socks
     f = sock.fileno
-    if type(f) != "function"
+    if not istype(f, 'function')
       continue
     fd = f(sock)
-    if type(fd) != "number"
+    if not istype(fd, 'number')
       continue
     key = fd_key(fd)
     write_by_fd[key] = sock

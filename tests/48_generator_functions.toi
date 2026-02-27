@@ -1,6 +1,6 @@
 from lib.test import assert_eq, assert_true
 
-coroutine = import coroutine
+global coroutine = import coroutine
 
 fn gen(n)
   i = 1

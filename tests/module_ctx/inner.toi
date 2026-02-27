@@ -1,0 +1,5 @@
+return {
+  name = __name,
+  file = __file,
+  main = __main
+}

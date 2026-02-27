@@ -8,12 +8,18 @@ fn assert_eq(actual, expected, msg = nil)
   if actual != expected
     error(msg == nil ? "assert_eq failed" : msg)
 
-fn expect_error(fn_, err_type: str)
-  err = nil
+fn expect_error(fn_, err_type = nil)
   try
     fn_()
   except e
-    assert e.err_type == err_type, f"Expected error type {err_type}, got {e.err_type}"
+    if err_type != nil
+      assert e.err_type == err_type, f"Expected error type {err_type}, got {e.err_type}"
+
+    if type(e) == "table" and e.msg != nil
+      return e.msg
+    return str(e)
+
+  error("Expected function to raise an error")
 
 
 

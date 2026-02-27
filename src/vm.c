@@ -408,6 +408,15 @@ static int finish_closure_call(VM* vm, ObjClosure* closure, int arg_count) {
     frame->closure = closure;
     frame->ip = function->chunk.code;
     frame->slots = vm_current_thread(vm)->stack_top - arg_count - 1;
+    frame->restore_module_context = 0;
+    frame->cache_module_result = 0;
+    frame->had_prev_module_name = 0;
+    frame->had_prev_module_file = 0;
+    frame->had_prev_module_main = 0;
+    frame->module_cache_name = NIL_VAL;
+    frame->prev_module_name = NIL_VAL;
+    frame->prev_module_file = NIL_VAL;
+    frame->prev_module_main = NIL_VAL;
     return 1;
 }
 
@@ -931,11 +940,21 @@ static void mark_roots(VM* vm) {
     if (vm->str_upper_name != NULL) mark_object((struct Obj*)vm->str_upper_name);
     if (vm->str_lower_name != NULL) mark_object((struct Obj*)vm->str_lower_name);
     if (vm->slice_name != NULL) mark_object((struct Obj*)vm->slice_name);
+    if (vm->module_name_key != NULL) mark_object((struct Obj*)vm->module_name_key);
+    if (vm->module_file_key != NULL) mark_object((struct Obj*)vm->module_file_key);
+    if (vm->module_main_key != NULL) mark_object((struct Obj*)vm->module_main_key);
     if (!IS_NIL(vm->str_upper_fn)) mark_value(vm->str_upper_fn);
     if (!IS_NIL(vm->str_lower_fn)) mark_value(vm->str_lower_fn);
     // Mark globals
     for (int i = 0; i < vm->globals.capacity; i++) {
         Entry* entry = &vm->globals.entries[i];
+        if (entry->key != NULL) {
+            mark_object((struct Obj*)entry->key);
+            mark_value(entry->value);
+        }
+    }
+    for (int i = 0; i < vm->modules.capacity; i++) {
+        Entry* entry = &vm->modules.entries[i];
         if (entry->key != NULL) {
             mark_object((struct Obj*)entry->key);
             mark_value(entry->value);
@@ -963,6 +982,9 @@ void init_vm(VM* vm) {
    vm->str_upper_name = NULL;
    vm->str_lower_name = NULL;
    vm->slice_name = NULL;
+   vm->module_name_key = NULL;
+   vm->module_file_key = NULL;
+   vm->module_main_key = NULL;
    vm->str_upper_fn = NIL_VAL;
    vm->str_lower_fn = NIL_VAL;
 
@@ -984,6 +1006,9 @@ void init_vm(VM* vm) {
     vm->str_upper_name = copy_string("upper", 5);
     vm->str_lower_name = copy_string("lower", 5);
     vm->slice_name = copy_string("slice", 5);
+    vm->module_name_key = copy_string("__name", 6);
+    vm->module_file_key = copy_string("__file", 6);
+    vm->module_main_key = copy_string("__main", 6);
 
     // Register built-in native functions (from libs module)
     register_libs(vm);
@@ -1061,6 +1086,36 @@ Value get_metamethod(VM* vm, Value val, const char* name) {
 }
 
 static ObjThread* run_stop_thread = NULL;
+
+static void set_global_value(VM* vm, ObjString* key, Value value) {
+    push(vm, OBJ_VAL(key));
+    push(vm, value);
+    table_set(&vm->globals, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+}
+
+static void restore_module_context(VM* vm, CallFrame* frame) {
+    if (!frame->restore_module_context) return;
+
+    if (frame->had_prev_module_name) {
+        set_global_value(vm, vm->module_name_key, frame->prev_module_name);
+    } else {
+        table_delete(&vm->globals, vm->module_name_key);
+    }
+
+    if (frame->had_prev_module_file) {
+        set_global_value(vm, vm->module_file_key, frame->prev_module_file);
+    } else {
+        table_delete(&vm->globals, vm->module_file_key);
+    }
+
+    if (frame->had_prev_module_main) {
+        set_global_value(vm, vm->module_main_key, frame->prev_module_main);
+    } else {
+        table_delete(&vm->globals, vm->module_main_key);
+    }
+}
 
 InterpretResult vm_run(VM* vm, int min_frame_count) {
     CallFrame* frame = &vm_current_thread(vm)->frames[vm_current_thread(vm)->frame_count - 1];
@@ -1375,8 +1430,12 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
             }
             case OP_RETURN: {
                 Value result = pop(vm);
+                if (frame->cache_module_result && IS_STRING(frame->module_cache_name)) {
+                    table_set(&vm->modules, AS_STRING(frame->module_cache_name), result);
+                }
                 close_upvalues(vm, frame->slots);
                 discard_handlers_for_frame_return(vm_current_thread(vm));
+                restore_module_context(vm, frame);
                 vm_current_thread(vm)->frame_count--;
 
                 // Restore stack and push result
@@ -1429,8 +1488,13 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
             case OP_RETURN_N: {
                 uint8_t count = READ_BYTE();
                 Value* results = vm_current_thread(vm)->stack_top - count;
+                if (frame->cache_module_result && IS_STRING(frame->module_cache_name)) {
+                    Value module_result = count > 0 ? results[0] : NIL_VAL;
+                    table_set(&vm->modules, AS_STRING(frame->module_cache_name), module_result);
+                }
                 close_upvalues(vm, frame->slots);
                 discard_handlers_for_frame_return(vm_current_thread(vm));
+                restore_module_context(vm, frame);
                 vm_current_thread(vm)->frame_count--;
 
                 // Copy results to where the function was called (frame->slots)
@@ -1513,6 +1577,9 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
             }
             case OP_ADD:
                 if (!vm_handle_op_add(vm, &frame, &ip)) goto runtime_error;
+                break;
+            case OP_ADD_INPLACE:
+                if (!vm_handle_op_add_inplace(vm, &frame, &ip)) goto runtime_error;
                 break;
             case OP_SUBTRACT:
                 if (!vm_handle_op_subtract(vm, &frame, &ip)) goto runtime_error;

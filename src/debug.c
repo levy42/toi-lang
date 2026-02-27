@@ -155,6 +155,8 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return simple_instruction("OP_DUP", offset);
         case OP_ADD:
             return simple_instruction("OP_ADD", offset);
+        case OP_ADD_INPLACE:
+            return simple_instruction("OP_ADD_INPLACE", offset);
         case OP_ADD_CONST:
             return constant_instruction("OP_ADD_CONST", chunk, offset);
         case OP_SUBTRACT:

@@ -30,6 +30,14 @@ static void highlight_line(const char* line, char* output, size_t output_size);
 static VM* repl_vm_for_completion = NULL;
 enum { REPL_COMPLETION_MAX = 7 };
 
+static void set_global_value(VM* vm, ObjString* key, Value value) {
+    push(vm, OBJ_VAL(key));
+    push(vm, value);
+    table_set(&vm->globals, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+}
+
 typedef struct {
     const char* word;
     int length;
@@ -555,6 +563,9 @@ static void handle_sigint(int sig) {
 void start_repl(void) {
     VM vm;
     init_vm(&vm);
+    set_global_value(&vm, vm.module_name_key, OBJ_VAL(copy_string("__main", 6)));
+    set_global_value(&vm, vm.module_file_key, NIL_VAL);
+    set_global_value(&vm, vm.module_main_key, BOOL_VAL(1));
     init_completion_state(&vm);
     vm.disable_gc = 1;  // Disable GC in REPL to keep all objects alive
     vm.is_repl = 1;     // Enable REPL mode

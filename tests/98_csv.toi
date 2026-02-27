@@ -1,0 +1,50 @@
+from lib.test import assert_eq, assert_true
+
+csv = import csv
+
+parsed = csv.parse("name,age\nAda,36\nBob,42")
+assert_eq(#parsed, 3)
+assert_eq(parsed[1][1], "name")
+assert_eq(parsed[1][2], "age")
+assert_eq(parsed[2][1], "Ada")
+assert_eq(parsed[2][2], "36")
+assert_eq(parsed[3][1], "Bob")
+assert_eq(parsed[3][2], "42")
+
+quoted = csv.parse("id,comment\n1,\"hello, world\"\n2,\"line1\nline2\"\n3,\"say \"\"hi\"\"\"")
+assert_eq(quoted[2][2], "hello, world")
+assert_eq(quoted[3][2], "line1\nline2")
+assert_eq(quoted[4][2], "say \"hi\"")
+
+semi = csv.parse("a;b;c\r\n1;2;3", ";")
+assert_eq(semi[1][2], "b")
+assert_eq(semi[2][3], "3")
+
+rows = {
+  {"name", "quote", "active", "score"},
+  {"Ada", "hello, \"csv\"", true, 98.5},
+  {"Bob", "line1\nline2", false, ""},
+}
+
+encoded = csv.stringify(rows)
+reparsed = csv.parse(encoded)
+assert_eq(reparsed[1][1], "name")
+assert_eq(reparsed[2][2], "hello, \"csv\"")
+assert_eq(reparsed[2][3], "true")
+assert_eq(reparsed[2][4], "98.5")
+assert_eq(reparsed[3][2], "line1\nline2")
+assert_eq(reparsed[3][3], "false")
+assert_eq(reparsed[3][4], "")
+
+bad = false
+try
+  csv.parse("x,\"unterminated")
+except e
+  bad = true
+  if type(e) == "table"
+    assert_true(e.msg has "unterminated")
+  else
+    assert_true(e has "unterminated")
+assert_true(bad)
+
+print "csv ok"

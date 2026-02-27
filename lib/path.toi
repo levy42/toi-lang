@@ -14,17 +14,55 @@ fn join(a, b)
   return a + "/" + b
 
 fn normalize(p)
-  if p.endswith('/')
-    return p[..-1]
+  if not p
+    return ""
+  parts = {}
+  is_root = p.starts_with("/")
+  for part in p.split("/")
+    if part == ""
+      continue
+    parts <+ part
+  if #parts == 0
+    return is_root ? "/" : ""
+  body = "/".join(parts)
+  return is_root ? "/" + body : body
 
 fn dirname(p)
-  return p.split('/')
+  if p == nil or p == ""
+    return "."
+  normalized = normalize(p)
+  if normalized == "/"
+    return "/"
+  last_slash = 0
+  i = 1
+  while i <= #normalized
+    if normalized[i] == "/"
+      last_slash = i
+    i = i + 1
+  if last_slash == 0
+    return "."
+  if last_slash == 1
+    return "/"
+  return normalized[..last_slash - 1]
 
 fn basename(p)
-  return '/'.join(p.split('/')[..-1])
+  if p == nil or p == ""
+    return ""
+  normalized = normalize(p)
+  if normalized == "/"
+    return "/"
+  last_slash = 0
+  i = 1
+  while i <= #normalized
+    if normalized[i] == "/"
+      last_slash = i
+    i = i + 1
+  if last_slash == 0
+    return normalized
+  return normalized[last_slash + 1..]
 
 fn read_text(p)
-  with io.open(p, 'r') as f:
+  with io.open(p, "r") as f
     return f.read()
 
 return {

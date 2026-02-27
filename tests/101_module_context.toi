@@ -1,0 +1,26 @@
+from lib.test import assert_eq, assert_true
+
+mod = import tests.module_ctx.outer
+
+assert_eq(__name, "__main")
+assert_true(__file != nil)
+assert_eq(__main, true)
+
+assert_eq(mod.name, "tests.module_ctx.outer")
+assert_true(mod.file != nil)
+assert_eq(mod.main, false)
+
+assert_eq(mod.inner.name, "tests.module_ctx.inner")
+assert_true(mod.inner.file != nil)
+assert_eq(mod.inner.main, false)
+
+assert_eq(mod.after_name, "tests.module_ctx.outer")
+assert_eq(mod.after_file, mod.file)
+assert_eq(mod.after_main, false)
+
+math = import math
+assert_eq(math.__name, "math")
+assert_eq(math.__file, nil)
+assert_eq(math.__main, false)
+
+print "module context ok"

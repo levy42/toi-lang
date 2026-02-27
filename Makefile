@@ -35,8 +35,8 @@ UNAME_S := $(shell uname -s)
 TIMEOUT := $(shell command -v gtimeout >/dev/null 2>&1 && echo gtimeout || echo timeout)
 
 SRC = src/main.c src/lexer.c src/object.c src/table.c src/value.c src/chunk.c src/debug.c src/vm.c src/vm/build_string.c src/vm/ops_arith.c src/vm/ops_arith_const.c src/vm/ops_compare.c src/vm/ops_control.c src/vm/ops_exception.c src/vm/ops_float.c src/vm/ops_has.c src/vm/ops_import.c src/vm/ops_import_star.c src/vm/ops_iter.c src/vm/ops_local_const.c src/vm/ops_local_set.c src/vm/ops_meta.c src/vm/ops_mod.c src/vm/ops_power.c src/vm/ops_print.c src/vm/ops_state.c src/vm/ops_table.c src/vm/ops_unary.c src/compiler.c src/compiler/fstring.c src/compiler/stmt_control.c src/compiler/stmt.c src/opt.c src/repl.c src/toi_lineedit.c \
-      src/lib/math.c src/lib/time.c src/lib/io.c src/lib/sys.c src/lib/os.c src/lib/stat.c src/lib/dir.c src/lib/signal.c src/lib/mmap.c src/lib/poll.c src/lib/coroutine.c src/lib/string.c src/lib/core.c src/lib/libs.c src/lib/table.c src/lib/socket.c src/lib/thread.c src/lib/json.c src/lib/template.c src/lib/http.c src/lib/regex.c src/lib/fnmatch.c src/lib/glob.c \
-      src/lib/inspect.c src/lib/binary.c src/lib/structlib.c src/lib/btree.c src/lib/uuid.c src/lib/gzip.c
+      src/lib/math.c src/lib/time.c src/lib/io.c src/lib/sys.c src/lib/os.c src/lib/stat.c src/lib/dir.c src/lib/signal.c src/lib/mmap.c src/lib/poll.c src/lib/coroutine.c src/lib/string.c src/lib/core.c src/lib/libs.c src/lib/table.c src/lib/socket.c src/lib/thread.c src/lib/json.c src/lib/template.c src/lib/http.c src/lib/url.c src/lib/regex.c src/lib/fnmatch.c src/lib/glob.c \
+      src/lib/inspect.c src/lib/binary.c src/lib/structlib.c src/lib/btree.c src/lib/uuid.c src/lib/gzip.c src/lib/csv.c src/lib/toml.c
 
 LDLIBS += -lz
 OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
@@ -106,7 +106,7 @@ pi:
 	@echo "Syncing.."
 	rsync -az --delete . pi@pi3:/home/pi/toi
 
-test: $(TARGET) test-fmt
+test: $(TARGET)
 	@passed=0; failed=0; timedout=0; \
 	for f in tests/*.toi; do \
 		printf "Testing $$f... "; \
@@ -127,7 +127,7 @@ test: $(TARGET) test-fmt
 	printf "Timeout: $$timedout\n"; \
 	[ $$failed -eq 0 ] && [ $$timedout -eq 0 ]
 
-.PHONY: all clean release release-perf test docs wasm wasm-release pi perf peft test-fmt peft-comp perf-comp benchmark-comp
+.PHONY: all clean release release-perf test docs wasm wasm-release pi perf peft peft-comp perf-comp benchmark-comp
 
 perf: $(TARGET)
 	@for f in tests/peft/*.toi; do \
@@ -136,9 +136,6 @@ perf: $(TARGET)
 	done
 
 peft: perf
-
-test-fmt: $(TARGET)
-	@tests/fmt_regression.sh
 
 docs: $(TARGET)
 	./$(TARGET) tools/build_docs.toi

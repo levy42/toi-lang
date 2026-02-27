@@ -35,6 +35,15 @@ typedef struct {
     struct ObjClosure* closure;
     uint8_t* ip;
     Value* slots;
+    uint8_t restore_module_context;
+    uint8_t cache_module_result;
+    uint8_t had_prev_module_name;
+    uint8_t had_prev_module_file;
+    uint8_t had_prev_module_main;
+    Value module_cache_name;
+    Value prev_module_name;
+    Value prev_module_file;
+    Value prev_module_main;
 } CallFrame;
 
 typedef struct ExceptionHandler {

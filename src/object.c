@@ -417,6 +417,18 @@ void mark_object(struct Obj* object) {
         }
         for (int i = 0; i < thread->frame_count; i++) {
             mark_object((struct Obj*)thread->frames[i].closure);
+            if (!IS_NIL(thread->frames[i].module_cache_name)) {
+                mark_value(thread->frames[i].module_cache_name);
+            }
+            if (!IS_NIL(thread->frames[i].prev_module_name)) {
+                mark_value(thread->frames[i].prev_module_name);
+            }
+            if (!IS_NIL(thread->frames[i].prev_module_file)) {
+                mark_value(thread->frames[i].prev_module_file);
+            }
+            if (!IS_NIL(thread->frames[i].prev_module_main)) {
+                mark_value(thread->frames[i].prev_module_main);
+            }
         }
         for (ObjUpvalue* upvalue = thread->open_upvalues; upvalue != NULL; upvalue = upvalue->next) {
             mark_object((struct Obj*)upvalue);

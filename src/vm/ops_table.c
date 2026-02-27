@@ -226,7 +226,7 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
             }
 
             if (use_cached) {
-                result = maybe_bind_self_local(table, cached_method);
+                result = bind_self_for_meta_local(table, cached_method);
                 push(vm, result);
                 maybe_collect_garbage(vm);
                 return 1;
@@ -250,7 +250,7 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
                     } else if (lookup_name == vm->str_lower_name) {
                         vm->str_lower_fn = result;
                     }
-                    result = maybe_bind_self_local(table, result);
+                    result = bind_self_for_meta_local(table, result);
                 } else {
                     result = NIL_VAL;
                 }

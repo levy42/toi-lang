@@ -9,7 +9,7 @@ typedef struct VM {
    ObjThread* current_thread;
    ObjThread* gc_parked_threads;
    Table globals;
-   Table modules;  // Cache of loaded native modules
+   Table modules;  // Cache of loaded modules (native and .toi)
    int use_thread_tls;
    int cli_argc;
    char** cli_argv;
@@ -27,6 +27,9 @@ typedef struct VM {
     ObjString* str_upper_name;
     ObjString* str_lower_name;
     ObjString* slice_name;
+    ObjString* module_name_key;
+    ObjString* module_file_key;
+    ObjString* module_main_key;
     Value str_upper_fn;
     Value str_lower_fn;
 } VM;

@@ -1,7 +1,7 @@
 from lib.test import assert_eq, assert_true, expect_error
-
-os = import os
+import os
 types = import lib.types
+from lib.types import *
 db_mod = import lib.db
 
 base = "tests/tmp_db"

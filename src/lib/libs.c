@@ -28,8 +28,11 @@ void register_socket(VM* vm);
 void register_thread(VM* vm);
 #endif
 void register_json(VM* vm);
+void register_toml(VM* vm);
+void register_csv(VM* vm);
 void register_template(VM* vm);
 void register_http(VM* vm);
+void register_url(VM* vm);
 void register_inspect(VM* vm);
 #ifndef TOI_WASM
 void register_regex(VM* vm);
@@ -53,7 +56,7 @@ static int load_registered_module(VM* vm, const char* name, void (*register_fn)(
     push(vm, OBJ_VAL(module_name));
 
     Value module = NIL_VAL;
-    int found = table_get(&vm->globals, module_name, &module);
+    int found = table_get(&vm->modules, module_name, &module);
     pop(vm);
     if (!found || !IS_TABLE(module)) {
         return 0;
@@ -86,8 +89,11 @@ static int load_socket(VM* vm) { return load_registered_module(vm, "socket", reg
 static int load_thread(VM* vm) { return load_registered_module(vm, "thread", register_thread); }
 #endif
 static int load_json(VM* vm) { return load_registered_module(vm, "json", register_json); }
+static int load_toml(VM* vm) { return load_registered_module(vm, "toml", register_toml); }
+static int load_csv(VM* vm) { return load_registered_module(vm, "csv", register_csv); }
 static int load_template(VM* vm) { return load_registered_module(vm, "template", register_template); }
 static int load_http(VM* vm) { return load_registered_module(vm, "http", register_http); }
+static int load_url(VM* vm) { return load_registered_module(vm, "url", register_url); }
 static int load_inspect(VM* vm) { return load_registered_module(vm, "inspect", register_inspect); }
 #ifndef TOI_WASM
 static int load_regex(VM* vm) { return load_registered_module(vm, "regex", register_regex); }
@@ -128,8 +134,11 @@ static const ModuleReg native_modules[] = {
     {"thread", load_thread},
 #endif
     {"json", load_json},
+    {"toml", load_toml},
+    {"csv", load_csv},
     {"template", load_template},
     {"http", load_http},
+    {"url", load_url},
     {"inspect", load_inspect},
 #ifndef TOI_WASM
     {"regex", load_regex},
@@ -226,11 +235,28 @@ void register_module(VM* vm, const char* name, const NativeReg* funcs) {
             pop(vm); // Pop name string
         }
 
-        push(vm, OBJ_VAL(copy_string(name, (int)strlen(name)))); // Push module name
-        push(vm, OBJ_VAL(module)); // Push module object (already on stack)
-        table_set(&vm->globals, AS_STRING(peek(vm, 1)), peek(vm, 0));
-        pop(vm); // Pop module object (from table_set)
-        pop(vm); // Pop module name
+        push(vm, OBJ_VAL(copy_string("__name", 6)));
+        push(vm, OBJ_VAL(copy_string(name, (int)strlen(name))));
+        table_set(&module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+        pop(vm);
+        pop(vm);
+
+        push(vm, OBJ_VAL(copy_string("__file", 6)));
+        push(vm, NIL_VAL);
+        table_set(&module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+        pop(vm);
+        pop(vm);
+
+        push(vm, OBJ_VAL(copy_string("__main", 6)));
+        push(vm, BOOL_VAL(0));
+        table_set(&module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+        pop(vm);
+        pop(vm);
+
+        ObjString* module_name = copy_string(name, (int)strlen(name));
+        push(vm, OBJ_VAL(module_name));
+        table_set(&vm->modules, module_name, OBJ_VAL(module));
+        pop(vm); // module_name
 
         // Module object is still on stack (from line 24)
     }

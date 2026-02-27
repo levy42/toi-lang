@@ -1,0 +1,5 @@
+import os, io
+
+return {
+  ok = (type(os) == "table" and type(io) == "table")
+}

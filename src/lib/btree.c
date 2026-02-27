@@ -1409,7 +1409,10 @@ static int btree_open_native(VM* vm, int arg_count, Value* args) {
 
     Value mod = NIL_VAL;
     ObjString* mod_name = copy_string("btree", 5);
-    if (table_get(&vm->globals, mod_name, &mod) && IS_TABLE(mod)) {
+    if ((!table_get(&vm->modules, mod_name, &mod) || !IS_TABLE(mod)) &&
+        (!table_get(&vm->globals, mod_name, &mod) || !IS_TABLE(mod))) {
+        // Keep default nil metatable if module table lookup fails.
+    } else if (IS_TABLE(mod)) {
         Value mt = NIL_VAL;
         ObjString* mt_name = copy_string("_db_mt", 6);
         if (table_get(&AS_TABLE(mod)->table, mt_name, &mt) && IS_TABLE(mt)) {
