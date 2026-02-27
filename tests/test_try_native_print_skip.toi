@@ -1,0 +1,48 @@
+from lib.test import assert_true
+
+caught_int = false
+try
+  int("nope")
+except e
+  caught_int = true
+  assert_true(type(e) == "table")
+  assert_true(e.type == "ValueError")
+  assert_true(e.msg has "int() expects")
+assert_true(caught_int)
+
+caught_float = false
+try
+  float("bad")
+except e
+  caught_float = true
+  assert_true(type(e) == "table")
+  assert_true(e.type == "ValueError")
+  assert_true(e.msg has "float() expects")
+assert_true(caught_float)
+
+caught_error = false
+try
+  error("boom", "UserError")
+except e
+  caught_error = true
+  assert_true(type(e) == "table")
+  assert_true(e.type == "UserError")
+  assert_true(e.msg == "boom")
+assert_true(caught_error)
+
+print "try native exceptions ok"
+
+from lib.test import assert_eq, assert_true
+
+T = {check = fn(self, s) return s != nil}
+T.__index = T
+
+obj = {}
+setmetatable(obj, T)
+
+s = str(T)
+assert_true(not (s has "__index"))
+assert_true(s has "check")
+assert_true(not (str(obj) has "__index"))
+
+print "print skips __index ok"

@@ -1,0 +1,212 @@
+from lib.test import assert_eq, assert_true
+
+http = import http
+socket = import socket
+thread = import thread
+poll = import poll
+
+fn server_worker(port_ch, done_ch)
+  srv = socket.tcp()
+  if srv == nil
+    port_ch.send(port_ch, "skip:tcp failed")
+    return true
+
+  ok, err = srv.bind(srv, "127.0.0.1", 0)
+  if not ok
+    port_ch.send(port_ch, "skip:" + str(err or ok))
+    srv.close(srv)
+    return true
+
+  srv.listen(srv, 1)
+  host, port = srv.getsockname(srv)
+  _ = host
+  port_ch.send(port_ch, port)
+
+  client, ip = srv.accept(srv)
+  _ = ip
+  if client
+    req = client.recv(client, 4096)
+    _ = req
+    client.send(client, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\npong")
+    client.close(client)
+
+  srv.close(srv)
+  done_ch.send(done_ch, true)
+  return true
+
+port_ch = thread.channel(1)
+done_ch = thread.channel(1)
+h = thread.spawn(server_worker, port_ch, done_ch)
+
+port_or_skip = port_ch.recv(port_ch)
+if type(port_or_skip) == "string"
+  print "http request poll skipped (" + port_or_skip + ")"
+  assert_true(thread.join(h) == true)
+  print "http request poll ok"
+else
+  req, req_err = http.request(f"http://127.0.0.1:{port_or_skip}/ping")
+  assert_true(req_err == nil)
+  assert_true(req != nil)
+
+  done = false
+  res = nil
+  err = nil
+  spins = 0
+  while not done and spins < 1000
+    done, res, err = req.step()
+    if done
+      break
+
+    fd = req.fileno()
+    items = {}
+    if req.want_read()
+      items <+ {fd = fd, events = {"in"}}
+    if req.want_write()
+      items <+ {fd = fd, events = {"out"}}
+    assert_true(#items > 0)
+    poll.wait(items, 1000)
+    spins = spins + 1
+
+  assert_true(done == true)
+  assert_true(err == nil)
+  assert_eq(res.status, 200)
+  assert_eq(res.body, "pong")
+  assert_true(req.close() == true)
+
+  assert_true(done_ch.recv(done_ch) == true)
+  assert_true(thread.join(h) == true)
+
+  h2, e2 = http.request("https://example.com")
+  assert_true(h2 == nil)
+  assert_true(type(e2) == "string")
+  assert_true(e2 has "http://")
+
+  print "http request poll ok"
+
+from lib.test import assert_eq, assert_true
+
+markdown = import markdown
+
+html1 = markdown.to_html("Hello, *world* and **Toi** with `x < y`.")
+assert_eq(html1, "<p>Hello, <em>world</em> and <strong>Toi</strong> with <code>x &lt; y</code>.</p>")
+
+md2 = [[Paragraph with <tag> & symbols.
+
+```toi
+print("x < y")
+```
+]]
+
+html2 = markdown.to_html(md2)
+assert_true(html2 has "<p>Paragraph with &lt;tag&gt; &amp; symbols.</p>")
+assert_true(html2 has "<pre><code class=\"language-toi\">")
+assert_true(html2 has "<span color=\"cyan\">print</span>")
+assert_true(html2 has "<span color=\"green\">&quot;x &lt; y&quot;</span>")
+
+md3 = [[```
+a < b && c > d
+]]
+html3 = markdown.to_html(md3)
+assert_true(html3 has "<pre><code>a &lt; b &amp;&amp; c &gt; d</code></pre>")
+
+md4 = [[# Title
+## Intro
+
+- one
+- two with [link](https://example.com)
+
+1. first
+2. second
+]]
+html4 = markdown.to_html(md4)
+assert_true(html4 has "<h1 id=\"title\">Title</h1>")
+assert_true(html4 has "<h2 id=\"intro\">Intro</h2>")
+assert_true(html4 has "<ul>")
+assert_true(html4 has "<ol>")
+
+md5 = [[See [Getting Started](docs/getting-started.md) and [Section](docs/README.md#start-here).
+
+> Quote line one
+> Quote line two
+
+---
+]]
+html5 = markdown.to_html(md5)
+assert_true(html5 has "<a href=\"docs/getting-started.html\">Getting Started</a>")
+assert_true(html5 has "<a href=\"docs/README.html#start-here\">Section</a>")
+assert_true(html5 has "<blockquote>")
+assert_true(html5 has "<p>Quote line one Quote line two</p>")
+assert_true(html5 has "<hr />")
+
+md6 = [[- parent
+  - child
+  - child2
+- sibling
+]]
+html6 = markdown.to_html(md6)
+assert_true(html6 has "<ul>")
+assert_true(html6 has "<li>parent")
+assert_true(html6 has "<li>child")
+assert_true(html6 has "<li>child2")
+assert_true(html6 has "<li>sibling")
+
+md7 = [[| Name | Value |
+| --- | --- |
+| A | 1 |
+| B | [Doc](docs/README.md) |
+]]
+html7 = markdown.to_html(md7)
+assert_true(html7 has "<table>")
+assert_true(html7 has "<th>Name</th>")
+assert_true(html7 has "<th>Value</th>")
+assert_true(html7 has "<td>A</td>")
+assert_true(html7 has "<td>1</td>")
+assert_true(html7 has "<a href=\"docs/README.html\">Doc</a>")
+
+print "markdown ok"
+
+from lib.test import assert_eq, assert_true
+
+regex = import regex
+table = import table
+
+-- Direct call in for-in header should iterate call result.
+parts = {}
+for m in regex.finditer("[a-z]+", "a1bb22ccc")
+  parts <+ m.match
+assert_eq(#parts, 3)
+assert_eq(parts[1], "a")
+assert_eq(parts[2], "bb")
+assert_eq(parts[3], "ccc")
+
+-- Key/value table comprehension.
+t = {a = 1, b = 2}
+scaled = {k = v * 10 for k, v in t}
+assert_eq(scaled.a, 10)
+assert_eq(scaled.b, 20)
+
+-- Dynamic key expression in key/value table comprehension.
+prefixed = {("x" + k) = v for k, v in t}
+assert_eq(prefixed.xa, 1)
+assert_eq(prefixed.xb, 2)
+
+-- table.sort should honor custom comparator.
+vals = {9, 1, 5, 3}
+table.sort(vals, fn(a, b)
+  return a > b
+)
+assert_eq(vals[1], 9)
+assert_eq(vals[2], 5)
+assert_eq(vals[3], 3)
+assert_eq(vals[4], 1)
+
+-- Numeric comparator result is also accepted.
+vals2 = {3, 1, 2}
+table.sort(vals2, fn(a, b)
+  return a - b
+)
+assert_eq(vals2[1], 1)
+assert_eq(vals2[2], 2)
+assert_eq(vals2[3], 3)
+
+print "for/comprehension/sort ok"

@@ -1,0 +1,150 @@
+from lib.test import assert_true
+
+template = import template
+time = import time
+global string = import string
+global table = import table
+
+tmpl = "Hello {{ name }}! {% for item in items %}[{{ item }}]{% endfor %}"
+ctx = {name = "Ada", items = {"x", "y", "z"}}
+expected = "Hello Ada! [x][y][z]"
+
+-- Sanity check correctness first.
+out = template.render(tmpl, ctx)
+assert_true(out == expected, "template output mismatch")
+
+-- Benchmark template.compile()
+compile_iters = 200
+compile_start = time.clock()
+i = 1
+while i <= compile_iters
+  fn_obj = template.compile(tmpl)
+  assert_true(type(fn_obj) == "function", "template.compile did not return function")
+  i = i + 1
+compile_elapsed = time.clock() - compile_start
+assert_true(compile_elapsed >= 0, "compile benchmark clock went backwards")
+
+-- Benchmark compiled function render speed.
+render_fn = template.compile(tmpl)
+render_iters = 1500
+render_start = time.clock()
+i = 1
+while i <= render_iters
+  out = render_fn(ctx)
+  i = i + 1
+render_elapsed = time.clock() - render_start
+assert_true(out == expected, "compiled render output mismatch")
+assert_true(render_elapsed >= 0, "render benchmark clock went backwards")
+
+-- Benchmark convenience template.render(str, ctx) path.
+convenience_iters = 120
+conv_start = time.clock()
+i = 1
+while i <= convenience_iters
+  out = template.render(tmpl, ctx)
+  i = i + 1
+conv_elapsed = time.clock() - conv_start
+assert_true(out == expected, "convenience render output mismatch")
+assert_true(conv_elapsed >= 0, "convenience benchmark clock went backwards")
+
+print string.format("template perf: compile=%fs render=%fs render_with_compile=%fs", compile_elapsed, render_elapsed, conv_elapsed)
+
+from lib.test import assert_eq, assert_true
+
+glob = import glob
+io = import io
+os = import os
+
+ROOT = "tests/tmp_glob_case"
+
+fn safe_rm(path)
+  if os.exists(path)
+    os.remove(path)
+
+fn safe_rmdir(path)
+  if os.exists(path) and os.isdir(path)
+    os.rmdir(path)
+
+safe_rm(ROOT + "/a.txt")
+safe_rm(ROOT + "/b.txt")
+safe_rm(ROOT + "/c.log")
+safe_rmdir(ROOT + "/sub")
+safe_rmdir(ROOT)
+
+ok = os.mkdir(ROOT)
+assert_true(ok == true, "mkdir ROOT failed")
+ok2 = os.mkdir(ROOT + "/sub")
+assert_true(ok2 == true, "mkdir sub failed")
+
+f = io.open(ROOT + "/a.txt", "w")
+f.write("a")
+f.close()
+
+f = io.open(ROOT + "/b.txt", "w")
+f.write("b")
+f.close()
+
+f = io.open(ROOT + "/c.log", "w")
+f.write("c")
+f.close()
+
+paths = glob.match(ROOT + "/*.txt")
+assert_eq(type(paths), "table")
+
+found_a = false
+found_b = false
+count = 0
+for p in paths
+  count = count + 1
+  if p == ROOT + "/a.txt"
+    found_a = true
+  if p == ROOT + "/b.txt"
+    found_b = true
+
+assert_eq(count, 2)
+assert_true(found_a)
+assert_true(found_b)
+
+none = glob.match(ROOT + "/*.zzz")
+assert_eq(type(none), "table")
+assert_eq(#none, 0)
+
+safe_rm(ROOT + "/a.txt")
+safe_rm(ROOT + "/b.txt")
+safe_rm(ROOT + "/c.log")
+safe_rmdir(ROOT + "/sub")
+safe_rmdir(ROOT)
+
+print "glob ok"
+
+from lib.test import assert_eq, assert_true
+
+table = import table
+
+orig = {1, 2, nested = {k = "v"}}
+shallow = table.clone(orig)
+assert_true(shallow != orig)
+assert_true(shallow.nested == orig.nested)
+orig.nested.k = "changed"
+assert_eq(shallow.nested.k, "changed")
+
+deep = table.clone(orig, true)
+assert_true(deep != orig)
+assert_true(deep.nested != orig.nested)
+assert_eq(deep.nested.k, "changed")
+orig.nested.k = "again"
+assert_eq(deep.nested.k, "changed")
+
+deep_named = table.clone(orig, deep=true)
+assert_true(deep_named != orig)
+assert_true(deep_named.nested != orig.nested)
+orig.nested.k = "named-change"
+assert_eq(deep_named.nested.k, "again")
+
+cyclic = {}
+cyclic.self = cyclic
+deep_cycle = table.clone(cyclic, true)
+assert_true(deep_cycle != cyclic)
+assert_true(deep_cycle.self == deep_cycle)
+
+print "table.clone ok"

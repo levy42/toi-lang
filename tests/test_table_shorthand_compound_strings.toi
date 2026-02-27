@@ -1,0 +1,112 @@
+from lib.test import assert_eq
+
+a = 10
+b = 20
+c = 30
+
+t = {<a,b,c>}
+assert_eq(t.a, 10)
+assert_eq(t.b, 20)
+assert_eq(t.c, 30)
+
+t_trailing = {<a,b,c,>}
+assert_eq(t_trailing.a, 10)
+assert_eq(t_trailing.b, 20)
+assert_eq(t_trailing.c, 30)
+
+t_mixed = {<a>, z = 99}
+assert_eq(t_mixed.a, 10)
+assert_eq(t_mixed.z, 99)
+
+nested = {{a = 1}}
+assert_eq(nested[1].a, 1)
+
+print "table shorthand ok"
+
+from lib.test import assert_eq
+
+a = 10
+a += 5
+assert_eq(a, 15)
+a -= 3
+assert_eq(a, 12)
+a *= 2
+assert_eq(a, 24)
+a /= 6
+assert_eq(a, 4)
+a %= 3
+assert_eq(a, 1)
+
+fn local_flow()
+  x = 100
+  x -= 25
+  x *= 2
+  x += 5
+  x /= 5
+  return x
+
+assert_eq(local_flow(), 31)
+
+fn make_acc(n)
+  fn add(v)
+    n += v
+    return n
+  return add
+
+acc = make_acc(1)
+assert_eq(acc(2), 3)
+assert_eq(acc(4), 7)
+
+b = (a += 9)
+assert_eq(a, 10)
+assert_eq(b, 10)
+
+left = {1, 2}
+alias = left
+left += {3, 4}
+assert_eq(left[1], 1)
+assert_eq(left[2], 2)
+assert_eq(left[3], 3)
+assert_eq(left[4], 4)
+assert_eq(alias[4], 4)
+
+base = {10, 20}
+other = base
+base = base + {30}
+assert_eq(base[3], 30)
+assert_eq(other[3], nil)
+
+print "compound assign ok"
+
+from lib.test import assert_true
+
+string = import string
+
+assert_true(string.starts_with("hello", "he"))
+assert_true(not string.starts_with("hello", "lo"))
+assert_true("hello".starts_with("he"))
+
+assert_true(string.ends_with("hello", "lo"))
+assert_true(not string.ends_with("hello", "he"))
+assert_true("hello".ends_with("lo"))
+assert_true(string.ends_with("hello", ""))
+assert_true(string.ltrim(" \t hello") == "hello")
+assert_true(string.rtrim("hello \n\t") == "hello")
+assert_true(string.trim(" \nhello\t ") == "hello")
+assert_true(string.is_digit("7"))
+assert_true(string.is_digit("7890"))
+assert_true(not string.is_digit("x"))
+assert_true(not string.is_digit("7x"))
+assert_true(string.is_alpha("Z"))
+assert_true(not string.is_alpha("9"))
+assert_true(string.is_alpha("ab"))
+assert_true(not string.is_alpha("ab9"))
+assert_true(string.is_alnum("a"))
+assert_true(string.is_alnum("4"))
+assert_true(not string.is_alnum("-"))
+assert_true(string.is_space(" "))
+assert_true(string.is_space("\n"))
+assert_true(not string.is_space("x"))
+assert_true(string.escape_html("<a&\"'>") == "&lt;a&amp;&quot;&#39;&gt;")
+
+print "string starts_with/ends_with ok"

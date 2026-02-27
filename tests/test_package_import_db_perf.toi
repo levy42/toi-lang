@@ -1,0 +1,135 @@
+from lib.test import assert_eq
+
+pkg = import tests.pkg_init_mod
+assert_eq(pkg.answer, 7)
+assert_eq(pkg.inc(4), 5)
+
+from tests.pkg_init_mod import answer, inc
+assert_eq(answer, 7)
+assert_eq(inc(9), 10)
+
+print "import package init ok"
+
+from lib.test import assert_eq, assert_true
+
+os = import os
+time = import time
+global string = import string
+types = import lib.types
+db_mod = import lib.db
+
+fn to_int_or(v, fallback)
+  if v == nil
+    return fallback
+  return int(v)
+
+fn ops_per_sec(count, elapsed)
+  if elapsed <= 0
+    return 0
+  return int(count / elapsed)
+
+base = "tests/tmp_db_perf"
+
+fn cleanup()
+  os.remove(base + "_users.db")
+  os.remove(base + "_users__idx_email.db")
+  os.remove(base + "_users__idx_team.db")
+
+cleanup()
+
+rows_n = to_int_or(os.getenv("N"), 500)
+probe_n = rows_n
+update_n = int(rows_n / 2)
+delete_n = int(rows_n / 3)
+
+User = types.Record {
+  id = types.String,
+  name = types.String,
+  email = types.String,
+  team = types.String
+}
+User.__name = "users"
+User.__indexes = {"email", "team"}
+
+db = db_mod.open(base)
+users = db.create_table(User)
+ids = {}
+
+-- Insert benchmark.
+start = time.clock()
+for i in 1..rows_n
+  saved = db.add(User {
+    name = "User " + str(i),
+    email = "u" + str(i) + "@example.com",
+    team = "team_" + str(i % 8)
+  })
+  ids[i] = saved.id
+insert_elapsed = time.clock() - start
+assert_true(insert_elapsed >= 0, "insert benchmark clock went backwards")
+assert_eq(type(ids[rows_n]), "string")
+
+-- Primary-key lookup benchmark.
+start = time.clock()
+pk_hits = 0
+for i in 1..probe_n
+  key = ids[((i * 7919) % rows_n) + 1]
+  row = users.get(key)
+  if row != nil and row.id == key
+    pk_hits = pk_hits + 1
+get_elapsed = time.clock() - start
+assert_true(get_elapsed >= 0, "get benchmark clock went backwards")
+assert_eq(pk_hits, probe_n)
+
+-- Secondary-index lookup benchmark.
+start = time.clock()
+index_hits = 0
+for i in 1..probe_n
+  rows = users.filter(team = "team_" + str(i % 8))
+  index_hits = index_hits + #rows
+index_elapsed = time.clock() - start
+assert_true(index_elapsed >= 0, "index benchmark clock went backwards")
+assert_true(index_hits > 0, "team index lookup returned no rows")
+
+-- Upsert benchmark (forces secondary index maintenance).
+start = time.clock()
+for i in 1..update_n
+  users.put(User {
+    id = ids[i],
+    name = "User " + str(i),
+    email = "u" + str(i) + "@example.com",
+    team = "updated_" + str(i % 4)
+  })
+update_elapsed = time.clock() - start
+assert_true(update_elapsed >= 0, "update benchmark clock went backwards")
+assert_eq(users.get(ids[1]).team, "updated_1")
+
+-- Delete benchmark.
+start = time.clock()
+deleted = 0
+for i in 1..delete_n
+  if users.delete(ids[i])
+    deleted = deleted + 1
+delete_elapsed = time.clock() - start
+assert_true(delete_elapsed >= 0, "delete benchmark clock went backwards")
+assert_eq(deleted, delete_n)
+
+db.close()
+
+-- Reopen and spot-check persistence.
+db2 = db_mod.open(base)
+users2 = db2.create_table(User)
+assert_true(users2.get(ids[1]) == nil)
+assert_eq(users2.get(ids[delete_n + 1]).id, ids[delete_n + 1])
+db2.close()
+
+-- Ensure userdata finalizers run before deleting database files.
+gc
+cleanup()
+
+print "db perf"
+print "  rows=" + string(rows_n)
+print f"  insert: {insert_elapsed}s ({ops_per_sec(rows_n, insert_elapsed)} op/s)"
+print f"  get: {get_elapsed}s ({ops_per_sec(probe_n, get_elapsed)} op/s)"
+print f"  filter(team): {index_elapsed}s ({ops_per_sec(probe_n, index_elapsed)} op/s)"
+print f"  upsert: {update_elapsed}s ({ops_per_sec(update_n, update_elapsed)} op/s)"
+print f"  delete: {delete_elapsed}s ({ops_per_sec(delete_n, delete_elapsed)} op/s)"

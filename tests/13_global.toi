@@ -1,9 +1,0 @@
-from lib.test import assert_eq
-
-global g = 1
-
-fn set_global()
-  global g = 2
-
-set_global()
-assert_eq(g, 2)

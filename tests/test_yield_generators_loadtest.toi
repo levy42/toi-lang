@@ -1,0 +1,66 @@
+from lib.test import assert_eq
+
+global coroutine = import coroutine
+
+fn seq_body()
+  yield 2
+  yield 4
+  yield 6
+  yield 8
+  yield 10
+
+fn seq_next(self, control)
+  if coroutine.status(self.co) == "dead"
+    return nil, nil
+  v = nil
+  v = coroutine.resume(self.co)
+  if coroutine.status(self.co) == "dead"
+    return nil, nil
+  self.i = self.i + 1
+  return self.i, v
+
+fn seq()
+  g = {i = 0}
+  g.co = coroutine.create(seq_body)
+  g.__next = seq_next
+  return g
+
+g1 = seq()
+sum = 0
+for v in g1
+  sum = sum + v
+assert_eq(sum, 30)
+
+print "yield generators ok"
+
+from lib.test import assert_eq, assert_true
+
+loadtest = import lib.loadtest
+
+u1 = loadtest.parse_url("http://example.com")
+assert_eq(u1.scheme, "http")
+assert_eq(u1.host, "example.com")
+assert_eq(u1.port, 80)
+assert_eq(u1.path, "/")
+
+u2 = loadtest.parse_url("https://localhost:9443/api/v1")
+assert_eq(u2.scheme, "https")
+assert_eq(u2.host, "localhost")
+assert_eq(u2.port, 9443)
+assert_eq(u2.path, "/api/v1")
+
+req = loadtest.build_request("GET", "/ping", "localhost")
+assert_true(req has "GET /ping HTTP/1.1")
+assert_true(req has "Host: localhost")
+assert_true(req has "Connection: close")
+
+c1 = loadtest.parse_status_code("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+assert_eq(c1, 200)
+
+c2 = loadtest.parse_status_code("HTTP/1.1 503 Service Unavailable\r\n\r\n")
+assert_eq(c2, 503)
+
+c3 = loadtest.parse_status_code("nonsense")
+assert_true(c3 == nil)
+
+print "loadtest tooling ok"

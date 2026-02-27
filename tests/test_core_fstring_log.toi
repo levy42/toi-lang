@@ -1,0 +1,176 @@
+from lib.test import assert_eq, assert_true
+
+-- literals and variables
+n = 42
+s = "hello"
+s2 = 'hello'
+s3 = 'he said "hi"'
+s4 = "it's fine"
+s5 = 'it\'s fine'
+b = true
+z = nil
+arr2 = 1, 2, 3
+a, b = 1, 2
+assert_eq(n, 42)
+assert_eq(s, "hello")
+assert_eq(s2, "hello")
+assert_eq(s3, 'he said "hi"')
+assert_eq(s4, "it's fine")
+assert_eq(s5, "it's fine")
+assert_true(b)
+assert_true(z == nil)
+assert_eq(arr2[1], 1)
+assert_eq(arr2[3], 3)
+assert_eq(a, 1)
+assert_eq(b, 2)
+assert_eq(min(3, 1, 2), 1)
+assert_eq(max(3, 1, 2), 3)
+assert_eq(sum(1, 2, 3), 6)
+assert_eq(sum({1, 2, 3, 4}), 10)
+d = divmod(17, 5)
+assert_eq(type(d), "table")
+assert_eq(d[1], 3)
+assert_eq(d[2], 2)
+
+-- if / elif / else
+v = 0
+if n < 0
+  v = -1
+elif n == 42
+  v = 1
+else
+  v = 2
+assert_eq(v, 1)
+
+-- while loop
+w = 0
+i = 1
+while i <= 5
+  w = w + i
+  i = i + 1
+assert_eq(w, 15)
+
+-- for range
+r = 0
+for j in 1..4
+  r = r + j
+assert_eq(r, 10)
+
+-- tables, access, length
+t = {a = 1}
+t.b = 2
+t["c"] = 3
+nh = {1, 2, 3, [10] = "hello"}
+assert_eq(t.a, 1)
+assert_eq(t.b, 2)
+assert_eq(t["c"], 3)
+assert_eq(nh[10], "hello")
+arr = {10, 20, 30}
+assert_eq(#arr, 3)
+assert_eq(arr[-1], 30)
+assert_eq(arr[-2], 20)
+assert_eq(#"abc", 3)
+assert_eq(",".join({"a", "b", "c"}), "a,b,c")
+
+-- table separators: comma and newline
+nl = {
+  a = 1
+  b = 2
+  add = fn(x, y) return x + y
+  greet = fn(name)
+    return "hi " + name
+  "z"
+  [10] = "ten"
+}
+assert_eq(nl.a, 1)
+assert_eq(nl.b, 2)
+assert_eq(nl.add(2, 3), 5)
+assert_eq(nl.greet("bob"), "hi bob")
+assert_eq(nl[1], "z")
+assert_eq(nl[10], "ten")
+
+mix = {
+  x = 1,
+  y = 2
+  z = 3,
+}
+assert_eq(mix.x, 1)
+assert_eq(mix.y, 2)
+assert_eq(mix.z, 3)
+
+fn assert_eq(actual, expected)
+  if actual != expected
+    error(f"expected={expected} actual={actual}")
+
+x = 3.14159
+assert_eq(f"{x|.2f}", "3.14")
+assert_eq(f"{255|08x}", "000000ff")
+assert_eq(f"{255|%08x}", "000000ff")
+assert_eq(f"{5|d}", "5")
+
+string = import string
+assert_eq(string.format("%.3f", x), "3.142")
+
+print "fstring format ok"
+
+from lib.test import assert_eq, assert_true
+
+log = import lib.log
+
+lines = {}
+records = {}
+handler = fn(rec, line)
+  lines[#lines + 1] = line
+  records[#records + 1] = rec
+  return true
+
+l = log.Logger("svc", {level = "info", handlers = {handler}, context = {app = "api"}})
+
+-- debug should be filtered at info level
+assert_true(l.debug("hidden") == false)
+assert_eq(#lines, 0)
+
+assert_true(l.info("started", {port = 8080}) == true)
+assert_eq(#lines, 1)
+assert_true(lines[1] has "INFO")
+assert_true(lines[1] has "[svc]")
+assert_true(lines[1] has "started")
+assert_true(lines[1] has "app=api")
+assert_true(lines[1] has "port=8080")
+
+child = l.child("worker", {worker = 2})
+assert_true(child.warn("slow", {queue = 9}) == true)
+assert_eq(#lines, 2)
+assert_true(lines[2] has "WARN")
+assert_true(lines[2] has "[svc.worker]")
+assert_true(lines[2] has "worker=2")
+assert_true(lines[2] has "queue=9")
+
+ctx_logger = l.with_fields({req_id = "r1"})
+assert_true(ctx_logger.error("failed") == true)
+assert_eq(#lines, 3)
+assert_true(lines[3] has "req_id=r1")
+
+assert_eq(log.parse_level("debug"), 20)
+assert_eq(log.parse_level(50), 50)
+assert_eq(log.level_name("error"), "ERROR")
+
+-- root configure + convenience methods
+root_lines = {}
+root_handler = fn(rec, line)
+  root_lines[#root_lines + 1] = line
+  return true
+
+log.configure(level = "warn", handlers = {root_handler}, context = {env = "test"})
+assert_true(log.info("ignore") == false)
+assert_true(log.warn("visible", {k = 1}) == true)
+assert_eq(#root_lines, 1)
+assert_true(root_lines[1] has "WARN")
+assert_true(root_lines[1] has "env=test")
+assert_true(root_lines[1] has "k=1")
+
+named = log.get_logger("named")
+assert_true(type(named) == "table")
+assert_eq(named.name, "named")
+
+print "log lib ok"

@@ -1,0 +1,138 @@
+from lib.test import assert_true
+
+json = import json
+time = import time
+global string = import string
+
+payload = {
+  name = "Ada",
+  active = true,
+  score = 98.5,
+  tags = {"toi", "json", "perf"},
+  nested = {
+    retries = 3,
+    timeout_ms = 250,
+    ok = true
+  },
+  users = {
+    {id = 1, role = "admin"},
+    {id = 2, role = "staff"},
+    {id = 3, role = "member"}
+  }
+}
+
+-- Correctness sanity
+encoded = json.encode(payload)
+assert_true(type(encoded) == "string", "json.encode should return string")
+
+decoded = json.decode(encoded)
+assert_true(type(decoded) == "table", "json.decode should return table")
+assert_true(decoded.name == "Ada", "decoded.name mismatch")
+assert_true(decoded.active == true, "decoded.active mismatch")
+assert_true(decoded.nested.retries == 3, "decoded nested mismatch")
+assert_true(decoded.tags[1] == "toi", "decoded array mismatch")
+assert_true(decoded.users[3].role == "member", "decoded array object mismatch")
+
+-- Benchmark encode
+encode_iters = 4000
+start = time.clock()
+i = 1
+while i <= encode_iters
+  encoded = json.encode(payload)
+  i = i + 1
+encode_elapsed = time.clock() - start
+assert_true(encode_elapsed >= 0, "encode benchmark clock went backwards")
+
+-- Benchmark decode
+decode_iters = 4000
+start = time.clock()
+i = 1
+while i <= decode_iters
+  decoded = json.decode(encoded)
+  i = i + 1
+decode_elapsed = time.clock() - start
+assert_true(decode_elapsed >= 0, "decode benchmark clock went backwards")
+
+print string.format("json perf: encode=%fs decode=%fs payload_bytes=%d", encode_elapsed, decode_elapsed, #encoded)
+
+from lib.test import assert_eq, assert_true
+
+socket = import socket
+poll = import poll
+
+s = socket.udp()
+assert_true(s != nil, "udp socket create failed")
+
+fd = s.fileno(s)
+assert_true(type(fd) == "number", "fileno must return number")
+
+ready_out = poll.wait({{fd = fd, events = "out"}}, 50)
+assert_eq(type(ready_out), "table")
+assert_eq(#ready_out, 1)
+out_row = ready_out[1]
+assert_eq(out_row.index, 1)
+assert_eq(out_row.fd, fd)
+assert_true(out_row["out"] == true)
+
+ready_default = poll.wait({fd}, 0)
+assert_eq(type(ready_default), "table")
+assert_eq(#ready_default, 0)
+
+ready_in = poll.wait({{fd = fd, events = "in"}}, 0)
+assert_eq(type(ready_in), "table")
+assert_eq(#ready_in, 0)
+
+assert_true(s.close(s) == true)
+
+print "poll ok"
+
+from lib.test import assert_eq, assert_true
+
+csv = import csv
+
+parsed = csv.parse("name,age\nAda,36\nBob,42")
+assert_eq(#parsed, 3)
+assert_eq(parsed[1][1], "name")
+assert_eq(parsed[1][2], "age")
+assert_eq(parsed[2][1], "Ada")
+assert_eq(parsed[2][2], "36")
+assert_eq(parsed[3][1], "Bob")
+assert_eq(parsed[3][2], "42")
+
+quoted = csv.parse("id,comment\n1,\"hello, world\"\n2,\"line1\nline2\"\n3,\"say \"\"hi\"\"\"")
+assert_eq(quoted[2][2], "hello, world")
+assert_eq(quoted[3][2], "line1\nline2")
+assert_eq(quoted[4][2], "say \"hi\"")
+
+semi = csv.parse("a;b;c\r\n1;2;3", ";")
+assert_eq(semi[1][2], "b")
+assert_eq(semi[2][3], "3")
+
+rows = {
+  {"name", "quote", "active", "score"},
+  {"Ada", "hello, \"csv\"", true, 98.5},
+  {"Bob", "line1\nline2", false, ""},
+}
+
+encoded = csv.stringify(rows)
+reparsed = csv.parse(encoded)
+assert_eq(reparsed[1][1], "name")
+assert_eq(reparsed[2][2], "hello, \"csv\"")
+assert_eq(reparsed[2][3], "true")
+assert_eq(reparsed[2][4], "98.5")
+assert_eq(reparsed[3][2], "line1\nline2")
+assert_eq(reparsed[3][3], "false")
+assert_eq(reparsed[3][4], "")
+
+bad = false
+try
+  csv.parse("x,\"unterminated")
+except e
+  bad = true
+  if type(e) == "table"
+    assert_true(e.msg has "unterminated")
+  else
+    assert_true(e has "unterminated")
+assert_true(bad)
+
+print "csv ok"

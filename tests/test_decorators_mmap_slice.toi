@@ -1,0 +1,80 @@
+from lib.test import assert_eq
+
+fn plus_one(fn_)
+  return fn(x)
+    return fn_(x) + 1
+
+fn passthrough(fn_)
+  return fn(*args)
+    return fn_(*args)
+
+fn times(n)
+  return fn(fn_)
+    return fn(x)
+      return fn_(x) * n
+
+@plus_one
+fn base(x)
+  return x * 2
+
+assert_eq(base(5), 11)
+
+@plus_one
+@times(3)
+fn stacked(x)
+  return x + 1
+
+-- @plus_one(@times(3)(fn)) => (x + 1) * 3 + 1
+assert_eq(stacked(2), 10)
+
+t = {
+  prefix = "hi ",
+  wrap = fn(p)
+    return fn(fn_)
+      return fn(name)
+        return p + fn_(name)
+}
+
+@t.wrap(t.prefix)
+fn greet(name)
+  return name
+
+assert_eq(greet("bob"), "hi bob")
+
+@passthrough
+fn echo(name)
+  return name
+
+assert_eq(echo("alice"), "alice")
+
+print "decorators ok"
+
+from lib.test import assert_eq, assert_true
+
+mmap = import mmap
+io = import io
+os = import os
+
+PATH = "tests/tmp_mmap_slice_case.txt"
+
+if os.exists(PATH)
+  os.remove(PATH)
+
+f = io.open(PATH, "w")
+f.write("abcdefg")
+f.close()
+
+r = mmap.map(PATH, "r")
+assert_true(r != nil, "mmap r failed")
+
+assert_eq(r[2..4], "bcd")
+assert_eq(r[..3], "abc")
+assert_eq(r[5..], "efg")
+assert_eq(r[5..1:-2], "eca")
+assert_eq(r[9..12], "")
+assert_eq(r[2..1], "")
+
+assert_true(r.close())
+os.remove(PATH)
+
+print "mmap slice ok"

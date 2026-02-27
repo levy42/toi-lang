@@ -1,0 +1,53 @@
+from lib.test import assert_eq, assert_true
+
+url = import url
+http = import http
+
+u = url.parse("https://user:pass@example.com:8443/a/b?x=1&y=2#frag")
+assert_eq(u.scheme, "https")
+assert_eq(u.userinfo, "user:pass")
+assert_eq(u.host, "example.com")
+assert_eq(u.port, 8443)
+assert_eq(u.path, "/a/b")
+assert_eq(u.query, "x=1&y=2")
+assert_eq(u.fragment, "frag")
+
+assert_eq(url.encode("a b/c"), "a%20b%2Fc")
+assert_eq(url.decode("a%20b%2Fc"), "a b/c")
+
+res, err = http.fetch("localhost:8080")
+assert_true(res == nil)
+assert_true(type(err) == "string")
+assert_true(err has "scheme")
+
+print "url + http.fetch ok"
+
+from lib.test import assert_eq, expect_error
+
+assert_eq(input(), nil)
+assert_eq(input("prompt> "), nil)
+
+msg = expect_error(fn()
+  input(123)
+)
+assert_eq(msg, "input() prompt must be string or nil.")
+
+print "input ok"
+
+from lib.test import assert_true
+
+words = {}
+for word in "dfb dbrg gbdg gbrgbdgr rbergb".split()
+  words <+ word
+
+assert_true(#words == 5)
+assert_true(words[1] == "dfb")
+assert_true(words[5] == "rbergb")
+
+-- Table comprehension should follow the same iterable prep rule.
+comp = {w for w in "a b c".split()}
+assert_true(#comp == 3)
+assert_true(comp[1] == "a")
+assert_true(comp[3] == "c")
+
+print "for-in method call ok"

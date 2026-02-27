@@ -1,0 +1,127 @@
+from lib.test import assert_eq
+
+from tests.star_exports_mod import *
+
+assert_eq(a, 123)
+assert_eq(b(4), 5)
+assert_eq(_hidden, "nope")
+
+print "import star ok"
+
+from lib.test import assert_eq, assert_true
+
+socket = import socket
+selector = import lib.selector
+
+sel = selector.new()
+assert_eq(selector.read_count(sel), 0)
+assert_eq(selector.write_count(sel), 0)
+
+s = socket.udp()
+assert_true(s != nil, "udp socket create failed")
+
+selector.add_read(sel, s)
+selector.add_write(sel, s)
+assert_eq(selector.read_count(sel), 1)
+assert_eq(selector.write_count(sel), 1)
+
+ready_read, ready_write = selector.wait(sel, 0.05)
+assert_eq(type(ready_read), "table")
+assert_eq(type(ready_write), "table")
+assert_eq(#ready_read, 0)
+assert_eq(#ready_write, 1)
+assert_true(ready_write[1] == s)
+
+selector.remove(sel, s)
+assert_eq(selector.read_count(sel), 0)
+assert_eq(selector.write_count(sel), 0)
+
+selector.add_read(sel, s)
+selector.clear(sel)
+assert_eq(selector.read_count(sel), 0)
+
+assert_true(s.close(s) == true)
+
+print "selector ok"
+
+from lib.test import assert_eq, assert_true
+
+toml = import toml
+table = import table
+
+doc = table.concat({
+  "title = \"TOML Example\"",
+  "enabled = true",
+  "count = 42",
+  "ratio = 3.5",
+  "tags = [\"a\", \"b\", \"c\"]",
+  "created_at = 1979-05-27T07:32:00Z",
+  "point = {x = 1, y = 2}",
+  "",
+  "[server]",
+  "host = \"127.0.0.1\"",
+  "port = 8080",
+  "",
+  "[server.tls]",
+  "enabled = false",
+  "",
+  "[[products]]",
+  "name = \"Hammer\"",
+  "sku = 738594937",
+  "",
+  "[[products]]",
+  "name = \"Nail\"",
+  "sku = 284758393",
+  "color = \"gray\"",
+  ""
+}, "\n")
+
+t = toml.parse(doc)
+assert_eq(t.title, "TOML Example")
+assert_eq(t.enabled, true)
+assert_eq(t.count, 42)
+assert_eq(t.ratio, 3.5)
+assert_eq(t.tags[2], "b")
+assert_eq(t.created_at, "1979-05-27T07:32:00Z")
+assert_eq(t.point.x, 1)
+assert_eq(t.point.y, 2)
+assert_eq(t.server.host, "127.0.0.1")
+assert_eq(t.server.port, 8080)
+assert_eq(t.server.tls.enabled, false)
+assert_eq(#t.products, 2)
+assert_eq(t.products[1].name, "Hammer")
+assert_eq(t.products[2].sku, 284758393)
+assert_eq(t.products[2].color, "gray")
+
+with_dotted = toml.parse([[
+[db]
+conn.host = "localhost"
+conn.port = 5432
+]])
+assert_eq(with_dotted.db.conn.host, "localhost")
+assert_eq(with_dotted.db.conn.port, 5432)
+
+serialized = toml.stringify(t)
+t2 = toml.parse(serialized)
+assert_eq(t2.title, "TOML Example")
+assert_eq(t2.enabled, true)
+assert_eq(t2.count, 42)
+assert_eq(t2.tags[3], "c")
+assert_eq(t2.created_at, "1979-05-27T07:32:00Z")
+assert_eq(t2.point.x, 1)
+assert_eq(t2.server.tls.enabled, false)
+assert_eq(#t2.products, 2)
+assert_eq(t2.products[2].name, "Nail")
+
+bad = false
+try
+  toml.parse("x = ")
+except e
+  bad = true
+  if type(e) == "table"
+    assert_true(e.msg has "expected value")
+  else
+    assert_true(e has "expected value")
+assert_true(bad)
+
+print "toml ok"

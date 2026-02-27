@@ -1,0 +1,119 @@
+from lib.test import assert_true
+
+global time = import time
+global string = import string
+
+fn alloc_wave(count)
+  for i in 1..count
+    s = string.format("item_%d", i)
+    t = string.format("%s_tmp", s)
+    n = i + 1
+    box = {s, t, n}
+    pair = {left = box, right = {v = n}}
+    box.self = pair
+
+base = mem()
+peak = base
+rounds = 0
+
+start = time.clock()
+while time.clock() - start < 5.0
+  alloc_wave(1200)
+  rounds = rounds + 1
+  now = mem()
+  if now > peak
+    peak = now
+  if rounds % 500 == 0
+    elapsed_now = time.clock() - start
+    print string.format("soak progress: rounds=%d elapsed=%fs mem=%d peak=%d", rounds, elapsed_now, now, peak)
+
+keep = {}
+for i in 1..3000
+  keep[i] = {v = i}
+
+after = mem()
+elapsed = time.clock() - start
+
+print string.format("soak summary: rounds=%d elapsed=%fs base=%d peak=%d after=%d", rounds, elapsed, base, peak, after)
+
+assert_true(elapsed >= 4.5, "soak test ended too early")
+assert_true(rounds > 0, "no allocation rounds ran")
+assert_true(peak <= base + 134217728, "memory growth too high during soak")
+assert_true(after <= base + 134217728, "memory remained too high after churn")
+assert_true(keep[1].v == 1)
+assert_true(keep[3000].v == 3000)
+
+from lib.test import assert_eq, assert_true
+
+mmap = import mmap
+io = import io
+os = import os
+
+PATH = "tests/tmp_mmap_case.txt"
+
+if os.exists(PATH)
+  os.remove(PATH)
+
+f = io.open(PATH, "w")
+f.write("hello mmap")
+f.close()
+
+r = mmap.map(PATH, "r")
+assert_true(r != nil, "mmap r failed")
+assert_eq(r.len(), 10)
+assert_eq(r.read(), "hello mmap")
+assert_eq(r.read(7, 4), "mmap")
+assert_true(r.close())
+
+w = mmap.map(PATH, "rw")
+assert_true(w != nil, "mmap rw failed")
+assert_true(w.write(7, "Toi!"))
+assert_true(w.flush())
+assert_true(w.close())
+
+f2 = io.open(PATH, "r")
+out = f2.read()
+f2.close()
+assert_eq(out, "hello Toi!")
+
+miss = mmap.map("tests/does_not_exist___mmap", "r")
+assert_true(type(miss) == "string")
+
+os.remove(PATH)
+
+print "mmap ok"
+
+from lib.test import assert_eq
+
+io = import io
+os = import os
+
+path = "tests/tmp_io_iter.txt"
+f = io.open(path, "w")
+f.write("line1\nline2\nXYZ")
+f.close()
+
+r = io.open(path, "r")
+file_lines = {}
+for line in r
+  file_lines <+ line
+r.close()
+
+assert_eq(#file_lines, 3)
+assert_eq(file_lines[1], "line1")
+assert_eq(file_lines[2], "line2")
+assert_eq(file_lines[3], "XYZ")
+
+buf = io.buffer("p\nq\nr")
+buf_lines = {}
+for line in buf
+  buf_lines <+ line
+buf.close()
+
+assert_eq(#buf_lines, 3)
+assert_eq(buf_lines[1], "p")
+assert_eq(buf_lines[2], "q")
+assert_eq(buf_lines[3], "r")
+
+os.remove(path)
+print "io iterators ok"
