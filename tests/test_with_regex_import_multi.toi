@@ -1,0 +1,95 @@
+from lib.test import assert_eq
+
+log = ""
+fn enter(self)
+  log = log + "E"
+  return "42"
+
+fn exit(self, ex)
+  if ex != nil
+    log = log + "X"
+  else
+    log = log + "O"
+
+ctx = {__enter = enter, __exit = exit}
+
+with ctx as v
+  log = log + "B" + v
+assert_eq(log, "EB42O")
+
+log = ""
+try
+  with ctx as v
+    throw "boom"
+except e
+  assert_eq(e, "boom")
+assert_eq(log, "EX")
+
+log = ""
+with {__enter = fn(self) return "ok"} as v
+  log = log + v
+assert_eq(log, "ok")
+
+from lib.test import assert_eq, assert_true
+
+regex = import regex
+
+assert_true(regex.match("^abc$", "abc"))
+assert_true(not regex.match("^abc$", "zabc"))
+assert_true(regex.match("^abc$", "ABC", "i"))
+
+m = regex.search("a([0-9]+)b", "xxa123bzz")
+assert_true(m != nil)
+assert_eq(m.match, "a123b")
+assert_eq(m.start, 3)
+assert_eq(m.end, 7)
+assert_eq(m.groups[1], "123")
+
+assert_eq(regex.search("q+", "abc"), nil)
+
+iters = regex.finditer("[a-z]+", "a1bb22ccc")
+assert_eq(#iters, 3)
+assert_eq(iters[1].match, "a")
+assert_eq(iters[2].match, "bb")
+assert_eq(iters[3].match, "ccc")
+
+assert_eq(regex.replace("[0-9]+", "a1b22c333", "#"), "a#b#c#")
+assert_eq(regex.replace("[0-9]+", "a1b22c333", "#", 2), "a#b#c333")
+
+parts = regex.split("[,;]+", "a,b;;c,d")
+assert_eq(parts[1], "a")
+assert_eq(parts[2], "b")
+assert_eq(parts[3], "c")
+assert_eq(parts[4], "d")
+
+re = regex.compile("a([0-9]+)b")
+assert_true(re.match("a12b"))
+assert_true(not re.match("xa12b"))
+cm = re.search("xxa789bzz")
+assert_true(cm != nil)
+assert_eq(cm.groups[1], "789")
+citer = re.finditer("a1b a22b x a333b")
+assert_eq(#citer, 3)
+assert_eq(citer[1].match, "a1b")
+assert_eq(citer[3].groups[1], "333")
+
+print "regex ok"
+
+from lib.test import assert_eq, assert_true
+
+import os, io, string, lib.types
+
+assert_true(os.clock() >= 0)
+assert_eq(io.buffer("xy").read(), "xy")
+assert_eq(string.upper("ab"), "AB")
+assert_eq(types.String.check("hi"), "hi")
+
+fn local_multi_import()
+  import string, table
+  return string.upper("ok"), table.concat({"a", "b"}, "")
+
+upper, joined = local_multi_import()
+assert_eq(upper, "OK")
+assert_eq(joined, "ab")
+
+print "multi import ok"

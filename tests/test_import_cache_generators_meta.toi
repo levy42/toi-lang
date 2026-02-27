@@ -1,0 +1,68 @@
+from lib.test import assert_eq
+
+global __import_cache_counter = 0
+
+first = import tests.import_cache_mod
+second = import tests.import_cache_mod
+
+assert_eq(__import_cache_counter, 1)
+assert_eq(first.runs, 1)
+assert_eq(second.runs, 1)
+
+print "import cache ok"
+
+from lib.test import assert_eq, assert_true
+
+global coroutine = import coroutine
+
+fn gen(n)
+  i = 1
+  while i <= n
+    yield i
+    i += 1
+
+g = gen(5)
+assert_eq(type(g), "generator")
+
+sum = 0
+for v in g
+  sum += v
+assert_eq(sum, 15)
+assert_eq(coroutine.status(g), "dead")
+
+g2 = gen(2)
+ok1 = coroutine.resume(g2)
+assert_eq(ok1, 1)
+ok2 = coroutine.resume(g2)
+assert_eq(ok2, 2)
+ok3 = coroutine.resume(g2)
+assert_eq(ok3, 3)
+
+print "generator functions ok"
+
+from lib.test import assert_eq, assert_true
+
+obj = {x = 7}
+mt = {
+  foo = fn(self, n)
+    return self.x + n
+  answer = 42
+  __index = {
+    hidden = fn(self)
+      return 999
+  }
+}
+setmetatable(obj, mt)
+
+assert_true(obj.foo == nil)
+assert_true(obj.hidden != nil)
+
+assert_eq(obj::foo(5), 12)
+assert_eq(obj::answer, 42)
+assert_true(obj::hidden == nil)
+
+io = import io
+b = io.buffer("abc")
+assert_eq(b::read(2), "ab")
+
+print "meta method lookup ok"

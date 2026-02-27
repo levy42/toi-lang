@@ -108,7 +108,7 @@ pi:
 
 test: $(TARGET)
 	@passed=0; failed=0; timedout=0; \
-	for f in tests/*.toi; do \
+	for f in tests/test_*.toi; do \
 		printf "Testing $$f... "; \
 		if $(TIMEOUT) 30s ./$(TARGET) "$$f" < /dev/null > /dev/null 2>&1; then \
 			printf "PASS\n"; \

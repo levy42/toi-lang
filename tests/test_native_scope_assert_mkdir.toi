@@ -1,0 +1,86 @@
+from lib.test import assert_eq, assert_true
+
+mod = import tests.module_ctx.native_scope
+assert_eq(mod.ok, true)
+
+leaked_os = false
+try
+  _ = os
+  leaked_os = true
+except e
+  assert_true(type(e) == "string")
+
+leaked_io = false
+try
+  _ = io
+  leaked_io = true
+except e
+  assert_true(type(e) == "string")
+
+assert_true(not leaked_os)
+assert_true(not leaked_io)
+
+direct_os = import os
+assert_eq(type(direct_os), "table")
+
+print "native import scope ok"
+
+from lib.test import assert_true, assert_eq
+
+x = 3
+assert x == 3
+assert x < 10, "x should be less than 10"
+
+caught_default = false
+try
+  assert false
+except e
+  caught_default = true
+  assert_eq(e, "assert failed")
+assert_true(caught_default)
+
+caught_custom = false
+try
+  assert 1 == 2, "math broke"
+except e
+  caught_custom = true
+  assert_eq(e, "math broke")
+assert_true(caught_custom)
+
+print "assert keyword ok"
+
+from lib.test import assert_true
+
+os = import os
+
+ROOT = "tests/tmp_mkdir_all_case"
+NEST = ROOT + "/a/b/c"
+
+fn safe_rmdir(path)
+  if os.exists(path) and os.isdir(path)
+    os.rmdir(path)
+
+safe_rmdir(ROOT + "/a/b/c")
+safe_rmdir(ROOT + "/a/b")
+safe_rmdir(ROOT + "/a")
+safe_rmdir(ROOT)
+
+miss = os.mkdir(NEST)
+assert_true(type(miss) == "string")
+
+ok = os.mkdir(NEST, true)
+assert_true(ok == true, "mkdir -p failed")
+assert_true(os.isdir(ROOT))
+assert_true(os.isdir(ROOT + "/a"))
+assert_true(os.isdir(ROOT + "/a/b"))
+assert_true(os.isdir(ROOT + "/a/b/c"))
+
+ok2 = os.mkdir(NEST, true)
+assert_true(ok2 == true, "mkdir -p idempotent failed")
+
+safe_rmdir(ROOT + "/a/b/c")
+safe_rmdir(ROOT + "/a/b")
+safe_rmdir(ROOT + "/a")
+safe_rmdir(ROOT)
+
+print "os mkdir all ok"

@@ -1,0 +1,93 @@
+from lib.test import assert_eq
+
+fn add(a: int, b: int)
+  return a + b
+
+fn mulf(a: float, b: float)
+  return a * b
+
+assert_eq(add(2, 3), 5)
+assert_eq(mulf(1.5, 2.0), 3.0)
+
+from lib.test import assert_eq, assert_true
+
+coroutine = import coroutine
+Scheduler = import scheduler
+
+fn sleeper()
+  resumed = coroutine.sleep(0.01)
+  return resumed
+
+co = coroutine.create(sleeper)
+ok, cmd, secs = coroutine.resume(co)
+assert_true(ok)
+assert_eq(cmd, "sleep")
+assert_true(secs > 0)
+assert_eq(coroutine.status(co), "normal")
+
+ok2, resumed = coroutine.resume(co, "wake")
+assert_true(ok2)
+assert_eq(resumed, "wake")
+assert_eq(coroutine.status(co), "dead")
+
+events = {}
+fn task_a()
+  events[#events + 1] = "a1"
+  coroutine.sleep(0.01)
+  events[#events + 1] = "a2"
+
+fn task_b()
+  events[#events + 1] = "b1"
+
+Scheduler.add(task_a)
+Scheduler.add(task_b)
+Scheduler.run()
+
+assert_eq(events[1], "a1")
+assert_eq(events[2], "b1")
+assert_eq(events[3], "a2")
+
+print "coroutine sleep ok"
+
+from lib.test import assert_eq, assert_true
+
+fn no_doc()
+  return 1
+
+fn has_doc()
+  "hello docs"
+  return 2
+
+fn escaped_doc()
+  "line1\nline2\tok"
+  return 3
+
+fn multiline_doc()
+  [[line a
+line b]]
+  return 4
+
+fn not_first()
+  x = 1
+  "later"
+  return x
+
+fn not_plain()
+  "a" + "b"
+  return 0
+
+assert_true(no_doc.__doc == nil)
+assert_eq(has_doc.__doc, "hello docs")
+assert_eq(escaped_doc.__doc, "line1\nline2\tok")
+assert_eq(multiline_doc.__doc, "line a\nline b")
+assert_true(not_first.__doc == nil)
+assert_true(not_plain.__doc == nil)
+
+fn method(self)
+  "method docs"
+  return 42
+
+tbl = {method = method}
+assert_eq(tbl.method.__doc, "method docs")
+
+print "function docstrings ok"

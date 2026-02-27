@@ -1,0 +1,139 @@
+from lib.test import assert_eq
+
+-- for-in: key/value and values-only
+kv_sum = 0
+kv_count = 0
+for k, v in {x = 1, y = 2}
+  kv_sum = kv_sum + v
+  kv_count = kv_count + 1
+assert_eq(kv_sum, 3)
+assert_eq(kv_count, 2)
+
+akv_sum = 0
+akv_count = 0
+for k, v in {10, 20, a = 5}
+  akv_sum = akv_sum + v
+  akv_count = akv_count + 1
+assert_eq(akv_sum, 35)
+assert_eq(akv_count, 3)
+
+arr = {10, 20, 30}
+val_sum = 0
+for v in arr
+  val_sum = val_sum + v
+assert_eq(val_sum, 60)
+
+-- continue in range for
+cont_sum = 0
+for i in 1..5
+  if i == 3
+    continue
+  cont_sum = cont_sum + i
+assert_eq(cont_sum, 12)
+
+idx_sum = 0
+idx_val_sum = 0
+for i#, v in arr
+  idx_sum = idx_sum + i
+  idx_val_sum = idx_val_sum + v
+assert_eq(idx_sum, 6)
+assert_eq(idx_val_sum, 60)
+-- slice
+s = slice({10, 20, 30, 40, 50}, 2, 4)
+assert_eq(s[1], 20)
+assert_eq(s[3], 40)
+rs = slice({10, 20, 30, 40, 50}, 4, 2, -1)
+assert_eq(rs[1], 40)
+assert_eq(rs[3], 20)
+inner = {x = 1}
+ref = slice({inner}, 1, 1)
+ref[1].x = 2
+assert_eq(inner.x, 2)
+
+-- slice syntax
+syn = {10, 20, 30, 40, 50}[2..4:1]
+assert_eq(syn[1], 20)
+assert_eq(syn[3], 40)
+syn2 = {10, 20, 30, 40, 50}[..3]
+assert_eq(syn2[1], 10)
+assert_eq(syn2[3], 30)
+syn3 = {10, 20, 30, 40, 50}[3..]
+assert_eq(syn3[1], 30)
+
+-- string slice
+ss = "hello"[2..4:1]
+assert_eq(ss, "ell")
+ss2 = "hello"[..3]
+assert_eq(ss2, "hel")
+ss2b = "hello"[..-1]
+assert_eq(ss2b, "hell")
+ss2c = "hello"[-2..-1]
+assert_eq(ss2c, "l")
+ss5 = "hello"[5..1:-1]
+assert_eq(ss5, "olleh")
+ss6 = "hello"[2..1:-1]
+assert_eq(ss6, "eh")
+
+syn_neg = {10, 20, 30, 40, 50}[..-1]
+assert_eq(syn_neg[1], 10)
+assert_eq(syn_neg[4], 40)
+
+from lib.test import assert_eq, assert_true
+
+uuid = import uuid
+
+fn is_alnum(c)
+  return (c >= "A" and c <= "Z") or (c >= "a" and c <= "z") or (c >= "0" and c <= "9")
+
+id1 = uuid.uid()
+id2 = uuid.uid()
+
+assert_eq(type(id1), "string")
+assert_eq(type(id2), "string")
+assert_eq(#id1, 16)
+assert_eq(#id2, 16)
+assert_true(id1 != id2)
+
+for c in id1
+  assert_true(is_alnum(c), "uuid must be alphanumeric")
+
+for c in id2
+  assert_true(is_alnum(c), "uuid must be alphanumeric")
+
+sec1 = uuid.secret()
+sec2 = uuid.secret()
+sec3 = uuid.secret(96)
+
+assert_eq(type(sec1), "string")
+assert_eq(type(sec2), "string")
+assert_eq(type(sec3), "string")
+assert_eq(#sec1, 64)
+assert_eq(#sec2, 64)
+assert_eq(#sec3, 96)
+assert_true(sec1 != sec2)
+
+for c in sec1
+  assert_true(is_alnum(c), "secret must be alphanumeric")
+
+for c in sec3
+  assert_true(is_alnum(c), "secret must be alphanumeric")
+
+print "uuid ok"
+
+from lib.test import assert_eq
+
+name = "Toi"
+x = 3.14159
+
+s1 = f[[Hello, {name}!
+Line2 value={x|.2f}]]
+assert_eq(s1, "Hello, Toi!\nLine2 value=3.14")
+
+s2 = f[[A {1 + 2} B]]
+assert_eq(s2, "A 3 B")
+
+-- Ensure nested braces inside expression strings don't break interpolation scan.
+s3 = f[[{ "{" + name + "}" }]]
+assert_eq(s3, "{Toi}")
+
+print "fstring multiline ok"

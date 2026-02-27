@@ -1,0 +1,159 @@
+from lib.test import assert_eq, assert_true, expect_error
+
+cli = import cli
+string = import string
+
+app = cli.App(name = "demo")
+
+@app.command
+fn add(a: int, b: int)
+  return a + b
+
+@app.command("hello")
+fn greet(name, times: int = 1)
+  out = ""
+  for i in 1..times
+    out = out + "hi " + name
+    if i < times out = out + ","
+  return out
+
+@app.command
+fn truthy(v: bool)
+  return v
+
+assert_eq(add(2, 3), 5)
+assert_eq(app.run({"add", "2", "5"}), 7)
+assert_eq(app.run({"hello", "Bob"}), "hi Bob")
+assert_eq(app.run({"hello", "Bob", "3"}), "hi Bob,hi Bob,hi Bob")
+assert_true(app.run({"truthy", "true"}) == true)
+assert_true(app.run({"truthy", "0"}) == false)
+
+err1 = expect_error(fn()
+  app.run({"missing"})
+)
+assert_true(err1 has "Unknown command")
+
+err2 = expect_error(fn()
+  app.run({"add", "1"})
+)
+assert_true(err2 has "Not enough arguments")
+
+help_text = app.help()
+assert_true(help_text has "add")
+assert_true(help_text has "hello")
+assert_true(help_text has "truthy")
+
+formatted = cli._format("[red]ERR[/] plain")
+assert_true(type(formatted) == "string")
+assert_true(string.byte(formatted, 1) == 27)
+assert_true(formatted has "ERR")
+
+formatted2 = cli._format("[red+underline]ERR[/]")
+assert_true(type(formatted2) == "string")
+assert_true(formatted2 has "[31m")
+assert_true(formatted2 has "[4m")
+
+st = cli.status("loading")
+assert_true(st.line != nil)
+assert_true(st.line() has "loading")
+assert_true(st.auto == true)
+st.start()
+if st.auto_handle == nil
+  st.tick()
+else
+  thread = import thread
+  thread.sleep(0.03)
+st.tick("phase2")
+assert_true(st.line() has "phase2")
+st.stop("done", true)
+started = st.start_auto(0.01, "auto")
+if started
+  thread = import thread
+  thread.sleep(0.03)
+  st.stop("auto done", true)
+  assert_true(st.active == false)
+else
+  st.stop("auto fallback", true)
+
+pb = cli.progress(10, {width = 10, prefix = "build"})
+assert_true(pb.auto == true)
+pb.start()
+line0 = pb.line()
+assert_true(line0 has "0%")
+assert_true(line0 has "(0/10)")
+pb.update(5)
+line1 = pb.line()
+assert_true(line1 has "50%")
+assert_true(line1 has "(5/10)")
+pb.advance(3)
+line2 = pb.line()
+assert_true(line2 has "80%")
+pb.finish("ok")
+line3 = pb.line()
+assert_true(line3 has "100%")
+assert_true(line3 has "ok")
+
+with cli.status("ctx", {auto = false}) as sctx
+  sctx.tick("ctx work")
+
+with cli.progress(4, {width = 8, prefix = "ctx"}) as pctx
+  pctx.advance(1)
+  pctx.advance(1)
+  pctx.update(4, "done")
+  assert_true(pctx.line() has "100%")
+  assert_true(pctx.line() has "done")
+
+print "cli framework ok"
+
+from lib.test import assert_eq, assert_true
+
+-- Basic expression assignment.
+x = 0
+v1 = (x := 3)
+assert_eq(v1, 3)
+assert_eq(x, 3)
+
+-- Walrus inside expression context.
+yv = (y := 10)
+assert_true(yv > 5)
+assert_eq(y, 10)
+
+-- Property assignment via walrus.
+obj = {a = 1}
+v2 = (obj.a := 42)
+assert_eq(v2, 42)
+assert_eq(obj.a, 42)
+
+-- Subscript assignment via walrus.
+t = {1, 2, 3}
+v3 = (t[2] := 99)
+assert_eq(v3, 99)
+assert_eq(t[2], 99)
+
+-- Loop condition usage.
+i = 0
+sum = 0
+while ((i := i + 1) <= 3)
+  sum = sum + i
+assert_eq(sum, 6)
+assert_eq(i, 4)
+
+-- If/else condition usage with predeclared targets.
+k = nil
+if (k := 3) == 3
+  assert_eq(k, 3)
+else
+  assert_true(false)
+
+m = nil
+if (m := 0)
+  assert_true(false)
+else
+  assert_eq(m, 0)
+
+-- Named arguments still use '=' and are unaffected.
+fn sum_opts(a = 0, b = 0)
+  return a + b
+assert_eq(sum_opts(a = 2, b = 5), 7)
+
+print "walrus ok"

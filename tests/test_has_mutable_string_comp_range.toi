@@ -1,0 +1,75 @@
+from lib.test import assert_true
+
+s = "hello world"
+assert_true(s has "hello")
+assert_true(s has "world")
+assert_true(not (s has "nope"))
+assert_true("hello" in s)
+assert_true(not ("nope" in s))
+assert_true("nope" not in s)
+
+t = {1, 2, 3, a = 4, b = "x"}
+assert_true(t has 2)
+assert_true(t has 4)
+assert_true(t has "x")
+assert_true(not (t has 5))
+assert_true(2 in t)
+assert_true(4 in t)
+assert_true("x" in t)
+assert_true(5 not in t)
+
+mt = {}
+mt.__has = fn(self, value)
+  return value == 42
+
+o = {}
+setmetatable(o, mt)
+assert_true(o has 42)
+assert_true(not (o has 1))
+assert_true(42 in o)
+assert_true(1 not in o)
+
+from lib.test import assert_eq, expect_error
+
+string = import string
+
+s = string.mutable("AbC xyz")
+assert_eq(s.len(), 7)
+assert_eq(s.value(), "AbC xyz")
+assert_eq(str(s), "AbC xyz")
+
+s.toupper()
+assert_eq(s.value(), "ABC XYZ")
+assert_eq(str(s), "ABC XYZ")
+
+s.tolower()
+assert_eq(s.value(), "abc xyz")
+assert_eq(str(s), "abc xyz")
+
+u = s
+u.toupper()
+assert_eq(s.value(), "ABC XYZ")
+
+empty = string.mutable()
+assert_eq(empty.value(), "")
+
+msg = expect_error(fn()
+  string.mutable(123)
+)
+assert_eq(msg, "string.mutable() expects string.")
+
+print "mutable string ok"
+
+from lib.test import assert_eq
+
+vals = {x for x in 1..9}
+assert_eq(#vals, 9)
+assert_eq(vals[1], 1)
+assert_eq(vals[9], 9)
+
+evens = {x for x in 1..9 if x % 2 == 0}
+assert_eq(#evens, 4)
+assert_eq(evens[1], 2)
+assert_eq(evens[4], 8)
+
+print "comprehension range ok"

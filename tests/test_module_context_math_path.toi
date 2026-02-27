@@ -1,0 +1,74 @@
+from lib.test import assert_eq, assert_true
+
+mod = import tests.module_ctx.outer
+
+assert_eq(__name, "__main")
+assert_true(__file != nil)
+assert_eq(__main, true)
+
+assert_eq(mod.name, "tests.module_ctx.outer")
+assert_true(mod.file != nil)
+assert_eq(mod.main, false)
+
+assert_eq(mod.inner.name, "tests.module_ctx.inner")
+assert_true(mod.inner.file != nil)
+assert_eq(mod.inner.main, false)
+
+assert_eq(mod.after_name, "tests.module_ctx.outer")
+assert_eq(mod.after_file, mod.file)
+assert_eq(mod.after_main, false)
+
+math = import math
+assert_eq(math.__name, "math")
+assert_eq(math.__file, nil)
+assert_eq(math.__main, false)
+
+print "module context ok"
+
+from lib.test import assert_eq
+
+math = import math
+
+d1 = math.divmod(17, 5)
+assert_eq(type(d1), "table")
+assert_eq(d1[1], 3)
+assert_eq(d1[2], 2)
+
+d2 = math.divmod(-17, 5)
+assert_eq(d2[1], -4)
+assert_eq(d2[2], 3)
+
+d3 = math.divmod(17, -5)
+assert_eq(d3[1], -4)
+assert_eq(d3[2], -3)
+
+print "math.divmod ok"
+
+from lib.test import assert_eq, assert_true
+
+path = import path
+
+assert_eq(path.join("a", "b"), "a/b")
+assert_eq(path.join("a/", "b"), "a/b")
+assert_eq(path.join("", "b"), "b")
+
+parts = path.split("/a/b//c/")
+assert_eq(#parts, 3)
+assert_eq(parts[1], "a")
+assert_eq(parts[2], "b")
+assert_eq(parts[3], "c")
+
+assert_eq(path.dirname("a/b/c.txt"), "a/b")
+assert_eq(path.basename("a/b/c.txt"), "c.txt")
+assert_eq(path.dirname("/a/b"), "/a")
+assert_eq(path.basename("/a/b/"), "b")
+assert_eq(path.dirname("/"), "/")
+assert_eq(path.basename("/"), "/")
+
+assert_true(path.is_abs("/x"))
+assert_true(not path.is_abs("x/y"))
+assert_eq(path.normalize("a//b///"), "a/b")
+assert_eq(path.normalize("/a//b///"), "/a/b")
+assert_eq(path.normalize("/"), "/")
+
+print "path lib ok"

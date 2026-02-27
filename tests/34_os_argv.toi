@@ -1,9 +1,0 @@
-from lib.test import assert_eq, assert_true
-
-os = import os
-
-assert_true(type(os.argv) == "table")
-assert_true(type(os.argc) == "number")
-assert_eq(os.argc, #os.argv)
-assert_eq(os.argc, 0)
-print "os argv ok"
