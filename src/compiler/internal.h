@@ -41,9 +41,9 @@ typedef enum {
 typedef struct LoopContext {
     int start;
     int scope_depth;
-    int break_jumps[256];
+    int break_jumps[UINT8_MAX + 1];
     int break_count;
-    int continue_jumps[256];
+    int continue_jumps[UINT8_MAX + 1];
     int continue_count;
     int is_for_loop;
     int slots_to_pop;

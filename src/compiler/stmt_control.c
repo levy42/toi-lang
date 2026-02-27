@@ -275,7 +275,7 @@ static int is_multi_assignment_statement(void) {
 }
 
 static void multi_assignment_statement(void) {
-    Token targets[256];
+    Token targets[UINT8_MAX + 1];
     int target_count = 0;
 
     do {
@@ -392,7 +392,7 @@ static void match_statement() {
 
     consume(TOKEN_INDENT, "Expected indented block after 'match'.");
 
-    int clause_end_jumps[256];
+    int clause_end_jumps[UINT8_MAX + 1];
     int clause_end_count = 0;
     int pending_case_fail_jump = -1;
     int saw_clause = 0;
@@ -433,7 +433,7 @@ static void match_statement() {
             }
             end_scope();
 
-            if (clause_end_count >= 256) {
+            if (clause_end_count >= UINT8_MAX + 1) {
                 error("Too many clauses in match statement.");
             } else {
                 clause_end_jumps[clause_end_count++] = emit_jump(OP_JUMP);

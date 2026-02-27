@@ -819,8 +819,8 @@ static int call_named(VM* vm, ObjClosure* closure, int arg_count) {
     if (non_variadic_arity < 0) non_variadic_arity = 0;
 
     Value* incoming = vm_current_thread(vm)->stack_top - arg_count;
-    Value bound_args[256];
-    uint8_t assigned[256];
+    Value bound_args[UINT8_MAX + 1];
+    uint8_t assigned[UINT8_MAX + 1];
     memset(assigned, 0, sizeof(assigned));
 
     ObjTable* varargs = NULL;
@@ -928,23 +928,35 @@ static void mark_roots(VM* vm) {
     for (ObjThread* parked = vm->gc_parked_threads; parked != NULL; parked = parked->gc_park_next) {
         mark_object((struct Obj*)parked);
     }
-    if (vm->mm_index != NULL) mark_object((struct Obj*)vm->mm_index);
-    if (vm->mm_newindex != NULL) mark_object((struct Obj*)vm->mm_newindex);
-    if (vm->mm_str != NULL) mark_object((struct Obj*)vm->mm_str);
-    if (vm->mm_call != NULL) mark_object((struct Obj*)vm->mm_call);
-    if (vm->mm_new != NULL) mark_object((struct Obj*)vm->mm_new);
-    if (vm->mm_append != NULL) mark_object((struct Obj*)vm->mm_append);
-    if (vm->mm_next != NULL) mark_object((struct Obj*)vm->mm_next);
-    if (vm->mm_slice != NULL) mark_object((struct Obj*)vm->mm_slice);
-    if (vm->str_module_name != NULL) mark_object((struct Obj*)vm->str_module_name);
-    if (vm->str_upper_name != NULL) mark_object((struct Obj*)vm->str_upper_name);
-    if (vm->str_lower_name != NULL) mark_object((struct Obj*)vm->str_lower_name);
-    if (vm->slice_name != NULL) mark_object((struct Obj*)vm->slice_name);
-    if (vm->module_name_key != NULL) mark_object((struct Obj*)vm->module_name_key);
-    if (vm->module_file_key != NULL) mark_object((struct Obj*)vm->module_file_key);
-    if (vm->module_main_key != NULL) mark_object((struct Obj*)vm->module_main_key);
-    if (!IS_NIL(vm->str_upper_fn)) mark_value(vm->str_upper_fn);
-    if (!IS_NIL(vm->str_lower_fn)) mark_value(vm->str_lower_fn);
+    ObjString* rooted_strings[] = {
+        vm->mm_index,
+        vm->mm_newindex,
+        vm->mm_str,
+        vm->mm_call,
+        vm->mm_new,
+        vm->mm_append,
+        vm->mm_next,
+        vm->mm_slice,
+        vm->str_module_name,
+        vm->str_upper_name,
+        vm->str_lower_name,
+        vm->slice_name,
+        vm->module_name_key,
+        vm->module_file_key,
+        vm->module_main_key,
+    };
+    for (size_t i = 0; i < sizeof(rooted_strings) / sizeof(rooted_strings[0]); i++) {
+        if (rooted_strings[i] != NULL) {
+            mark_object((struct Obj*)rooted_strings[i]);
+        }
+    }
+
+    Value* rooted_values[] = {&vm->str_upper_fn, &vm->str_lower_fn};
+    for (size_t i = 0; i < sizeof(rooted_values) / sizeof(rooted_values[0]); i++) {
+        if (!IS_NIL(*rooted_values[i])) {
+            mark_value(*rooted_values[i]);
+        }
+    }
     // Mark globals
     for (int i = 0; i < vm->globals.capacity; i++) {
         Entry* entry = &vm->globals.entries[i];

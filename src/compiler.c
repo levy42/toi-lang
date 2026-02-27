@@ -2278,7 +2278,7 @@ void expression(void) {
 
 void variable_declaration(void) {
     // Collect variable names
-    uint8_t globals[256];
+    uint8_t globals[UINT8_MAX + 1];
     int var_count = 0;
 
     do {
@@ -2506,7 +2506,7 @@ static void anonymous_function(int can_assign) {
 }
 
 void global_declaration(void) {
-    uint8_t globals[256];
+    uint8_t globals[UINT8_MAX + 1];
     int var_count = 0;
 
     do {
@@ -2736,18 +2736,7 @@ static void parse_call(int can_assign) {
     type_push(TYPEHINT_ANY);
 }
 
-ObjFunction* compile(const char* source) {
-    // CRITICAL: Reset current to NULL before starting a new compilation
-    // Otherwise init_compiler will set compiler->enclosing to a dangling pointer
-    // from the previous compilation
-    current = NULL;
-    is_repl_mode = 0;  // Normal compilation mode
-
-    init_lexer(&lexer, source);
-    Compiler compiler;
-    init_compiler(&compiler, TYPE_SCRIPT);
-
-    // Reset parser state completely to avoid stale pointers from previous compilation
+static void reset_parser_state(const char* source) {
     parser.had_error = 0;
     parser.panic_mode = 0;
     parser.current.type = TOKEN_ERROR;
@@ -2758,6 +2747,22 @@ ObjFunction* compile(const char* source) {
     parser.previous.start = source;
     parser.previous.length = 0;
     parser.previous.line = 1;
+}
+
+static ObjFunction* compile_with_mode(const char* source, int repl_mode) {
+    // CRITICAL: Reset current to NULL before starting a new compilation
+    // Otherwise init_compiler will set compiler->enclosing to a dangling pointer
+    // from the previous compilation
+    current = NULL;
+    is_repl_mode = repl_mode;
+    type_stack_top = 0;
+
+    init_lexer(&lexer, source);
+    Compiler compiler;
+    init_compiler(&compiler, TYPE_SCRIPT);
+
+    // Reset parser state completely to avoid stale pointers from previous compilation
+    reset_parser_state(source);
 
     advance();
 
@@ -2769,42 +2774,14 @@ ObjFunction* compile(const char* source) {
     if (!parser.had_error && function != NULL) {
         optimize_chunk(&function->chunk);
     }
+    is_repl_mode = 0;
     return parser.had_error ? NULL : function;
 }
 
+ObjFunction* compile(const char* source) {
+    return compile_with_mode(source, 0);
+}
+
 ObjFunction* compile_repl(const char* source) {
-    // CRITICAL: Reset current to NULL before starting a new compilation
-    // Otherwise init_compiler will set compiler->enclosing to a dangling pointer
-    // from the previous compilation
-    current = NULL;
-    is_repl_mode = 1;  // REPL mode - leave expression results on stack
-
-    init_lexer(&lexer, source);
-    Compiler compiler;
-    init_compiler(&compiler, TYPE_SCRIPT);
-
-    // Reset parser state completely to avoid stale pointers from previous compilation
-    parser.had_error = 0;
-    parser.panic_mode = 0;
-    parser.current.type = TOKEN_ERROR;
-    parser.current.start = source;
-    parser.current.length = 0;
-    parser.current.line = 1;
-    parser.previous.type = TOKEN_ERROR;
-    parser.previous.start = source;
-    parser.previous.length = 0;
-    parser.previous.line = 1;
-
-    advance();
-
-    while (!match(TOKEN_EOF)) {
-        declaration();
-    }
-
-    ObjFunction* function = end_compiler();
-    if (!parser.had_error && function != NULL) {
-        optimize_chunk(&function->chunk);
-    }
-    is_repl_mode = 0;  // Reset flag after compilation
-    return parser.had_error ? NULL : function;
+    return compile_with_mode(source, 1);
 }

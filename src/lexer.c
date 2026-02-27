@@ -222,6 +222,7 @@ static Token fstring_multiline(Lexer* lexer) {
 }
 
 Token scan_token(Lexer* lexer) {
+restart:
     if (lexer->pending_dedents > 0) {
         lexer->pending_dedents--;
         return make_token(lexer, TOKEN_DEDENT);
@@ -244,7 +245,7 @@ Token scan_token(Lexer* lexer) {
             } else {
                 while (peek(lexer) != '\n' && !is_at_end(lexer)) advance(lexer);
             }
-            return scan_token(lexer);
+            goto restart;
         }
 
         if (is_at_end(lexer)) {
@@ -290,7 +291,7 @@ Token scan_token(Lexer* lexer) {
         lexer->line++;
         advance(lexer);
         lexer->at_start_of_line = 1;
-        return scan_token(lexer);
+        goto restart;
     }
 
     lexer->start = lexer->current;
@@ -299,7 +300,7 @@ Token scan_token(Lexer* lexer) {
         if (lexer->indent_top > 0) {
             lexer->pending_dedents = lexer->indent_top;
             lexer->indent_top = 0;
-            return scan_token(lexer);
+            goto restart;
         }
         return make_token(lexer, TOKEN_EOF);
     }
@@ -325,7 +326,7 @@ Token scan_token(Lexer* lexer) {
             lexer->inside_table++;
             return make_token(lexer, TOKEN_LEFT_BRACE);
         case '}':
-            lexer->inside_table--;
+            if (lexer->inside_table > 0) lexer->inside_table--;
             return make_token(lexer, TOKEN_RIGHT_BRACE);
         case '[':
             // Check for multiline string [[...]]
