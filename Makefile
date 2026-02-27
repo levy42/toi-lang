@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -g
 LDFLAGS =
 LDLIBS ?=
-EXTRA_CFLAGS =
+EXTRA_CFLAGS = -D_POSIX_C_SOURCE=200809L
 EXTRA_LDLIBS =
 WASM_CC ?= zig cc
 WASM_SYSROOT ?=
@@ -127,9 +127,19 @@ test: $(TARGET)
 	printf "Timeout: $$timedout\n"; \
 	[ $$failed -eq 0 ] && [ $$timedout -eq 0 ]
 
-.PHONY: all clean release release-perf test docs wasm wasm-release pi perf peft peft-comp perf-comp benchmark-comp
+.PHONY: all clean release release-perf test docs wasm wasm-release pi perf perf-audit peft peft-comp perf-comp benchmark-comp
 
 perf: $(TARGET)
+	@for f in tests/peft/*.toi; do \
+		printf "Running $$f...\n"; \
+		./$(TARGET) "$$f"; \
+	done
+
+perf-audit: $(TARGET)
+	@echo "Running core perf suite..."
+	@./$(TARGET) benchmarks/perf.toi
+	@./$(TARGET) benchmarks/string_ops_compare.toi
+	@./$(TARGET) benchmarks/json_regex_bench.toi
 	@for f in tests/peft/*.toi; do \
 		printf "Running $$f...\n"; \
 		./$(TARGET) "$$f"; \
