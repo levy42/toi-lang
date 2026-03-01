@@ -1,0 +1,49 @@
+context = import context
+coroutine = import coroutine
+thread = import thread
+
+context.clear()
+assert not context.exists("req_id") "context should start empty"
+
+context.set("req_id", "main")
+assert context.get("req_id") == "main" "main context set/get failed"
+assert context.exists("req_id") "main context has failed"
+
+fn worker_co()
+  assert context.get("req_id") == nil "coroutine should not inherit main context"
+  context.set("req_id", "co")
+  return context.get("req_id")
+
+co = coroutine.create(worker_co)
+ok, v = coroutine.resume(co)
+assert ok "coroutine resume failed"
+assert v == "co" "coroutine context set/get failed"
+assert context.get("req_id") == "main" "coroutine context leaked into main"
+
+fn worker_thread()
+  assert context.get("req_id") == nil "thread should not inherit main context"
+  context.set("req_id", "thread")
+  return context.get("req_id")
+
+t = thread.spawn(worker_thread)
+tv = thread.join(t)
+assert tv == "thread" "thread context set/get failed"
+assert context.get("req_id") == "main" "thread context leaked into main"
+
+snap = context.items()
+assert snap.req_id == "main" "context.items() should return key/value table"
+
+keys = context.keys()
+assert keys has "req_id" "context.keys() should include req_id"
+
+copy = context.copy()
+assert copy.req_id == "main" "context.copy() failed"
+
+assert context.unset("req_id") "context.unset() should return true for existing key"
+assert not context.exists("req_id") "context.unset() did not remove key"
+assert context.get("req_id", "fallback") == "fallback" "context.get() default failed"
+
+context.set("x", 1)
+context.set("y", 2)
+context.clear()
+assert context.get("x") == nil and context.get("y") == nil "context.clear() failed"
