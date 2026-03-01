@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true, expect_error
 
+
 cli = import cli
 string = import string
 
@@ -105,7 +106,6 @@ with cli.progress(4, {width = 8, prefix = "ctx"}) as pctx
 
 print "cli framework ok"
 
-from lib.test import assert_eq, assert_true
 
 -- Basic expression assignment.
 x = 0

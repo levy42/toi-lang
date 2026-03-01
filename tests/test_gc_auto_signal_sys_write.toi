@@ -1,4 +1,5 @@
-from lib.test import assert_true
+from lib.test import assert_eq, assert_true, expect_error
+
 
 global string = import string
 
@@ -33,7 +34,6 @@ assert_true(after <= base + 67108864)
 assert_true(keep[1].v == 1)
 assert_true(keep[2000].v == 2000)
 
-from lib.test import assert_true, expect_error
 
 signal = import signal
 
@@ -46,7 +46,6 @@ assert_true(msg != nil)
 
 print "signal ok"
 
-from lib.test import assert_eq, assert_true
 
 sys = import sys
 

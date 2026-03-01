@@ -48,6 +48,7 @@ void vm_handle_op_loop(uint8_t** ip) {
 }
 
 int vm_handle_op_for_prep(VM* vm, CallFrame* frame, uint8_t** ip) {
+    int opcode_offset = (int)(*ip - frame->closure->function->chunk.code) - 1;
     uint8_t var_slot = *(*ip)++;
     uint8_t end_slot = *(*ip)++;
     uint16_t offset = read_short_local(ip);
@@ -57,6 +58,7 @@ int vm_handle_op_for_prep(VM* vm, CallFrame* frame, uint8_t** ip) {
         vm_runtime_error(vm, "for range requires numeric bounds.");
         return 0;
     }
+    frame->closure->function->chunk.code[opcode_offset] = OP_QFOR_PREP_NUM;
     if (AS_NUMBER(v) > AS_NUMBER(end)) {
         *ip += offset;
     }
@@ -64,6 +66,7 @@ int vm_handle_op_for_prep(VM* vm, CallFrame* frame, uint8_t** ip) {
 }
 
 int vm_handle_op_for_loop(VM* vm, CallFrame* frame, uint8_t** ip) {
+    int opcode_offset = (int)(*ip - frame->closure->function->chunk.code) - 1;
     uint8_t var_slot = *(*ip)++;
     uint8_t end_slot = *(*ip)++;
     uint16_t offset = read_short_local(ip);
@@ -73,9 +76,34 @@ int vm_handle_op_for_loop(VM* vm, CallFrame* frame, uint8_t** ip) {
         vm_runtime_error(vm, "for range requires numeric bounds.");
         return 0;
     }
+    frame->closure->function->chunk.code[opcode_offset] = OP_QFOR_LOOP_NUM;
     double next = AS_NUMBER(v) + 1.0;
     frame->slots[var_slot] = NUMBER_VAL(next);
     if (next <= AS_NUMBER(end)) {
+        *ip -= offset;
+    }
+    return 1;
+}
+
+int vm_handle_op_qfor_prep_num(VM* vm, CallFrame* frame, uint8_t** ip) {
+    (void)vm;
+    uint8_t var_slot = *(*ip)++;
+    uint8_t end_slot = *(*ip)++;
+    uint16_t offset = read_short_local(ip);
+    if (AS_NUMBER(frame->slots[var_slot]) > AS_NUMBER(frame->slots[end_slot])) {
+        *ip += offset;
+    }
+    return 1;
+}
+
+int vm_handle_op_qfor_loop_num(VM* vm, CallFrame* frame, uint8_t** ip) {
+    (void)vm;
+    uint8_t var_slot = *(*ip)++;
+    uint8_t end_slot = *(*ip)++;
+    uint16_t offset = read_short_local(ip);
+    double next = AS_NUMBER(frame->slots[var_slot]) + 1.0;
+    frame->slots[var_slot] = NUMBER_VAL(next);
+    if (next <= AS_NUMBER(frame->slots[end_slot])) {
         *ip -= offset;
     }
     return 1;

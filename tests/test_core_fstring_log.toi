@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 -- literals and variables
 n = 42
 s = "hello"
@@ -98,79 +99,81 @@ assert_eq(mix.x, 1)
 assert_eq(mix.y, 2)
 assert_eq(mix.z, 3)
 
-fn assert_eq(actual, expected)
+fn assert_eq_fmt(actual, expected)
   if actual != expected
     error(f"expected={expected} actual={actual}")
 
 x = 3.14159
-assert_eq(f"{x|.2f}", "3.14")
-assert_eq(f"{255|08x}", "000000ff")
-assert_eq(f"{255|%08x}", "000000ff")
-assert_eq(f"{5|d}", "5")
+assert_eq_fmt(f"{x|.2f}", "3.14")
+assert_eq_fmt(f"{255|08x}", "000000ff")
+assert_eq_fmt(f"{255|%08x}", "000000ff")
+assert_eq_fmt(f"{5|d}", "5")
 
 string = import string
-assert_eq(string.format("%.3f", x), "3.142")
+assert_eq_fmt(string.format("%.3f", x), "3.142")
 
 print "fstring format ok"
 
-from lib.test import assert_eq, assert_true
 
-log = import lib.log
+fn run_log_tests()
+  log = import lib.log
 
-lines = {}
-records = {}
-handler = fn(rec, line)
-  lines[#lines + 1] = line
-  records[#records + 1] = rec
-  return true
+  lines = {}
+  records = {}
+  handler = fn(rec, line)
+    lines[#lines + 1] = line
+    records[#records + 1] = rec
+    return true
 
-l = log.Logger("svc", {level = "info", handlers = {handler}, context = {app = "api"}})
+  l = log.Logger("svc", {level = "info", handlers = {handler}, context = {app = "api"}})
 
--- debug should be filtered at info level
-assert_true(l.debug("hidden") == false)
-assert_eq(#lines, 0)
+  -- debug should be filtered at info level
+  assert_true(l.debug("hidden") == false)
+  assert_eq(#lines, 0)
 
-assert_true(l.info("started", {port = 8080}) == true)
-assert_eq(#lines, 1)
-assert_true(lines[1] has "INFO")
-assert_true(lines[1] has "[svc]")
-assert_true(lines[1] has "started")
-assert_true(lines[1] has "app=api")
-assert_true(lines[1] has "port=8080")
+  assert_true(l.info("started", {port = 8080}) == true)
+  assert_eq(#lines, 1)
+  assert_true(lines[1] has "INFO")
+  assert_true(lines[1] has "[svc]")
+  assert_true(lines[1] has "started")
+  assert_true(lines[1] has "app=api")
+  assert_true(lines[1] has "port=8080")
 
-child = l.child("worker", {worker = 2})
-assert_true(child.warn("slow", {queue = 9}) == true)
-assert_eq(#lines, 2)
-assert_true(lines[2] has "WARN")
-assert_true(lines[2] has "[svc.worker]")
-assert_true(lines[2] has "worker=2")
-assert_true(lines[2] has "queue=9")
+  child = l.child("worker", {worker = 2})
+  assert_true(child.warn("slow", {queue = 9}) == true)
+  assert_eq(#lines, 2)
+  assert_true(lines[2] has "WARN")
+  assert_true(lines[2] has "[svc.worker]")
+  assert_true(lines[2] has "worker=2")
+  assert_true(lines[2] has "queue=9")
 
-ctx_logger = l.with_fields({req_id = "r1"})
-assert_true(ctx_logger.error("failed") == true)
-assert_eq(#lines, 3)
-assert_true(lines[3] has "req_id=r1")
+  ctx_logger = l.with_fields({req_id = "r1"})
+  assert_true(ctx_logger.error("failed") == true)
+  assert_eq(#lines, 3)
+  assert_true(lines[3] has "req_id=r1")
 
-assert_eq(log.parse_level("debug"), 20)
-assert_eq(log.parse_level(50), 50)
-assert_eq(log.level_name("error"), "ERROR")
+  assert_eq(log.parse_level("debug"), 20)
+  assert_eq(log.parse_level(50), 50)
+  assert_eq(log.level_name("error"), "ERROR")
 
--- root configure + convenience methods
-root_lines = {}
-root_handler = fn(rec, line)
-  root_lines[#root_lines + 1] = line
-  return true
+  -- root configure + convenience methods
+  root_lines = {}
+  root_handler = fn(rec, line)
+    root_lines[#root_lines + 1] = line
+    return true
 
-log.configure(level = "warn", handlers = {root_handler}, context = {env = "test"})
-assert_true(log.info("ignore") == false)
-assert_true(log.warn("visible", {k = 1}) == true)
-assert_eq(#root_lines, 1)
-assert_true(root_lines[1] has "WARN")
-assert_true(root_lines[1] has "env=test")
-assert_true(root_lines[1] has "k=1")
+  log.configure(level = "warn", handlers = {root_handler}, context = {env = "test"})
+  assert_true(log.info("ignore") == false)
+  assert_true(log.warn("visible", {k = 1}) == true)
+  assert_eq(#root_lines, 1)
+  assert_true(root_lines[1] has "WARN")
+  assert_true(root_lines[1] has "env=test")
+  assert_true(root_lines[1] has "k=1")
 
-named = log.get_logger("named")
-assert_true(type(named) == "table")
-assert_eq(named.name, "named")
+  named = log.get_logger("named")
+  assert_true(type(named) == "table")
+  assert_eq(named.name, "named")
 
-print "log lib ok"
+  print "log lib ok"
+
+run_log_tests()

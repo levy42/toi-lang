@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 http = import http
 socket = import socket
 thread = import thread
@@ -83,7 +84,6 @@ else
 
   print "http request poll ok"
 
-from lib.test import assert_eq, assert_true
 
 markdown = import markdown
 
@@ -165,7 +165,6 @@ assert_true(html7 has "<a href=\"docs/README.html\">Doc</a>")
 
 print "markdown ok"
 
-from lib.test import assert_eq, assert_true
 
 regex = import regex
 table = import table

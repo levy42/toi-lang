@@ -26,6 +26,8 @@ typedef struct {
     int depth;
     int is_captured;
     uint8_t type;
+    uint8_t is_function_value;
+    uint8_t function_return_type;
 } Local;
 
 typedef struct {

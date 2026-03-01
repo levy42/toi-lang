@@ -1,4 +1,5 @@
-from lib.test import assert_true
+from lib.test import assert_eq, assert_true
+
 
 global time = import time
 global string = import string
@@ -43,7 +44,6 @@ assert_true(after <= base + 134217728, "memory remained too high after churn")
 assert_true(keep[1].v == 1)
 assert_true(keep[3000].v == 3000)
 
-from lib.test import assert_eq, assert_true
 
 mmap = import mmap
 io = import io
@@ -83,7 +83,6 @@ os.remove(PATH)
 
 print "mmap ok"
 
-from lib.test import assert_eq
 
 io = import io
 os = import os

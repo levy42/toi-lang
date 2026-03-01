@@ -9,5 +9,7 @@ void vm_handle_op_jump_if_true(VM* vm, uint8_t** ip);
 void vm_handle_op_loop(uint8_t** ip);
 int vm_handle_op_for_prep(VM* vm, CallFrame* frame, uint8_t** ip);
 int vm_handle_op_for_loop(VM* vm, CallFrame* frame, uint8_t** ip);
+int vm_handle_op_qfor_prep_num(VM* vm, CallFrame* frame, uint8_t** ip);
+int vm_handle_op_qfor_loop_num(VM* vm, CallFrame* frame, uint8_t** ip);
 
 #endif

@@ -6,6 +6,7 @@
 
 struct ObjString;
 struct ObjTable;
+struct ObjClosure;
 
 typedef enum {
     OP_CONSTANT,
@@ -44,8 +45,14 @@ typedef enum {
     OP_SET_UPVALUE,
     OP_CLOSE_UPVALUE,
     OP_GET_TABLE,
+    OP_GET_TABLE_NUM,
+    OP_GET_FIELD_CONST,
     OP_GET_META_TABLE,
     OP_SET_TABLE,
+    OP_SET_TABLE_KEEP,
+    OP_SET_TABLE_NUM,
+    OP_SET_FIELD_CONST,
+    OP_SET_FIELD_CONST_KEEP,
     OP_DELETE_TABLE,
     OP_NEW_TABLE,
     OP_DUP,
@@ -54,9 +61,14 @@ typedef enum {
     OP_JUMP_IF_TRUE,
     OP_LOOP,
     OP_CALL,
+    OP_INVOKE,
     OP_CALL0,
     OP_CALL1,
     OP_CALL2,
+    OP_QCALL2,
+    OP_QCALL1_STR_FIND,
+    OP_QINVOKE1_STR_FIND,
+    OP_QINVOKE0_STR_LOWER,
     OP_CALL_NAMED,
     OP_CALL_EXPAND,
     OP_CLOSURE,
@@ -82,6 +94,12 @@ typedef enum {
     OP_FMUL,
     OP_FDIV,
     OP_FMOD,
+    OP_QFADD,
+    OP_QFSUB,
+    OP_QFMUL,
+    OP_QFDIV,
+    OP_QGREATER_NUM,
+    OP_QLESS_NUM,
     OP_MOD_CONST,
     OP_GC,
     OP_SET_METATABLE,
@@ -100,6 +118,8 @@ typedef enum {
     OP_RANGE,
     OP_FOR_PREP,
     OP_FOR_LOOP,
+    OP_QFOR_PREP_NUM,
+    OP_QFOR_LOOP_NUM,
     OP_SLICE
 } OpCode;
 
@@ -115,7 +135,20 @@ typedef struct {
     uint32_t* get_table_ic_versions; // keyed by opcode byte offset
     struct ObjTable** get_table_ic_tables;
     struct ObjString** get_table_ic_keys;
+    int* get_table_ic_slots;
     Value* get_table_ic_values;
+    uint32_t* set_table_ic_versions; // keyed by opcode byte offset
+    struct ObjTable** set_table_ic_tables;
+    struct ObjString** set_table_ic_keys;
+    int* set_table_ic_slots;
+    uint32_t* delete_table_ic_versions; // keyed by opcode byte offset
+    struct ObjTable** delete_table_ic_tables;
+    struct ObjString** delete_table_ic_keys;
+    int* delete_table_ic_slots;
+    struct ObjClosure** call_ic_closures;
+    uint8_t* call_ic_argc;
+    struct ObjClosure** call2_ic_closures;
+    uint8_t* call2_ic_kind;
     ValueArray constants;
 } Chunk;
 

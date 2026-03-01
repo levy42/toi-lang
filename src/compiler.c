@@ -228,6 +228,8 @@ static void init_compiler(Compiler* compiler, FunctionType type) {
     local->name.length = 0;
     local->is_captured = 0;
     local->type = TYPEHINT_ANY;
+    local->is_function_value = 0;
+    local->function_return_type = TYPEHINT_ANY;
 
     current = compiler;
 
@@ -246,6 +248,53 @@ static ObjFunction* end_compiler() {
     emit_return();
     ObjFunction* function = current->function;
     function->upvalue_count = current->upvalue_count;
+    function->tiny_inline_kind = TINY_INLINE_NONE;
+    if (function->upvalue_count == 0 &&
+        !function->is_variadic &&
+        function->defaults_count == 0 &&
+        function->arity == 2) {
+        Chunk* chunk = &function->chunk;
+        if (chunk->count >= 6) {
+            uint8_t* code = chunk->code;
+            int trailing_ok = (chunk->count == 6) || (chunk->count == 7 && code[6] == OP_RETURN);
+            if (trailing_ok &&
+                code[0] == OP_GET_LOCAL && code[1] == 1 &&
+                code[2] == OP_GET_LOCAL && code[3] == 2 &&
+                code[5] == OP_RETURN) {
+                if (code[4] == OP_IADD) {
+                    function->tiny_inline_kind = TINY_INLINE_IADD2;
+                } else if (code[4] == OP_FADD) {
+                    function->tiny_inline_kind = TINY_INLINE_FADD2;
+                } else if (code[4] == OP_ISUB) {
+                    function->tiny_inline_kind = TINY_INLINE_ISUB2;
+                } else if (code[4] == OP_FSUB) {
+                    function->tiny_inline_kind = TINY_INLINE_FSUB2;
+                } else if (code[4] == OP_IMUL) {
+                    function->tiny_inline_kind = TINY_INLINE_IMUL2;
+                } else if (code[4] == OP_FMUL) {
+                    function->tiny_inline_kind = TINY_INLINE_FMUL2;
+                } else if (code[4] == OP_IDIV) {
+                    function->tiny_inline_kind = TINY_INLINE_IDIV2;
+                } else if (code[4] == OP_FDIV) {
+                    function->tiny_inline_kind = TINY_INLINE_FDIV2;
+                } else if (code[4] == OP_ADD) {
+                    function->tiny_inline_kind = TINY_INLINE_ADD2;
+                } else if (code[4] == OP_SUBTRACT) {
+                    function->tiny_inline_kind = TINY_INLINE_SUB2;
+                } else if (code[4] == OP_MULTIPLY) {
+                    function->tiny_inline_kind = TINY_INLINE_MUL2;
+                } else if (code[4] == OP_DIVIDE) {
+                    function->tiny_inline_kind = TINY_INLINE_DIV2;
+                } else if (code[4] == OP_GREATER) {
+                    function->tiny_inline_kind = TINY_INLINE_GT2;
+                } else if (code[4] == OP_LESS) {
+                    function->tiny_inline_kind = TINY_INLINE_LT2;
+                } else if (code[4] == OP_EQUAL) {
+                    function->tiny_inline_kind = TINY_INLINE_EQ2;
+                }
+            }
+        }
+    }
 #ifdef DEBUG_PRINT_CODE
     if (!parser.had_error) {
         disassemble_chunk(current_chunk(), function->name != NULL ? function->name->chars : "<script>");
@@ -644,6 +693,8 @@ void add_local(Token name) {
     local->depth = -1;
     local->is_captured = 0;
     local->type = TYPEHINT_ANY;
+    local->is_function_value = 0;
+    local->function_return_type = TYPEHINT_ANY;
 }
 
 void mark_initialized(void) {
@@ -675,6 +726,16 @@ void declare_variable(void) {
 }
 
 uint8_t identifier_constant(Token* name) {
+    Chunk* chunk = current_chunk();
+    for (int i = 0; i < chunk->constants.count; i++) {
+        Value v = chunk->constants.values[i];
+        if (!IS_STRING(v)) continue;
+        ObjString* s = AS_STRING(v);
+        if (s->length != name->length) continue;
+        if (memcmp(s->chars, name->start, (size_t)name->length) == 0) {
+            return (uint8_t)i;
+        }
+    }
     return make_constant(OBJ_VAL(copy_string(name->start, name->length)));
 }
 
@@ -691,10 +752,14 @@ static uint8_t parse_type_name(Token* name) {
 void set_local_type(int local_index, uint8_t type) {
     if (local_index < 0 || local_index >= current->local_count) return;
     current->locals[local_index].type = type;
+    current->locals[local_index].is_function_value = 0;
+    current->locals[local_index].function_return_type = TYPEHINT_ANY;
 }
 
 void update_local_type(int local_index, uint8_t rhs_type) {
     if (local_index < 0 || local_index >= current->local_count) return;
+    current->locals[local_index].is_function_value = 0;
+    current->locals[local_index].function_return_type = TYPEHINT_ANY;
     uint8_t current_type = current->locals[local_index].type;
     if (rhs_type == TYPEHINT_ANY) {
         current->locals[local_index].type = TYPEHINT_ANY;
@@ -736,6 +801,24 @@ static void set_param_name(ObjFunction* function, int index, Token* name) {
     }
     if (index < function->param_names_count) {
         function->param_names[index] = copy_string(name->start, name->length);
+    }
+}
+
+static void seed_parameter_local_types(Compiler* compiler) {
+    // Slot 0 is reserved for VM call frame internals.
+    int local_base = 1;
+    ObjFunction* function = compiler->function;
+    int param_count = function->arity;
+    if (param_count <= 0) return;
+
+    for (int i = 0; i < param_count; i++) {
+        int local_index = local_base + i;
+        if (local_index >= compiler->local_count) break;
+        uint8_t type = TYPEHINT_ANY;
+        if (i < function->param_types_count) {
+            type = function->param_types[i];
+        }
+        compiler->locals[local_index].type = type;
     }
 }
 
@@ -852,6 +935,7 @@ static void define_variable(uint8_t global) {
 static int has_slice_range_in_subscript(void);
 static int rhs_has_top_level_comma(int start_line);
 static void parse_array_literal_from_comma_list(void);
+static int can_emit_invoke_positional(void);
 
 void named_variable(Token name, int can_assign) {
     uint8_t get_op, set_op;
@@ -1087,22 +1171,42 @@ static void dot(int can_assign) {
     
     if (can_assign && (match(TOKEN_EQUALS) || match(TOKEN_WALRUS))) {
         TokenType assign_tok = parser.previous.type;
-        emit_bytes(OP_CONSTANT, name);
         int start_line = parser.current.line;
         if (assign_tok == TOKEN_EQUALS && rhs_has_top_level_comma(start_line)) {
             parse_array_literal_from_comma_list();
         } else {
             expression();
         }
-        emit_byte(OP_SET_TABLE);
+        emit_bytes(OP_SET_FIELD_CONST, name);
         {
             uint8_t rhs_type = type_pop();
             type_stack_top = base_top;
             type_push(rhs_type);
         }
+    } else if (check(TOKEN_LEFT_PAREN) && can_emit_invoke_positional()) {
+        advance(); // consume '('
+        uint8_t arg_count = 0;
+        int invoke_base_top = type_stack_top;
+        if (!check(TOKEN_RIGHT_PAREN)) {
+            do {
+                if (arg_count == 255) {
+                    error("Can't have more than 255 arguments.");
+                }
+                expression();
+                type_pop();
+                arg_count++;
+            } while (match(TOKEN_COMMA));
+        }
+        consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+        emit_byte(OP_INVOKE);
+        emit_byte(name);
+        emit_byte(arg_count);
+        last_expr_ends_with_call = 1;
+        type_stack_top = invoke_base_top;
+        type_pop();
+        type_push(TYPEHINT_ANY);
     } else {
-        emit_bytes(OP_CONSTANT, name);
-        emit_byte(OP_GET_TABLE);
+        emit_bytes(OP_GET_FIELD_CONST, name);
         type_stack_top = base_top;
         type_push(TYPEHINT_ANY);
     }
@@ -1166,6 +1270,7 @@ static void subscript(int can_assign) {
         return;
     }
     expression();
+    uint8_t index_type = type_pop();
 
     consume(TOKEN_RIGHT_BRACKET, "Expect ']' after index.");
 
@@ -1177,14 +1282,22 @@ static void subscript(int can_assign) {
         } else {
             expression();
         }
-        emit_byte(OP_SET_TABLE);
+        if (is_numeric_type(index_type)) {
+            emit_byte(OP_SET_TABLE_NUM);
+        } else {
+            emit_byte(OP_SET_TABLE);
+        }
         {
             uint8_t rhs_type = type_pop();
             type_stack_top = base_top;
             type_push(rhs_type);
         }
     } else {
-        emit_byte(OP_GET_TABLE);
+        if (is_numeric_type(index_type)) {
+            emit_byte(OP_GET_TABLE_NUM);
+        } else {
+            emit_byte(OP_GET_TABLE);
+        }
         type_stack_top = base_top;
         type_push(TYPEHINT_ANY);
     }
@@ -1239,49 +1352,42 @@ static void table_entry_expression(void) {
 static void parse_table_entries() {
     double array_index = 1.0;
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
-        emit_byte(OP_DUP);
         if (match(TOKEN_LEFT_BRACKET)) {
             table_entry_expression();
             consume(TOKEN_RIGHT_BRACKET, "Expect ']' after key.");
             consume(TOKEN_EQUALS, "Expect '=' after key.");
             table_entry_expression();
-            emit_byte(OP_SET_TABLE);
-            emit_byte(OP_POP);
+            emit_byte(OP_SET_TABLE_KEEP);
         } else if (match(TOKEN_IDENTIFIER)) {
             Token name = parser.previous;
             if (match(TOKEN_EQUALS)) {
-                emit_constant(OBJ_VAL(copy_string(name.start, name.length)));
+                uint8_t key = identifier_constant(&name);
                 table_entry_expression();
-                emit_byte(OP_SET_TABLE);
-                emit_byte(OP_POP);
+                emit_bytes(OP_SET_FIELD_CONST_KEEP, key);
             } else {
                 // Array item that happens to be an identifier
                 emit_constant(NUMBER_VAL(array_index++));
                 named_variable(name, false);
-                emit_byte(OP_SET_TABLE);
-                emit_byte(OP_POP);
+                emit_byte(OP_SET_TABLE_KEEP);
             }
         } else if (match(TOKEN_LESS)) {
             consume(TOKEN_IDENTIFIER, "Expect identifier after '<' in shorthand table fields.");
             for (;;) {
                 Token name = parser.previous;
-                emit_constant(OBJ_VAL(copy_string(name.start, name.length)));
+                uint8_t key = identifier_constant(&name);
                 named_variable(name, false);
-                emit_byte(OP_SET_TABLE);
-                emit_byte(OP_POP);
+                emit_bytes(OP_SET_FIELD_CONST_KEEP, key);
 
                 if (!match(TOKEN_COMMA)) break;
                 if (check(TOKEN_GREATER)) break;
                 consume(TOKEN_IDENTIFIER, "Expect identifier in shorthand table fields.");
-                emit_byte(OP_DUP);
             }
             consume(TOKEN_GREATER, "Expect '>' after shorthand table fields.");
         } else {
             // Array item
             emit_constant(NUMBER_VAL(array_index++));
             table_entry_expression();
-            emit_byte(OP_SET_TABLE);
-            emit_byte(OP_POP);
+            emit_byte(OP_SET_TABLE_KEEP);
         }
         if (match(TOKEN_COMMA) || is_implicit_table_separator()) continue;
         break;
@@ -1659,6 +1765,41 @@ static int rhs_has_top_level_comma(int start_line) {
             default:
                 break;
         }
+    }
+}
+
+static int can_emit_invoke_positional(void) {
+    if (!check(TOKEN_LEFT_PAREN)) return 0;
+    Lexer peek = lexer;
+    Token tok;
+    int depth = 0;
+    int prev_identifier = 0;
+    int expect_arg_start = 1;
+    for (;;) {
+        tok = scan_token(&peek);
+        if (tok.type == TOKEN_EOF) return 0;
+        if (tok.type == TOKEN_LEFT_PAREN) {
+            depth++;
+            prev_identifier = 0;
+            continue;
+        }
+        if (tok.type == TOKEN_RIGHT_PAREN) {
+            if (depth == 0) return 1;
+            depth--;
+            prev_identifier = 0;
+            continue;
+        }
+        if (depth == 0) {
+            if (tok.type == TOKEN_COMMA) {
+                expect_arg_start = 1;
+                prev_identifier = 0;
+                continue;
+            }
+            if (tok.type == TOKEN_STAR && expect_arg_start) return 0;
+            if (tok.type == TOKEN_EQUALS && prev_identifier) return 0;
+            expect_arg_start = 0;
+        }
+        prev_identifier = (tok.type == TOKEN_IDENTIFIER);
     }
 }
 
@@ -2175,6 +2316,7 @@ ParseRule rules[] = {
     [TOKEN_DOT]           = {NULL,     dot,    PREC_CALL},
     [TOKEN_DOT_DOT]       = {NULL,     range_, PREC_RANGE},
     [TOKEN_MINUS]         = {unary,    binary, PREC_TERM},
+    [TOKEN_ARROW]         = {NULL,     NULL,   PREC_NONE},
     [TOKEN_PLUS]          = {NULL,     binary, PREC_TERM},
     [TOKEN_SEMICOLON]     = {NULL,     NULL,   PREC_NONE},
     [TOKEN_SLASH]         = {NULL,     binary, PREC_FACTOR},
@@ -2337,7 +2479,7 @@ void variable_declaration(void) {
     }
 }
 
-static void function_body(FunctionType type) {
+static ObjFunction* function_body(FunctionType type) {
     
     Compiler compiler;
     Compiler* enclosing = current; 
@@ -2429,6 +2571,11 @@ static void function_body(FunctionType type) {
         } while (match(TOKEN_COMMA));
     }
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+    if (match(TOKEN_ARROW)) {
+        consume(TOKEN_IDENTIFIER, "Expect return type name after '->'.");
+        current->function->return_type = parse_type_name(&parser.previous);
+    }
+    seed_parameter_local_types(current);
 
     // Parameters are initialized at function entry.
     for (int i = 0; i < current->local_count; i++) {
@@ -2477,6 +2624,7 @@ static void function_body(FunctionType type) {
         emit_byte(compiler.upvalues[i].is_local ? 1 : 0);
         emit_byte(compiler.upvalues[i].index);
     }
+    return function;
 }
 
 typedef struct {
@@ -2487,10 +2635,16 @@ typedef struct {
 static Token function_declaration_named(void) {
     uint8_t global = parse_variable("Expect function name.");
     Token name = parser.previous;
+    int local_index = -1;
     if (current->scope_depth > 0) {
+        local_index = current->local_count - 1;
         mark_initialized();
     }
-    function_body(TYPE_FUNCTION);
+    ObjFunction* function = function_body(TYPE_FUNCTION);
+    if (local_index >= 0 && local_index < current->local_count) {
+        current->locals[local_index].is_function_value = 1;
+        current->locals[local_index].function_return_type = function->return_type;
+    }
     define_variable(global);
     return name;
 }
@@ -2635,6 +2789,19 @@ static void parse_call(int can_assign) {
     int in_named_args = 0;
     int has_spread_arg = 0;
     int base_top = type_stack_top;
+    uint8_t callee_return_hint = TYPEHINT_ANY;
+    Chunk* chunk = current_chunk();
+    if (chunk->count >= 2) {
+        uint8_t op = chunk->code[chunk->count - 2];
+        if (op == OP_GET_LOCAL) {
+            int local_index = chunk->code[chunk->count - 1];
+            if (local_index >= 0 &&
+                local_index < current->local_count &&
+                current->locals[local_index].is_function_value) {
+                callee_return_hint = current->locals[local_index].function_return_type;
+            }
+        }
+    }
     
     if (!check(TOKEN_RIGHT_PAREN)) {
         do {
@@ -2733,7 +2900,7 @@ static void parse_call(int can_assign) {
     last_expr_ends_with_call = 1;
     type_stack_top = base_top;
     type_pop();
-    type_push(TYPEHINT_ANY);
+    type_push(callee_return_hint);
 }
 
 static void reset_parser_state(const char* source) {

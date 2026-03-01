@@ -39,7 +39,7 @@ int vm_handle_op_set_metatable(VM* vm, CallFrame** frame, uint8_t** ip) {
         vm_runtime_error(vm, "Invalid arguments to setmetatable.");
         return 0;
     }
-    AS_TABLE(table)->metatable = IS_NIL(metatable) ? NULL : AS_TABLE(metatable);
+    objtable_set_metatable(AS_TABLE(table), IS_NIL(metatable) ? NULL : AS_TABLE(metatable));
 
     int constructor_called = 0;
     if (!IS_NIL(metatable)) {

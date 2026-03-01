@@ -86,23 +86,31 @@ fn open(base_path)
   fn load_by_index_value(table_state, idx_state, index_value, limit = nil)
     min_key = secondary_min(index_value)
     max_key = secondary_max(index_value)
-    rows = limit == nil ? idx_state.tree.range(min_key, max_key) : idx_state.tree.range(min_key, max_key, limit)
+    rows = idx_state.tree.range(min_key, max_key)
     out = {}
+    count = 0
     for entry in rows
       pk = entry.value
       blob = table_state.primary.get(pk)
       if blob
         out <+ decode_record(blob)
+        count = count + 1
+        if limit != nil and count >= limit
+          break
     return out
 
   fn load_by_index_range(table_state, idx_state, min_key, max_key, limit = nil)
-    rows = limit == nil ? idx_state.tree.range(min_key, max_key) : idx_state.tree.range(min_key, max_key, limit)
+    rows = idx_state.tree.range(min_key, max_key)
     out = {}
+    count = 0
     for entry in rows
       pk = entry.value
       blob = table_state.primary.get(pk)
       if blob
         out <+ decode_record(blob)
+        count = count + 1
+        if limit != nil and count >= limit
+          break
     return out
 
   fn enforce_unique_indexes(table_state, row, exclude_pk = nil)
@@ -112,11 +120,15 @@ fn open(base_path)
         if idx_value == nil
           continue
 
-        rows = idx_state.tree.range(secondary_min(idx_value), secondary_max(idx_value), 2)
+        rows = idx_state.tree.range(secondary_min(idx_value), secondary_max(idx_value))
+        seen = 0
         for entry in rows
           existing_pk = entry.value
           if exclude_pk == nil or existing_pk != exclude_pk
             error("db.put: unique index '" + idx_name + "' violation on table '" + table_state.name + "'")
+          seen = seen + 1
+          if seen >= 2
+            break
 
   fn get_index_for_field(table_state, field_name)
     idx_state = table_state.indexes[field_name]

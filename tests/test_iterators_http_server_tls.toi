@@ -1,4 +1,5 @@
-from lib.test import assert_eq
+from lib.test import assert_eq, assert_true
+
 
 iter_obj = {
   n = 4
@@ -69,7 +70,6 @@ assert_eq(custom_sum, 6)
 
 print "iterators ok"
 
-from lib.test import assert_eq, assert_true
 
 http_server = import lib.http_server
 socket = import socket

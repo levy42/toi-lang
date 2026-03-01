@@ -52,13 +52,17 @@ fn coerce_param(raw, type_name)
     else
       return raw
 
-fn build_handler_args(route, path_params)
+fn build_handler_args(route, req, path_params)
   sig = route.signature
   args = {}
   if sig.arity > 0
     for i in 1..sig.arity
       p = sig.params[i]
-      val = path_params[p.name]
+      name = p.name
+      if name == "req" or name == "request"
+        args <+ req
+        continue
+      val = path_params[name]
       if val != nil
         args <+ coerce_param(val, p.type)
       elif not p.has_default
@@ -105,7 +109,7 @@ Route.dispatch = fn(app, req)
       if route.method == method
         args = nil
         try
-          args = build_handler_args(route, params)
+          args = build_handler_args(route, req, params)
         except e
           return http.response(400, nil, "Bad Request: " + str(e))
 

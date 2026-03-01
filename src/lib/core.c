@@ -200,7 +200,7 @@ static int setmetatable_native(VM* vm, int arg_count, Value* args) {
     ASSERT_TABLE(0);
     if (!IS_TABLE(args[1]) && !IS_NIL(args[1])) { RETURN_NIL; }
 
-    GET_TABLE(0)->metatable = IS_NIL(args[1]) ? NULL : GET_TABLE(1);
+    objtable_set_metatable(GET_TABLE(0), IS_NIL(args[1]) ? NULL : GET_TABLE(1));
     RETURN_VAL(args[0]);
 }
 
@@ -964,26 +964,41 @@ static int slice_native(VM* vm, int arg_count, Value* args) {
         if (e0 > len) e0 = len;
         if (step > 0) {
             if (s0 > e0) { RETURN_STRING("", 0); }
+            if (step == 1 && s0 == 1 && e0 == len) {
+                RETURN_OBJ(s);
+            }
+            if (step == 1) {
+                int out_len = e0 - s0 + 1;
+                RETURN_STRING(s->chars + (s0 - 1), out_len);
+            }
             int out_len = 0;
             for (int i = s0; i <= e0; i += step) out_len++;
-            char* buf = (char*)malloc(out_len + 1);
+            char* buf = (char*)malloc((size_t)out_len + 1);
+            if (buf == NULL) {
+                vm_runtime_error(vm, "slice() out of memory");
+                return 0;
+            }
             int w = 0;
             for (int i = s0; i <= e0; i += step) {
                 buf[w++] = s->chars[i - 1];
             }
             buf[w] = '\0';
-            RETURN_STRING(buf, w);
+            RETURN_OBJ(take_string(buf, w));
         } else {
             if (s0 < e0) { RETURN_STRING("", 0); }
             int out_len = 0;
             for (int i = s0; i >= e0; i += step) out_len++;
-            char* buf = (char*)malloc(out_len + 1);
+            char* buf = (char*)malloc((size_t)out_len + 1);
+            if (buf == NULL) {
+                vm_runtime_error(vm, "slice() out of memory");
+                return 0;
+            }
             int w = 0;
             for (int i = s0; i >= e0; i += step) {
                 buf[w++] = s->chars[i - 1];
             }
             buf[w] = '\0';
-            RETURN_STRING(buf, w);
+            RETURN_OBJ(take_string(buf, w));
         }
     }
 
@@ -1039,6 +1054,14 @@ static int mem_native(VM* vm, int arg_count, Value* args) {
     RETURN_NUMBER((double)bytes_allocated);
 }
 
+static void set_core_fast_kind(VM* vm, const char* name, NativeFastKind kind) {
+    Value fn = NIL_VAL;
+    ObjString* key = copy_string(name, (int)strlen(name));
+    if (table_get(&vm->globals, key, &fn) && IS_NATIVE(fn)) {
+        AS_NATIVE_OBJ(fn)->fast_kind = (uint8_t)kind;
+    }
+}
+
 void register_core(VM* vm) {
     const NativeReg core_funcs[] = {
         {"str", core_tostring},
@@ -1067,4 +1090,8 @@ void register_core(VM* vm) {
         {NULL, NULL}
     };
     register_module(vm, NULL, core_funcs); // Register as global functions
+    set_core_fast_kind(vm, "next", NATIVE_FAST_CORE_NEXT);
+    set_core_fast_kind(vm, "min", NATIVE_FAST_CORE_MIN);
+    set_core_fast_kind(vm, "max", NATIVE_FAST_CORE_MAX);
+    set_core_fast_kind(vm, "sum", NATIVE_FAST_CORE_SUM);
 }

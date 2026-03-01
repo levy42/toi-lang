@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true, expect_error
 
+
 -- types module
 types = import lib.types
 from lib.types import String, Integer
@@ -153,33 +154,33 @@ assert_true(type(http_server.new) == "function")
 
 print "toi libs ok"
 
-from lib.test import assert_true
 
-fnmatch = import fnmatch
+fn run_fnmatch_unpack_tests()
+  fnmatch = import fnmatch
 
-assert_true(fnmatch.match("*.txt", "a.txt"))
-assert_true(not fnmatch.match("*.txt", "a.tx"))
-assert_true(fnmatch.match("file-??.log", "file-ab.log"))
-assert_true(not fnmatch.match("file-??.log", "file-a.log"))
-assert_true(fnmatch.match("src/*.c", "src/main.c", "p"))
-assert_true(not fnmatch.match("src/*.c", "src/lib/main.c", "p"))
+  assert_true(fnmatch.match("*.txt", "a.txt"))
+  assert_true(not fnmatch.match("*.txt", "a.tx"))
+  assert_true(fnmatch.match("file-??.log", "file-ab.log"))
+  assert_true(not fnmatch.match("file-??.log", "file-a.log"))
+  assert_true(fnmatch.match("src/*.c", "src/main.c", "p"))
+  assert_true(not fnmatch.match("src/*.c", "src/lib/main.c", "p"))
 
-print "fnmatch ok"
+  print "fnmatch ok"
 
-from lib.test import assert_eq, assert_true
+  a, b = {1, 2}
+  assert_eq(a, 1)
+  assert_eq(b, 2)
 
-a, b = {1, 2}
-assert_eq(a, 1)
-assert_eq(b, 2)
+  x, y = "rvrv ebvrs".split()
+  assert_eq(x, "rvrv")
+  assert_eq(y, "ebvrs")
 
-x, y = "rvrv ebvrs".split()
-assert_eq(x, "rvrv")
-assert_eq(y, "ebvrs")
+  sentinel = 999
+  u, v = "one"
+  assert_eq(u, "one")
+  assert_true(v == nil)
+  assert_eq(sentinel, 999)
 
-sentinel = 999
-u, v = "one"
-assert_eq(u, "one")
-assert_true(v == nil)
-assert_eq(sentinel, 999)
+  print "multi assignment unpack ok"
 
-print "multi assignment unpack ok"
+run_fnmatch_unpack_tests()

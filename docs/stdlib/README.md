@@ -18,6 +18,7 @@ Available native modules:
 - `mmap`
 - `poll`
 - `coroutine`
+- `context`
 - `string`
 - `table`
 - `socket`

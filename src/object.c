@@ -36,6 +36,17 @@ static ObjString* allocate_string(char* chars, int length, uint32_t hash) {
     string->length = length;
     string->chars = chars;
     string->hash = hash;
+    string->hash_ready = 1;
+    return string;
+}
+
+static ObjString* allocate_string_unhashed(char* chars, int length) {
+    bytes_allocated += length + 1; // Track string content too
+    ObjString* string = (ObjString*)allocate_object(sizeof(ObjString), OBJ_STRING);
+    string->length = length;
+    string->chars = chars;
+    string->hash = 0;
+    string->hash_ready = 0;
     return string;
 }
 
@@ -52,12 +63,44 @@ ObjString* take_string(char* chars, int length) {
     return allocate_string(chars, length, hash);
 }
 
+ObjString* take_string_with_hash(char* chars, int length, uint32_t hash) {
+    return allocate_string(chars, length, hash);
+}
+
+ObjString* copy_string_unhashed(const char* chars, int length) {
+    char* heap_chars = (char*)malloc(length + 1);
+    memcpy(heap_chars, chars, length);
+    heap_chars[length] = '\0';
+    return allocate_string_unhashed(heap_chars, length);
+}
+
+ObjString* take_string_unhashed(char* chars, int length) {
+    return allocate_string_unhashed(chars, length);
+}
+
+uint32_t objstring_hash(ObjString* string) {
+    if (string->hash_ready) return string->hash;
+    string->hash = hash_string(string->chars, string->length);
+    string->hash_ready = 1;
+    return string->hash;
+}
+
 ObjTable* new_table() {
     ObjTable* table = (ObjTable*)allocate_object(sizeof(ObjTable), OBJ_TABLE);
     init_table(&table->table);
     table->metatable = NULL;
     table->is_module = 0;
+    table->no_metatable_fast = 1;
     return table;
+}
+
+void objtable_set_metatable(ObjTable* table, ObjTable* metatable) {
+    if (table->metatable == metatable) return;
+    table->metatable = metatable;
+    table->no_metatable_fast = (metatable == NULL) ? 1 : 0;
+    // Metatable changes alter lookup semantics for missing keys.
+    table->table.shape_version++;
+    table->table.version++;
 }
 
 ObjFunction* new_function() {
@@ -73,8 +116,17 @@ ObjFunction* new_function() {
     function->param_types_count = 0;
     function->param_names = NULL;
     function->param_names_count = 0;
+    function->named_param_ic_keys = NULL;
+    function->named_param_ic_values = NULL;
+    function->named_param_ic_capacity = 0;
+    function->named_param_ic_arity = -1;
+    function->return_type = TYPEHINT_ANY;
     function->is_self = 0;
     function->is_generator = 0;
+    function->tiny_inline_kind = TINY_INLINE_NONE;
+    function->exec_tier = FUNCTION_TIER0_INTERPRET;
+    function->tier1_patched = 0;
+    function->hot_count = 0;
     init_chunk(&function->chunk);
     return function;
 }
@@ -140,6 +192,7 @@ ObjThread* new_thread_with_caps(int stack_cap, int frame_cap, int handler_cap) {
     thread->has_exception = 0;
     thread->exception = NIL_VAL;
     thread->last_error = NIL_VAL;
+    thread->context_locals = NULL;
     thread->pending_set_local_count = 0;
     bytes_allocated += sizeof(Value) * (size_t)stack_cap;
     bytes_allocated += sizeof(CallFrame) * (size_t)frame_cap;
@@ -382,6 +435,12 @@ void mark_object(struct Obj* object) {
             if (function->chunk.get_table_ic_values != NULL && !IS_NIL(function->chunk.get_table_ic_values[i])) {
                 mark_value(function->chunk.get_table_ic_values[i]);
             }
+            if (function->chunk.call_ic_closures != NULL && function->chunk.call_ic_closures[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic_closures[i]);
+            }
+            if (function->chunk.call2_ic_closures != NULL && function->chunk.call2_ic_closures[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call2_ic_closures[i]);
+            }
         }
         // Mark default parameter values
         for (int i = 0; i < function->defaults_count; i++) {
@@ -414,6 +473,9 @@ void mark_object(struct Obj* object) {
         }
         if (!IS_NIL(thread->last_error)) {
             mark_value(thread->last_error);
+        }
+        if (thread->context_locals != NULL) {
+            mark_object((struct Obj*)thread->context_locals);
         }
         for (int i = 0; i < thread->frame_count; i++) {
             mark_object((struct Obj*)thread->frames[i].closure);
@@ -503,6 +565,12 @@ void free_object(struct Obj* object) {
             }
             if (function->param_names != NULL) {
                 free(function->param_names);
+            }
+            if (function->named_param_ic_keys != NULL) {
+                free(function->named_param_ic_keys);
+            }
+            if (function->named_param_ic_values != NULL) {
+                free(function->named_param_ic_values);
             }
             bytes_allocated -= sizeof(ObjFunction);
             free(function);

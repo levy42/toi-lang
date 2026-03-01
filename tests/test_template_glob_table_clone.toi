@@ -1,4 +1,5 @@
-from lib.test import assert_true
+from lib.test import assert_eq, assert_true
+
 
 template = import template
 time = import time
@@ -49,7 +50,6 @@ assert_true(conv_elapsed >= 0, "convenience benchmark clock went backwards")
 
 print string.format("template perf: compile=%fs render=%fs render_with_compile=%fs", compile_elapsed, render_elapsed, conv_elapsed)
 
-from lib.test import assert_eq, assert_true
 
 glob = import glob
 io = import io
@@ -117,7 +117,6 @@ safe_rmdir(ROOT)
 
 print "glob ok"
 
-from lib.test import assert_eq, assert_true
 
 table = import table
 

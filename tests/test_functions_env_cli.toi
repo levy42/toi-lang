@@ -1,4 +1,5 @@
-from lib.test import assert_eq
+from lib.test import assert_eq, assert_true
+
 
 string = import string
 
@@ -69,7 +70,6 @@ assert_eq(str(obj), "T")
 
 print "core ok"
 
-from lib.test import assert_eq
 
 os = import os
 
@@ -79,7 +79,6 @@ assert_eq(os.getenv("TOI__MISSING_ENV_TEST", 42), 42)
 
 print "os.getenv fallback ok"
 
-from lib.test import assert_true
 
 cli = import cli
 pigment = import cli.pigment

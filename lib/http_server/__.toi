@@ -393,20 +393,27 @@ fn dispatch_static_mounts(app, req)
   return nil
 
 fn _new_http_server_app(cls, opts = nil)
-  if opts == nil
-    opts = {}
+  actual_cls = cls
+  actual_opts = opts
+  if actual_opts == nil and type(actual_cls) == "table" and actual_cls.route == nil and actual_cls.get == nil and actual_cls.post == nil
+    actual_opts = actual_cls
+    actual_cls = HttpServer
+  if actual_opts == nil
+    actual_opts = {}
+  if type(actual_cls) != "table"
+    actual_cls = HttpServer
 
   app = {}
   app.routes = {}
   app.static_mounts = {}
-  app.host = opts.host or "0.0.0.0"
+  app.host = actual_opts.host or "0.0.0.0"
   app.port = 8080
-  if opts.port != nil
-    app.port = opts.port
+  if actual_opts.port != nil
+    app.port = actual_opts.port
   app.socket = socket.tcp()
-  app.ssl = opts.ssl
-  app.ssl_cert = opts.ssl_cert or opts.cert or opts.cert_path
-  app.ssl_key = opts.ssl_key or opts.key or opts.key_path
+  app.ssl = actual_opts.ssl
+  app.ssl_cert = actual_opts.ssl_cert or actual_opts.cert or actual_opts.cert_path
+  app.ssl_key = actual_opts.ssl_key or actual_opts.key or actual_opts.key_path
   if app.ssl
     if type(app.ssl_cert) != "string" or app.ssl_cert == ""
       error("http_server ssl=true requires ssl_cert")
@@ -415,31 +422,89 @@ fn _new_http_server_app(cls, opts = nil)
   app.running = false
   app.stop_requested = false
   app.stop_deadline = nil
-  app.stop_grace_seconds = opts.stop_grace_seconds or 0
+  app.stop_grace_seconds = actual_opts.stop_grace_seconds or 0
   app.force_close = false
   app.active_connections = 0
   app.request_count = 0
-  app.gc_every_requests = opts.gc_every_requests or 1000
-  app.trim_after_gc = opts.trim_after_gc
-  app.worker_threads = opts.worker_threads or 0
-  app.worker_select_timeout = opts.worker_select_timeout or 0.05
-  app.worker_queue_capacity = opts.worker_queue_capacity or 0
+  app.gc_every_requests = actual_opts.gc_every_requests or 1000
+  app.trim_after_gc = actual_opts.trim_after_gc
+  app.worker_threads = actual_opts.worker_threads or 0
+  app.worker_select_timeout = actual_opts.worker_select_timeout or 0.05
+  app.worker_queue_capacity = actual_opts.worker_queue_capacity or 0
+  app.keep_alive = actual_opts.keep_alive
+  if app.keep_alive == nil
+    app.keep_alive = true
   if app.trim_after_gc == nil
     app.trim_after_gc = true
-  app.normalize_response = opts.normalize_response or Response.normalize
+  app.normalize_response = actual_opts.normalize_response or Response.normalize
 
-  setmetatable(app, cls)
+  setmetatable(app, actual_cls)
 
-  app._base_handler = opts.handler
+  app._base_handler = actual_opts.handler
   if app._base_handler == nil
     app._base_handler = fn(req)
       return Route.dispatch(app, req)
 
   app.handler = fn(req)
+    if type(req) != "table"
+      req = {}
+    if type(req.method) != "string"
+      req.method = str(req.method or "GET")
+    if type(req.path) != "string"
+      req.path = str(req.path or "/")
+    if type(req.headers) != "table"
+      req.headers = {}
+    if type(req.query) != "string" and req.query != nil
+      req.query = str(req.query)
+    if type(req.body) != "string" and req.body != nil
+      req.body = str(req.body)
+
+    if req.path == "/favicon.ico"
+      return http.response(204, {["Content-Type"] = "image/x-icon", ["Content-Length"] = "0"}, "")
+
     static_res = dispatch_static_mounts(app, req)
     if static_res != nil
       return static_res
     return app._base_handler(req)
+
+  -- Expose stable instance callables to avoid bound-method argument quirks.
+  app.route = fn(method, path)
+    m = method
+    p = path
+    return fn(handler)
+      app.routes <+ Route.compile(m, p, handler)
+      return handler
+  app.get = fn(path)
+    return app.route("GET", path)
+  app.post = fn(path)
+    return app.route("POST", path)
+  app.put = fn(path)
+    return app.route("PUT", path)
+  app.patch = fn(path)
+    return app.route("PATCH", path)
+  app.delete = fn(path)
+    return app.route("DELETE", path)
+  app.serve_dir = fn(dir_path, path, gzip = false)
+    if type(dir_path) != "string" or dir_path == ""
+      error("serve_dir(dir_path, path, gzip=false): dir_path must be a non-empty string")
+
+    mount_path = normalize_mount_path(path)
+    gzip_enabled = gzip
+    gzip_mod = nil
+    if gzip_enabled
+      try
+        gzip_mod = import gzip
+      except e
+        gzip_mod = nil
+
+    app.static_mounts <+ {
+      dir_path = dir_path,
+      mount_path = mount_path,
+      gzip = gzip_enabled,
+      gzip_mod = gzip_mod
+    }
+
+    return app
 
   return app
 

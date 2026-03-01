@@ -20,6 +20,34 @@ typedef struct {
     size_t cap;
 } StrBuf;
 
+#define REGEX_CACHE_CAPACITY 128
+#define REGEX_MATCH_STACK_SLOTS 16
+
+typedef struct {
+    regex_t re;
+    char* pattern;
+    size_t pattern_len;
+    int cflags;
+    uint64_t stamp;
+    int used;
+} RegexCacheEntry;
+
+typedef struct {
+    RegexCacheEntry entries[REGEX_CACHE_CAPACITY];
+    uint64_t clock;
+    uint64_t hits;
+    uint64_t misses;
+    uint64_t evictions;
+    int initialized;
+} RegexCache;
+
+static RegexCache g_regex_cache;
+static ObjString* g_regex_module_name = NULL;
+static ObjString* g_key_start = NULL;
+static ObjString* g_key_end = NULL;
+static ObjString* g_key_match = NULL;
+static ObjString* g_key_groups = NULL;
+
 static int sb_init(StrBuf* sb, size_t cap) {
     sb->data = (char*)malloc(cap);
     if (sb->data == NULL) return 0;
@@ -69,13 +97,7 @@ static int parse_flags(Value v, int* cflags) {
     return 1;
 }
 
-static int compile_or_error(VM* vm, regex_t* re, ObjString* pattern, Value flags_val) {
-    int cflags = 0;
-    if (!parse_flags(flags_val, &cflags)) {
-        vm_runtime_error(vm, "regex flags must be string containing [i,n,m,x].");
-        return 0;
-    }
-
+static int compile_with_cflags_or_error(VM* vm, regex_t* re, ObjString* pattern, int cflags) {
     int rc = regcomp(re, pattern->chars, cflags);
     if (rc != 0) {
         char err[256];
@@ -86,9 +108,137 @@ static int compile_or_error(VM* vm, regex_t* re, ObjString* pattern, Value flags
     return 1;
 }
 
+static int compile_or_error(VM* vm, regex_t* re, ObjString* pattern, Value flags_val) {
+    int cflags = 0;
+    if (!parse_flags(flags_val, &cflags)) {
+        vm_runtime_error(vm, "regex flags must be string containing [i,n,m,x].");
+        return 0;
+    }
+    return compile_with_cflags_or_error(vm, re, pattern, cflags);
+}
+
+static void regex_cache_clear_entry(RegexCacheEntry* entry) {
+    if (!entry->used) return;
+    regfree(&entry->re);
+    free(entry->pattern);
+    entry->pattern = NULL;
+    entry->pattern_len = 0;
+    entry->stamp = 0;
+    entry->used = 0;
+}
+
+static void regex_cache_reset(void) {
+    for (int i = 0; i < REGEX_CACHE_CAPACITY; i++) {
+        regex_cache_clear_entry(&g_regex_cache.entries[i]);
+        g_regex_cache.entries[i].cflags = 0;
+    }
+    g_regex_cache.clock = 0;
+}
+
+static void regex_cache_guard_finalizer(void* ptr) {
+    regex_cache_reset();
+    free(ptr);
+}
+
+static void regex_cache_ensure_init(void) {
+    if (g_regex_cache.initialized) return;
+    memset(&g_regex_cache, 0, sizeof(g_regex_cache));
+    g_regex_cache.initialized = 1;
+}
+
+static RegexCacheEntry* regex_cache_find(ObjString* pattern, int cflags) {
+    for (int i = 0; i < REGEX_CACHE_CAPACITY; i++) {
+        RegexCacheEntry* entry = &g_regex_cache.entries[i];
+        if (!entry->used) continue;
+        if (entry->cflags != cflags) continue;
+        if (entry->pattern_len != (size_t)pattern->length) continue;
+        if (memcmp(entry->pattern, pattern->chars, entry->pattern_len) != 0) continue;
+        return entry;
+    }
+    return NULL;
+}
+
+static RegexCacheEntry* regex_cache_pick_victim(void) {
+    int victim = -1;
+    uint64_t oldest = 0;
+    for (int i = 0; i < REGEX_CACHE_CAPACITY; i++) {
+        RegexCacheEntry* entry = &g_regex_cache.entries[i];
+        if (!entry->used) return entry;
+        if (victim < 0 || entry->stamp < oldest) {
+            victim = i;
+            oldest = entry->stamp;
+        }
+    }
+    return &g_regex_cache.entries[victim];
+}
+
+static int regex_cache_get(VM* vm, ObjString* pattern, Value flags_val, regex_t** out_re) {
+    regex_cache_ensure_init();
+
+    int cflags = 0;
+    if (!parse_flags(flags_val, &cflags)) {
+        vm_runtime_error(vm, "regex flags must be string containing [i,n,m,x].");
+        return 0;
+    }
+
+    RegexCacheEntry* hit = regex_cache_find(pattern, cflags);
+    if (hit != NULL) {
+        g_regex_cache.hits++;
+        hit->stamp = ++g_regex_cache.clock;
+        *out_re = &hit->re;
+        return 1;
+    }
+    g_regex_cache.misses++;
+
+    RegexCacheEntry* entry = regex_cache_pick_victim();
+    if (entry->used) {
+        g_regex_cache.evictions++;
+    }
+    regex_cache_clear_entry(entry);
+
+    if (!compile_with_cflags_or_error(vm, &entry->re, pattern, cflags)) {
+        return 0;
+    }
+
+    entry->pattern = (char*)malloc((size_t)pattern->length + 1);
+    if (entry->pattern == NULL) {
+        regfree(&entry->re);
+        vm_runtime_error(vm, "regex cache out of memory.");
+        return 0;
+    }
+
+    memcpy(entry->pattern, pattern->chars, (size_t)pattern->length);
+    entry->pattern[(size_t)pattern->length] = '\0';
+    entry->pattern_len = (size_t)pattern->length;
+    entry->cflags = cflags;
+    entry->used = 1;
+    entry->stamp = ++g_regex_cache.clock;
+
+    *out_re = &entry->re;
+    return 1;
+}
+
+static regmatch_t* regex_alloc_match_buffer(VM* vm, size_t nmatch, regmatch_t* stack_buf) {
+    if (nmatch <= REGEX_MATCH_STACK_SLOTS) {
+        return stack_buf;
+    }
+    regmatch_t* heap = (regmatch_t*)malloc(sizeof(regmatch_t) * nmatch);
+    if (heap == NULL) {
+        vm_runtime_error(vm, "regex match buffer out of memory.");
+        return NULL;
+    }
+    return heap;
+}
+
+static void regex_free_match_buffer(regmatch_t* pm, regmatch_t* stack_buf) {
+    if (pm != stack_buf) {
+        free(pm);
+    }
+}
+
 static ObjTable* regex_lookup_metatable(VM* vm, const char* key, int key_len) {
     Value regex_module = NIL_VAL;
-    ObjString* module_name = copy_string("regex", 5);
+    ObjString* module_name = g_regex_module_name != NULL ? g_regex_module_name : copy_string("regex", 5);
     if (!table_get(&vm->modules, module_name, &regex_module) || !IS_TABLE(regex_module)) {
         if (!table_get(&vm->globals, module_name, &regex_module) || !IS_TABLE(regex_module)) {
             return NULL;
@@ -109,12 +259,12 @@ static ObjTable* build_match_result(VM* vm, ObjString* text, regmatch_t* pm, siz
 
     int s = (int)(base_pos + (size_t)pm[0].rm_so) + 1;
     int e = (int)(base_pos + (size_t)pm[0].rm_eo); // inclusive in 1-based terms
-    table_set(&out->table, copy_string("start", 5), NUMBER_VAL((double)s));
-    table_set(&out->table, copy_string("end", 3), NUMBER_VAL((double)e));
+    table_set(&out->table, g_key_start, NUMBER_VAL((double)s));
+    table_set(&out->table, g_key_end, NUMBER_VAL((double)e));
 
     int len = (int)(pm[0].rm_eo - pm[0].rm_so);
     ObjString* whole = copy_string(text->chars + base_pos + (size_t)pm[0].rm_so, len);
-    table_set(&out->table, copy_string("match", 5), OBJ_VAL(whole));
+    table_set(&out->table, g_key_match, OBJ_VAL(whole));
 
     ObjTable* groups = new_table();
     push(vm, OBJ_VAL(groups));
@@ -127,7 +277,7 @@ static ObjTable* build_match_result(VM* vm, ObjString* text, regmatch_t* pm, siz
         ObjString* g = copy_string(text->chars + base_pos + (size_t)pm[i].rm_so, glen);
         table_set_array(&groups->table, (int)i, OBJ_VAL(g));
     }
-    table_set(&out->table, copy_string("groups", 6), OBJ_VAL(groups));
+    table_set(&out->table, g_key_groups, OBJ_VAL(groups));
 
     pop(vm); // groups
     pop(vm); // out
@@ -167,15 +317,14 @@ static int regex_match(VM* vm, int arg_count, Value* args) {
     ObjString* text = GET_STRING(1);
     Value flags_val = (arg_count >= 3) ? args[2] : NIL_VAL;
 
-    regex_t re;
-    if (!compile_or_error(vm, &re, pattern, flags_val)) return 0;
+    regex_t* re = NULL;
+    if (!regex_cache_get(vm, pattern, flags_val, &re)) return 0;
 
     regmatch_t m;
-    int ok = (regexec(&re, text->chars, 1, &m, 0) == 0) &&
+    int ok = (regexec(re, text->chars, 1, &m, 0) == 0) &&
              m.rm_so == 0 &&
              m.rm_eo == text->length;
 
-    regfree(&re);
     RETURN_BOOL(ok);
 }
 
@@ -193,26 +342,21 @@ static int regex_search(VM* vm, int arg_count, Value* args) {
     ObjString* text = GET_STRING(1);
     Value flags_val = (arg_count >= 3) ? args[2] : NIL_VAL;
 
-    regex_t re;
-    if (!compile_or_error(vm, &re, pattern, flags_val)) return 0;
+    regex_t* re = NULL;
+    if (!regex_cache_get(vm, pattern, flags_val, &re)) return 0;
 
-    size_t nmatch = re.re_nsub + 1;
-    regmatch_t* pm = (regmatch_t*)malloc(sizeof(regmatch_t) * nmatch);
-    if (pm == NULL) {
-        regfree(&re);
-        vm_runtime_error(vm, "regex.search out of memory.");
-        return 0;
-    }
+    size_t nmatch = re->re_nsub + 1;
+    regmatch_t stack_buf[REGEX_MATCH_STACK_SLOTS];
+    regmatch_t* pm = regex_alloc_match_buffer(vm, nmatch, stack_buf);
+    if (pm == NULL) return 0;
 
-    if (regexec(&re, text->chars, nmatch, pm, 0) != 0) {
-        free(pm);
-        regfree(&re);
+    if (regexec(re, text->chars, nmatch, pm, 0) != 0) {
+        regex_free_match_buffer(pm, stack_buf);
         RETURN_NIL;
     }
     ObjTable* out = build_match_result(vm, text, pm, nmatch, 0);
 
-    free(pm);
-    regfree(&re);
+    regex_free_match_buffer(pm, stack_buf);
     RETURN_OBJ(out);
 }
 
@@ -239,12 +383,11 @@ static int regex_replace(VM* vm, int arg_count, Value* args) {
     ObjString* repl = GET_STRING(2);
     Value flags_val = (arg_count >= 5) ? args[4] : NIL_VAL;
 
-    regex_t re;
-    if (!compile_or_error(vm, &re, pattern, flags_val)) return 0;
+    regex_t* re = NULL;
+    if (!regex_cache_get(vm, pattern, flags_val, &re)) return 0;
 
     StrBuf out;
     if (!sb_init(&out, (size_t)text->length + 16)) {
-        regfree(&re);
         vm_runtime_error(vm, "regex.replace out of memory.");
         return 0;
     }
@@ -256,7 +399,7 @@ static int regex_replace(VM* vm, int arg_count, Value* args) {
 
     while (pos <= src_len) {
         regmatch_t m;
-        int rc = regexec(&re, src + pos, 1, &m, 0);
+        int rc = regexec(re, src + pos, 1, &m, 0);
         if (rc != 0 || m.rm_so < 0) break;
 
         size_t ms = pos + (size_t)m.rm_so;
@@ -264,7 +407,6 @@ static int regex_replace(VM* vm, int arg_count, Value* args) {
         if (!sb_append(&out, src + pos, ms - pos) ||
             !sb_append(&out, repl->chars, (size_t)repl->length)) {
             sb_free(&out);
-            regfree(&re);
             vm_runtime_error(vm, "regex.replace out of memory.");
             return 0;
         }
@@ -275,7 +417,6 @@ static int regex_replace(VM* vm, int arg_count, Value* args) {
         if (m.rm_so == m.rm_eo && pos < src_len) {
             if (!sb_append(&out, src + pos, 1)) {
                 sb_free(&out);
-                regfree(&re);
                 vm_runtime_error(vm, "regex.replace out of memory.");
                 return 0;
             }
@@ -285,15 +426,17 @@ static int regex_replace(VM* vm, int arg_count, Value* args) {
 
     if (pos < src_len && !sb_append(&out, src + pos, src_len - pos)) {
         sb_free(&out);
-        regfree(&re);
         vm_runtime_error(vm, "regex.replace out of memory.");
         return 0;
     }
 
-    regfree(&re);
-    ObjString* result = copy_string(out.data, (int)out.len);
-    sb_free(&out);
-    RETURN_OBJ(result);
+    if (!sb_ensure(&out, 1)) {
+        sb_free(&out);
+        vm_runtime_error(vm, "regex.replace out of memory.");
+        return 0;
+    }
+    out.data[out.len] = '\0';
+    RETURN_OBJ(take_string(out.data, (int)out.len));
 }
 
 // regex.split(pattern, text, maxsplit?, flags?) -> table
@@ -317,8 +460,8 @@ static int regex_split(VM* vm, int arg_count, Value* args) {
     ObjString* text = GET_STRING(1);
     Value flags_val = (arg_count >= 4) ? args[3] : NIL_VAL;
 
-    regex_t re;
-    if (!compile_or_error(vm, &re, pattern, flags_val)) return 0;
+    regex_t* re = NULL;
+    if (!regex_cache_get(vm, pattern, flags_val, &re)) return 0;
 
     ObjTable* out = new_table();
     push(vm, OBJ_VAL(out));
@@ -332,7 +475,7 @@ static int regex_split(VM* vm, int arg_count, Value* args) {
     while (pos <= src_len) {
         if (maxsplit > 0 && splits >= maxsplit) break;
         regmatch_t m;
-        int rc = regexec(&re, src + pos, 1, &m, 0);
+        int rc = regexec(re, src + pos, 1, &m, 0);
         if (rc != 0 || m.rm_so < 0) break;
 
         size_t ms = pos + (size_t)m.rm_so;
@@ -348,7 +491,6 @@ static int regex_split(VM* vm, int arg_count, Value* args) {
     ObjString* tail = copy_string(src + pos, (int)(src_len - pos));
     table_set_array(&out->table, idx, OBJ_VAL(tail));
 
-    regfree(&re);
     pop(vm); // out
     RETURN_OBJ(out);
 }
@@ -367,16 +509,13 @@ static int regex_finditer(VM* vm, int arg_count, Value* args) {
     ObjString* text = GET_STRING(1);
     Value flags_val = (arg_count >= 3) ? args[2] : NIL_VAL;
 
-    regex_t re;
-    if (!compile_or_error(vm, &re, pattern, flags_val)) return 0;
+    regex_t* re = NULL;
+    if (!regex_cache_get(vm, pattern, flags_val, &re)) return 0;
 
-    size_t nmatch = re.re_nsub + 1;
-    regmatch_t* pm = (regmatch_t*)malloc(sizeof(regmatch_t) * nmatch);
-    if (pm == NULL) {
-        regfree(&re);
-        vm_runtime_error(vm, "regex.finditer out of memory.");
-        return 0;
-    }
+    size_t nmatch = re->re_nsub + 1;
+    regmatch_t stack_buf[REGEX_MATCH_STACK_SLOTS];
+    regmatch_t* pm = regex_alloc_match_buffer(vm, nmatch, stack_buf);
+    if (pm == NULL) return 0;
 
     ObjTable* out = new_table();
     push(vm, OBJ_VAL(out));
@@ -385,7 +524,7 @@ static int regex_finditer(VM* vm, int arg_count, Value* args) {
     size_t text_len = (size_t)text->length;
     int idx = 1;
     while (pos <= text_len) {
-        int rc = regexec(&re, text->chars + pos, nmatch, pm, 0);
+        int rc = regexec(re, text->chars + pos, nmatch, pm, 0);
         if (rc != 0 || pm[0].rm_so < 0) break;
 
         ObjTable* match = build_match_result(vm, text, pm, nmatch, pos);
@@ -399,8 +538,7 @@ static int regex_finditer(VM* vm, int arg_count, Value* args) {
         }
     }
 
-    free(pm);
-    regfree(&re);
+    regex_free_match_buffer(pm, stack_buf);
     pop(vm); // out
     RETURN_OBJ(out);
 }
@@ -461,19 +599,17 @@ static int cregex_search(VM* vm, int arg_count, Value* args) {
     ObjString* text = GET_STRING(1);
 
     size_t nmatch = cr->re.re_nsub + 1;
-    regmatch_t* pm = (regmatch_t*)malloc(sizeof(regmatch_t) * nmatch);
-    if (pm == NULL) {
-        vm_runtime_error(vm, "compiled regex search out of memory.");
-        return 0;
-    }
+    regmatch_t stack_buf[REGEX_MATCH_STACK_SLOTS];
+    regmatch_t* pm = regex_alloc_match_buffer(vm, nmatch, stack_buf);
+    if (pm == NULL) return 0;
 
     if (regexec(&cr->re, text->chars, nmatch, pm, 0) != 0) {
-        free(pm);
+        regex_free_match_buffer(pm, stack_buf);
         RETURN_NIL;
     }
 
     ObjTable* out = build_match_result(vm, text, pm, nmatch, 0);
-    free(pm);
+    regex_free_match_buffer(pm, stack_buf);
     RETURN_OBJ(out);
 }
 
@@ -488,11 +624,9 @@ static int cregex_finditer(VM* vm, int arg_count, Value* args) {
     ObjString* text = GET_STRING(1);
 
     size_t nmatch = cr->re.re_nsub + 1;
-    regmatch_t* pm = (regmatch_t*)malloc(sizeof(regmatch_t) * nmatch);
-    if (pm == NULL) {
-        vm_runtime_error(vm, "compiled regex finditer out of memory.");
-        return 0;
-    }
+    regmatch_t stack_buf[REGEX_MATCH_STACK_SLOTS];
+    regmatch_t* pm = regex_alloc_match_buffer(vm, nmatch, stack_buf);
+    if (pm == NULL) return 0;
 
     ObjTable* out = new_table();
     push(vm, OBJ_VAL(out));
@@ -515,12 +649,37 @@ static int cregex_finditer(VM* vm, int arg_count, Value* args) {
         }
     }
 
-    free(pm);
+    regex_free_match_buffer(pm, stack_buf);
     pop(vm); // out
     RETURN_OBJ(out);
 }
 
+// regex.cache_stats() -> table
+static int regex_cache_stats(VM* vm, int arg_count, Value* args) {
+    (void)args;
+    ASSERT_ARGC_EQ(0);
+    regex_cache_ensure_init();
+
+    int size = 0;
+    for (int i = 0; i < REGEX_CACHE_CAPACITY; i++) {
+        if (g_regex_cache.entries[i].used) size++;
+    }
+
+    ObjTable* out = new_table();
+    push(vm, OBJ_VAL(out));
+    table_set(&out->table, copy_string("size", 4), NUMBER_VAL((double)size));
+    table_set(&out->table, copy_string("capacity", 8), NUMBER_VAL((double)REGEX_CACHE_CAPACITY));
+    table_set(&out->table, copy_string("hits", 4), NUMBER_VAL((double)g_regex_cache.hits));
+    table_set(&out->table, copy_string("misses", 6), NUMBER_VAL((double)g_regex_cache.misses));
+    table_set(&out->table, copy_string("evictions", 9), NUMBER_VAL((double)g_regex_cache.evictions));
+    pop(vm);
+    RETURN_OBJ(out);
+}
+
 void register_regex(VM* vm) {
+    regex_cache_ensure_init();
+    regex_cache_reset();
+
     const NativeReg regex_funcs[] = {
         {"match", regex_match},
         {"search", regex_search},
@@ -528,11 +687,60 @@ void register_regex(VM* vm) {
         {"split", regex_split},
         {"finditer", regex_finditer},
         {"compile", regex_compile},
+        {"cache_stats", regex_cache_stats},
         {NULL, NULL}
     };
     register_module(vm, "regex", regex_funcs);
 
     ObjTable* regex_module = AS_TABLE(peek(vm, 0));
+
+    if (g_regex_module_name == NULL) {
+        g_regex_module_name = copy_string("regex", 5);
+    }
+    if (g_key_start == NULL) g_key_start = copy_string("start", 5);
+    if (g_key_end == NULL) g_key_end = copy_string("end", 3);
+    if (g_key_match == NULL) g_key_match = copy_string("match", 5);
+    if (g_key_groups == NULL) g_key_groups = copy_string("groups", 6);
+
+    // Keep cached key strings strongly reachable via module table values.
+    ObjString* cache_name_key = copy_string("_cache_key_start", 16);
+    push(vm, OBJ_VAL(cache_name_key));
+    push(vm, OBJ_VAL(g_key_start));
+    table_set(&regex_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
+    cache_name_key = copy_string("_cache_key_end", 14);
+    push(vm, OBJ_VAL(cache_name_key));
+    push(vm, OBJ_VAL(g_key_end));
+    table_set(&regex_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
+    cache_name_key = copy_string("_cache_key_match", 16);
+    push(vm, OBJ_VAL(cache_name_key));
+    push(vm, OBJ_VAL(g_key_match));
+    table_set(&regex_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
+    cache_name_key = copy_string("_cache_key_groups", 17);
+    push(vm, OBJ_VAL(cache_name_key));
+    push(vm, OBJ_VAL(g_key_groups));
+    table_set(&regex_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+
+    void* cache_guard = malloc(1);
+    if (cache_guard != NULL) {
+        ObjUserdata* cache_guard_udata = new_userdata_with_finalizer(cache_guard, regex_cache_guard_finalizer);
+        ObjString* cache_guard_key = copy_string("_cache_guard", 12);
+        push(vm, OBJ_VAL(cache_guard_key));
+        push(vm, OBJ_VAL(cache_guard_udata));
+        table_set(&regex_module->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
+        pop(vm);
+        pop(vm);
+    }
 
     ObjTable* compiled_mt = new_table();
     push(vm, OBJ_VAL(compiled_mt));

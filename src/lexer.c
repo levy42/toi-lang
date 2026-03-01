@@ -341,6 +341,7 @@ restart:
             if (peek(lexer) == '.') { advance(lexer); return make_token(lexer, TOKEN_DOT_DOT); }
             return make_token(lexer, TOKEN_DOT);
         case '-':
+            if (peek(lexer) == '>') { advance(lexer); return make_token(lexer, TOKEN_ARROW); }
             if (peek(lexer) == '=') { advance(lexer); return make_token(lexer, TOKEN_MINUS_EQUAL); }
             return make_token(lexer, TOKEN_MINUS);
         case '+':

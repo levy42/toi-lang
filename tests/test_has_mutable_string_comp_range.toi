@@ -1,4 +1,5 @@
-from lib.test import assert_true
+from lib.test import assert_eq, assert_true, expect_error
+
 
 s = "hello world"
 assert_true(s has "hello")
@@ -29,7 +30,6 @@ assert_true(not (o has 1))
 assert_true(42 in o)
 assert_true(1 not in o)
 
-from lib.test import assert_eq, expect_error
 
 string = import string
 
@@ -60,7 +60,6 @@ assert_eq(msg, "string.mutable() expects string.")
 
 print "mutable string ok"
 
-from lib.test import assert_eq
 
 vals = {x for x in 1..9}
 assert_eq(#vals, 9)

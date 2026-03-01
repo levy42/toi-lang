@@ -150,7 +150,7 @@ static int is_keyword_or_builtin(const char* s, size_t len) {
         "break","continue","import","from","yield","gc","mem","__ctx","str",
         "tostring",
         "int","float","bool","type","len","table","string","math","os","io",
-        "http","json","template","coroutine","thread","socket", NULL
+        "http","json","template","coroutine","thread","socket","context", NULL
     };
     for (int i = 0; names[i] != NULL; i++) {
         if (strlen(names[i]) == len && memcmp(names[i], s, len) == 0) {

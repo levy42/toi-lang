@@ -67,6 +67,7 @@ typedef struct ObjString {
     int length;
     char* chars;
     uint32_t hash;
+    uint8_t hash_ready;
 } ObjString;
 
 typedef struct ObjThread {
@@ -91,6 +92,7 @@ typedef struct ObjThread {
     int has_exception;
     Value exception;
     Value last_error;
+    struct ObjTable* context_locals;
     int pending_set_local_count;
     int pending_set_local_slots[8];
     int pending_set_local_frames[8];
@@ -115,8 +117,43 @@ typedef enum {
     NATIVE_FAST_MATH_POW,
     NATIVE_FAST_MATH_FMOD,
     NATIVE_FAST_MATH_DEG,
-    NATIVE_FAST_MATH_RAD
+    NATIVE_FAST_MATH_RAD,
+    NATIVE_FAST_STR_UPPER,
+    NATIVE_FAST_STR_LOWER,
+    NATIVE_FAST_STR_FIND,
+    NATIVE_FAST_STR_REPLACE,
+    NATIVE_FAST_STR_JOIN,
+    NATIVE_FAST_STR_FORMAT,
+    NATIVE_FAST_CORE_NEXT,
+    NATIVE_FAST_CORE_MIN,
+    NATIVE_FAST_CORE_MAX,
+    NATIVE_FAST_CORE_SUM
 } NativeFastKind;
+
+typedef enum {
+    TINY_INLINE_NONE = 0,
+    TINY_INLINE_IADD2 = 1,
+    TINY_INLINE_FADD2 = 2,
+    TINY_INLINE_ISUB2 = 3,
+    TINY_INLINE_FSUB2 = 4,
+    TINY_INLINE_IMUL2 = 5,
+    TINY_INLINE_FMUL2 = 6,
+    TINY_INLINE_IDIV2 = 7,
+    TINY_INLINE_FDIV2 = 8,
+    TINY_INLINE_ADD2 = 9,
+    TINY_INLINE_SUB2 = 10,
+    TINY_INLINE_MUL2 = 11,
+    TINY_INLINE_DIV2 = 12,
+    TINY_INLINE_GT2 = 13,
+    TINY_INLINE_LT2 = 14,
+    TINY_INLINE_EQ2 = 15
+} TinyInlineKind;
+
+typedef enum {
+    FUNCTION_TIER0_INTERPRET = 0,
+    FUNCTION_TIER1_QUICKENED = 1,
+    FUNCTION_TIER2_JIT = 2
+} FunctionExecTier;
 
 typedef struct {
     struct Obj obj;
@@ -140,8 +177,17 @@ typedef struct {
     int param_types_count;
     ObjString** param_names;
     int param_names_count;
+    ObjString** named_param_ic_keys;
+    int* named_param_ic_values;
+    int named_param_ic_capacity;
+    int named_param_ic_arity;
+    uint8_t return_type;
     uint8_t is_self;
     uint8_t is_generator;
+    uint8_t tiny_inline_kind;
+    uint8_t exec_tier;
+    uint8_t tier1_patched;
+    uint32_t hot_count;
 } ObjFunction;
 
 typedef struct ObjUpvalue {
@@ -182,6 +228,7 @@ struct ObjTable {
     Table table;
     struct ObjTable* metatable;
     uint8_t is_module;
+    uint8_t no_metatable_fast;
 };
 
 #define OBJ_TYPE(value)   (AS_OBJ(value)->type)
@@ -213,7 +260,12 @@ static inline int is_obj_type(Value value, ObjType type) {
 
 ObjString* copy_string(const char* chars, int length);
 ObjString* take_string(char* chars, int length);
+ObjString* take_string_with_hash(char* chars, int length, uint32_t hash);
+ObjString* copy_string_unhashed(const char* chars, int length);
+ObjString* take_string_unhashed(char* chars, int length);
+uint32_t objstring_hash(ObjString* string);
 ObjTable* new_table();
+void objtable_set_metatable(ObjTable* table, ObjTable* metatable);
 ObjFunction* new_function();
 ObjNative* new_native(NativeFn function, ObjString* name);
 ObjUpvalue* new_upvalue(Value* slot);

@@ -1,4 +1,5 @@
-from lib.test import assert_eq
+from lib.test import assert_eq, assert_true
+
 
 fn add(a: int, b: int)
   return a + b
@@ -9,7 +10,6 @@ fn mulf(a: float, b: float)
 assert_eq(add(2, 3), 5)
 assert_eq(mulf(1.5, 2.0), 3.0)
 
-from lib.test import assert_eq, assert_true
 
 coroutine = import coroutine
 Scheduler = import scheduler
@@ -49,7 +49,6 @@ assert_eq(events[3], "a2")
 
 print "coroutine sleep ok"
 
-from lib.test import assert_eq, assert_true
 
 fn no_doc()
   return 1

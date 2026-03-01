@@ -1,4 +1,5 @@
-from lib.test import assert_eq, assert_true
+from lib.test import assert_eq, assert_true, expect_error
+
 
 url = import url
 http = import http
@@ -22,7 +23,6 @@ assert_true(err has "scheme")
 
 print "url + http.fetch ok"
 
-from lib.test import assert_eq, expect_error
 
 assert_eq(input(), nil)
 assert_eq(input("prompt> "), nil)
@@ -34,7 +34,6 @@ assert_eq(msg, "input() prompt must be string or nil.")
 
 print "input ok"
 
-from lib.test import assert_true
 
 words = {}
 for word in "dfb dbrg gbdg gbrgbdgr rbergb".split()

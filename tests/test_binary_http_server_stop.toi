@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 binary = import binary
 
 assert_true(binary.unpack(binary.pack(nil)) == nil)
@@ -54,7 +55,6 @@ assert_true(caught)
 
 print "binary ok"
 
-from lib.test import assert_eq, assert_true
 
 http_server = import lib.http_server
 thread = import thread

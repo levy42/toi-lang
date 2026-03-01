@@ -40,7 +40,7 @@ static int table_clone_recursive(VM* vm, ObjTable* source, int deep,
 
     ObjTable* clone = new_table();
     push(vm, OBJ_VAL(clone)); // GC protection while populating.
-    clone->metatable = source->metatable;
+    objtable_set_metatable(clone, source->metatable);
     clone->is_module = source->is_module;
 
     if (deep) {

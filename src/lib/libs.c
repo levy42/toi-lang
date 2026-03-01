@@ -21,6 +21,7 @@ void register_mmap(VM* vm);
 void register_poll(VM* vm);
 #endif
 void register_coroutine(VM* vm);
+void register_context(VM* vm);
 void register_string(VM* vm);
 void register_table(VM* vm);
 #ifndef TOI_WASM
@@ -82,6 +83,7 @@ static int load_mmap(VM* vm) { return load_registered_module(vm, "mmap", registe
 static int load_poll(VM* vm) { return load_registered_module(vm, "poll", register_poll); }
 #endif
 static int load_coroutine(VM* vm) { return load_registered_module(vm, "coroutine", register_coroutine); }
+static int load_context(VM* vm) { return load_registered_module(vm, "context", register_context); }
 static int load_string(VM* vm) { return load_registered_module(vm, "string", register_string); }
 static int load_table(VM* vm) { return load_registered_module(vm, "table", register_table); }
 #ifndef TOI_WASM
@@ -127,6 +129,7 @@ static const ModuleReg native_modules[] = {
     {"poll", load_poll},
 #endif
     {"coroutine", load_coroutine},
+    {"context", load_context},
     {"string", load_string},
     {"table", load_table},
 #ifndef TOI_WASM

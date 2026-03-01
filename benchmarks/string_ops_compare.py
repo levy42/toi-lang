@@ -37,11 +37,20 @@ def bench_substring_range():
     return total
 
 
+def bench_replace():
+    total = 0
+    for _ in range(ITER):
+        x = S.replace("o", "0")
+        total += len(x)
+    return total
+
+
 def main():
     print(f"Python string ops benchmark (iter={ITER})")
     bench("upper", bench_upper)
     bench("lower", bench_lower)
     bench("substring range", bench_substring_range)
+    bench("replace", bench_replace)
 
 
 if __name__ == "__main__":

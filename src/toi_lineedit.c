@@ -104,6 +104,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/ioctl.h>
 #include "toi_lineedit.h"
 

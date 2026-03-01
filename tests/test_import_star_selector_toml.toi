@@ -1,4 +1,5 @@
-from lib.test import assert_eq
+from lib.test import assert_eq, assert_true
+
 
 from tests.star_exports_mod import *
 
@@ -8,7 +9,6 @@ assert_eq(_hidden, "nope")
 
 print "import star ok"
 
-from lib.test import assert_eq, assert_true
 
 socket = import socket
 selector = import lib.selector
@@ -44,7 +44,6 @@ assert_true(s.close(s) == true)
 
 print "selector ok"
 
-from lib.test import assert_eq, assert_true
 
 toml = import toml
 table = import table

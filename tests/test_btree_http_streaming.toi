@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 btree = import btree
 os = import os
 
@@ -92,7 +93,6 @@ os.remove("tests/tmp_btree.db")
 
 print "btree ok"
 
-from lib.test import assert_eq, assert_true
 
 http_server = import lib.http_server
 

@@ -11,7 +11,7 @@ static int values_equal_simple_local(Value a, Value b) {
         if (IS_STRING(a) && IS_STRING(b)) {
             ObjString* sa = AS_STRING(a);
             ObjString* sb = AS_STRING(b);
-            return (sa->hash == sb->hash &&
+            return (objstring_hash(sa) == objstring_hash(sb) &&
                     sa->length == sb->length &&
                     memcmp(sa->chars, sb->chars, sa->length) == 0);
         }

@@ -13,7 +13,7 @@ static int is_self_callable_local(Value v) {
 static int objstring_equals_local(ObjString* a, ObjString* b) {
     if (a == b) return 1;
     if (a->length != b->length) return 0;
-    if (a->hash != b->hash) return 0;
+    if (objstring_hash(a) != objstring_hash(b)) return 0;
     return memcmp(a->chars, b->chars, (size_t)a->length) == 0;
 }
 
@@ -76,6 +76,15 @@ int vm_handle_op_append(VM* vm, CallFrame** frame, uint8_t** ip) {
     Value b = pop(vm);
     Value a = pop(vm);
 
+    if (IS_TABLE(a)) {
+        ObjTable* ta = AS_TABLE(a);
+        if (ta->no_metatable_fast) {
+            int index = append_to_table_local(ta, b);
+            push(vm, NUMBER_VAL((double)index));
+            return 1;
+        }
+    }
+
     Value method = get_metamethod(vm, a, "__append");
     if (!IS_NIL(method)) {
         push(vm, method);
@@ -106,42 +115,67 @@ int vm_handle_op_append(VM* vm, CallFrame** frame, uint8_t** ip) {
     return 0;
 }
 
-int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
-    Chunk* chunk = &(*frame)->closure->function->chunk;
-    int opcode_offset = (int)(*ip - chunk->code) - 1;
-    Value key = pop(vm);
-    Value table = pop(vm);
+int vm_handle_get_table_inner(
+    VM* vm, CallFrame** frame, uint8_t** ip, Chunk* chunk, int opcode_offset, Value table, Value key) {
     Value result = NIL_VAL;
 
     if (IS_TABLE(table)) {
         ObjTable* t = AS_TABLE(table);
         if (IS_STRING(key)) {
             ObjString* key_str = AS_STRING(key);
-            if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+            if (t->no_metatable_fast &&
+                opcode_offset >= 0 && opcode_offset < chunk->capacity &&
                 chunk->get_table_ic_tables != NULL &&
+                chunk->get_table_ic_slots != NULL &&
+                chunk->get_table_ic_versions != NULL &&
                 chunk->get_table_ic_tables[opcode_offset] == t &&
                 chunk->get_table_ic_keys[opcode_offset] == key_str &&
-                chunk->get_table_ic_versions[opcode_offset] == t->table.version) {
-                result = maybe_bind_self_local(table, chunk->get_table_ic_values[opcode_offset]);
-                push(vm, result);
-                maybe_collect_garbage(vm);
-                return 1;
+                chunk->get_table_ic_versions[opcode_offset] == t->table.shape_version) {
+                int slot = chunk->get_table_ic_slots[opcode_offset];
+                if (slot >= 0 && slot < t->table.capacity) {
+                    Entry* entry = &t->table.entries[slot];
+                    if (entry->key == key_str) {
+                        result = maybe_bind_self_local(table, entry->value);
+                        push(vm, result);
+                        maybe_collect_garbage(vm);
+                        return 1;
+                    }
+                }
             }
 
-            if (table_get(&t->table, key_str, &result)) {
-                // Cache only plain values; self-callable function values can
-                // have different runtime behavior due to binding.
-                if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+            // Cross-instance monomorphic slot cache:
+            // if this opcode repeatedly accesses the same key on many tables
+            // with identical layout, the slot is usually stable.
+            if (t->no_metatable_fast &&
+                opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+                chunk->get_table_ic_slots != NULL &&
+                chunk->get_table_ic_keys != NULL &&
+                chunk->get_table_ic_keys[opcode_offset] == key_str) {
+                int slot = chunk->get_table_ic_slots[opcode_offset];
+                if (slot >= 0 && slot < t->table.capacity) {
+                    Entry* entry = &t->table.entries[slot];
+                    if (entry->key == key_str) {
+                        result = maybe_bind_self_local(table, entry->value);
+                        push(vm, result);
+                        maybe_collect_garbage(vm);
+                        return 1;
+                    }
+                }
+            }
+
+            int slot = -1;
+            if (table_get_with_slot(&t->table, key_str, &result, &slot)) {
+                if (t->no_metatable_fast &&
+                    opcode_offset >= 0 && opcode_offset < chunk->capacity &&
                     chunk->get_table_ic_tables != NULL &&
-                    !is_self_callable_local(result) &&
-                    !IS_BOUND_METHOD(result)) {
+                    chunk->get_table_ic_slots != NULL) {
                     chunk->get_table_ic_tables[opcode_offset] = t;
                     chunk->get_table_ic_keys[opcode_offset] = key_str;
-                    chunk->get_table_ic_versions[opcode_offset] = t->table.version;
-                    chunk->get_table_ic_values[opcode_offset] = result;
+                    chunk->get_table_ic_slots[opcode_offset] = slot;
+                    chunk->get_table_ic_versions[opcode_offset] = t->table.shape_version;
                 }
                 result = maybe_bind_self_local(table, result);
-            } else if (t->metatable) {
+            } else if (!t->no_metatable_fast) {
                 int handled = handle_index_metamethod_local(vm, t, table, key, &result, frame, ip);
                 if (handled < 0) return 0;
                 if (handled == 0) result = NIL_VAL;
@@ -152,15 +186,17 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
             int idx = (int)num_key;
             if (num_key == (double)idx) {
                 if (idx < 0) {
-                    int len = 0;
-                    for (int i = 1; ; i++) {
-                        Value val;
-                        if (!table_get_array(&t->table, i, &val) || IS_NIL(val)) {
-                            len = i - 1;
-                            break;
-                        }
+                    idx = t->table.array_max + idx + 1;
+                }
+                if (idx >= 1 && idx <= t->table.array_capacity) {
+                    Value arr_val = t->table.array[idx - 1];
+                    if (!IS_NIL(arr_val)) {
+                        result = arr_val;
+                        result = maybe_bind_self_local(table, result);
+                        push(vm, result);
+                        maybe_collect_garbage(vm);
+                        return 1;
                     }
-                    idx = len + idx + 1;
                 }
                 if (table_get_array(&t->table, idx, &result)) {
                     result = maybe_bind_self_local(table, result);
@@ -174,7 +210,7 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
             if (table_get(&t->table, n_key, &result)) {
                 result = maybe_bind_self_local(table, result);
                 push(vm, result);
-            } else if (t->metatable) {
+            } else if (!t->no_metatable_fast) {
                 int handled = handle_index_metamethod_local(vm, t, table, key, &result, frame, ip);
                 if (handled < 0) return 0;
                 if (handled == 0) result = NIL_VAL;
@@ -212,6 +248,13 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
             ObjString* method_name = AS_STRING(key);
             Value cached_method = NIL_VAL;
             int use_cached = 0;
+            int invoke_next_offset = -1;
+            if (chunk != NULL &&
+                opcode_offset >= 0 &&
+                opcode_offset < chunk->count &&
+                chunk->code[opcode_offset] == OP_GET_FIELD_CONST) {
+                invoke_next_offset = opcode_offset + 2;
+            }
 
             if (objstring_equals_local(method_name, vm->str_upper_name)) {
                 if (!IS_NIL(vm->str_upper_fn)) {
@@ -223,9 +266,36 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
                     cached_method = vm->str_lower_fn;
                     use_cached = 1;
                 }
+            } else if (objstring_equals_local(method_name, vm->str_find_name)) {
+                if (!IS_NIL(vm->str_find_fn)) {
+                    cached_method = vm->str_find_fn;
+                    use_cached = 1;
+                }
+            } else if (objstring_equals_local(method_name, vm->str_replace_name)) {
+                if (!IS_NIL(vm->str_replace_fn)) {
+                    cached_method = vm->str_replace_fn;
+                    use_cached = 1;
+                }
             }
 
             if (use_cached) {
+                if (method_name == vm->str_find_name &&
+                    IS_NATIVE(cached_method) &&
+                    (NativeFastKind)AS_NATIVE_OBJ(cached_method)->fast_kind == NATIVE_FAST_STR_FIND &&
+                    invoke_next_offset >= 0 &&
+                    invoke_next_offset < chunk->count &&
+                    chunk->code[invoke_next_offset] == OP_CALL1) {
+                    chunk->code[invoke_next_offset] = OP_QINVOKE1_STR_FIND;
+                    push(vm, cached_method);
+                    push(vm, table);
+                    maybe_collect_garbage(vm);
+                    return 1;
+                }
+                if (invoke_next_offset >= 0 &&
+                    invoke_next_offset < chunk->count &&
+                    chunk->code[invoke_next_offset] == OP_QINVOKE1_STR_FIND) {
+                    chunk->code[invoke_next_offset] = OP_CALL1;
+                }
                 result = bind_self_for_meta_local(table, cached_method);
                 push(vm, result);
                 maybe_collect_garbage(vm);
@@ -243,12 +313,37 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
                     lookup_name = vm->str_upper_name;
                 } else if (objstring_equals_local(method_name, vm->str_lower_name)) {
                     lookup_name = vm->str_lower_name;
+                } else if (objstring_equals_local(method_name, vm->str_find_name)) {
+                    lookup_name = vm->str_find_name;
+                } else if (objstring_equals_local(method_name, vm->str_replace_name)) {
+                    lookup_name = vm->str_replace_name;
                 }
                 if (table_get(&AS_TABLE(string_module)->table, lookup_name, &result)) {
                     if (lookup_name == vm->str_upper_name) {
                         vm->str_upper_fn = result;
                     } else if (lookup_name == vm->str_lower_name) {
                         vm->str_lower_fn = result;
+                    } else if (lookup_name == vm->str_find_name) {
+                        vm->str_find_fn = result;
+                    } else if (lookup_name == vm->str_replace_name) {
+                        vm->str_replace_fn = result;
+                    }
+                    if (lookup_name == vm->str_find_name &&
+                        IS_NATIVE(result) &&
+                        (NativeFastKind)AS_NATIVE_OBJ(result)->fast_kind == NATIVE_FAST_STR_FIND &&
+                        invoke_next_offset >= 0 &&
+                        invoke_next_offset < chunk->count &&
+                        chunk->code[invoke_next_offset] == OP_CALL1) {
+                        chunk->code[invoke_next_offset] = OP_QINVOKE1_STR_FIND;
+                        push(vm, result);
+                        push(vm, table);
+                        maybe_collect_garbage(vm);
+                        return 1;
+                    }
+                    if (invoke_next_offset >= 0 &&
+                        invoke_next_offset < chunk->count &&
+                        chunk->code[invoke_next_offset] == OP_QINVOKE1_STR_FIND) {
+                        chunk->code[invoke_next_offset] = OP_CALL1;
                     }
                     result = bind_self_for_meta_local(table, result);
                 } else {
@@ -312,6 +407,68 @@ int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
     return 1;
 }
 
+int vm_handle_op_get_table(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 1;
+    Value key = pop(vm);
+    Value table = pop(vm);
+    return vm_handle_get_table_inner(vm, frame, ip, chunk, opcode_offset, table, key);
+}
+
+int vm_handle_op_get_table_num(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 1;
+    Value key = pop(vm);
+    Value table = pop(vm);
+
+    if (IS_TABLE(table) && IS_NUMBER(key)) {
+        ObjTable* t = AS_TABLE(table);
+        double num_key = AS_NUMBER(key);
+        int idx = (int)num_key;
+        Value result = NIL_VAL;
+        if (num_key == (double)idx) {
+            if (idx < 0) idx = t->table.array_max + idx + 1;
+            if (idx >= 1 && idx <= t->table.array_capacity) {
+                Value arr_val = t->table.array[idx - 1];
+                if (!IS_NIL(arr_val)) {
+                    push(vm, maybe_bind_self_local(table, arr_val));
+                    maybe_collect_garbage(vm);
+                    return 1;
+                }
+            }
+            if (table_get_array(&t->table, idx, &result)) {
+                push(vm, maybe_bind_self_local(table, result));
+                maybe_collect_garbage(vm);
+                return 1;
+            }
+        }
+        ObjString* n_key = number_key_string(num_key);
+        if (table_get(&t->table, n_key, &result)) {
+            push(vm, maybe_bind_self_local(table, result));
+        } else if (!t->no_metatable_fast) {
+            int handled = handle_index_metamethod_local(vm, t, table, key, &result, frame, ip);
+            if (handled < 0) return 0;
+            if (handled == 0) result = NIL_VAL;
+            push(vm, maybe_bind_self_local(table, result));
+        } else {
+            push(vm, NIL_VAL);
+        }
+        maybe_collect_garbage(vm);
+        return 1;
+    }
+
+    return vm_handle_get_table_inner(vm, frame, ip, chunk, opcode_offset, table, key);
+}
+
+int vm_handle_op_get_field_const(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 2;
+    uint8_t key_index = *(*ip)++;
+    Value key = chunk->constants.values[key_index];
+    Value table = pop(vm);
+    return vm_handle_get_table_inner(vm, frame, ip, chunk, opcode_offset, table, key);
+}
+
 static int handle_new_index_metamethod_local(
     VM* vm, ObjTable* t, Value table_val, Value key, Value value, CallFrame** frame, uint8_t** ip) {
     if (!t->metatable) return 0;
@@ -363,11 +520,8 @@ int vm_handle_op_get_meta_table(VM* vm) {
     return 1;
 }
 
-int vm_handle_op_set_table(VM* vm, CallFrame** frame, uint8_t** ip) {
-    Value value = pop(vm);
-    Value key = pop(vm);
-    Value table = pop(vm);
-
+static int vm_handle_set_table_inner(
+    VM* vm, CallFrame** frame, uint8_t** ip, Chunk* chunk, int opcode_offset, Value table, Value key, Value value, int keep_table) {
     if (!IS_TABLE(table)) {
         vm_runtime_error(vm, "Attempt to index non-table.");
         return 0;
@@ -375,15 +529,69 @@ int vm_handle_op_set_table(VM* vm, CallFrame** frame, uint8_t** ip) {
     ObjTable* t = AS_TABLE(table);
 
     if (IS_STRING(key)) {
+        ObjString* key_str = AS_STRING(key);
+        if (t->no_metatable_fast &&
+            opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+            chunk->set_table_ic_tables != NULL &&
+            chunk->set_table_ic_versions != NULL &&
+            chunk->set_table_ic_tables[opcode_offset] == t &&
+            chunk->set_table_ic_keys[opcode_offset] == key_str &&
+            chunk->set_table_ic_slots != NULL &&
+            chunk->set_table_ic_versions[opcode_offset] == t->table.shape_version) {
+            int slot = chunk->set_table_ic_slots[opcode_offset];
+            if (table_set_at_slot_or_empty(&t->table, slot, key_str, value)) {
+                chunk->set_table_ic_versions[opcode_offset] = t->table.shape_version;
+                push(vm, keep_table ? table : value);
+                maybe_collect_garbage(vm);
+                return 1;
+            }
+        }
+
+        // Cross-instance monomorphic slot cache for repeated key stores on
+        // many same-layout tables.
+        if (t->no_metatable_fast &&
+            opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+            chunk->set_table_ic_slots != NULL &&
+            chunk->set_table_ic_keys != NULL &&
+            chunk->set_table_ic_keys[opcode_offset] == key_str) {
+            int slot = chunk->set_table_ic_slots[opcode_offset];
+            if (table_set_at_slot_or_empty(&t->table, slot, key_str, value)) {
+                push(vm, keep_table ? table : value);
+                maybe_collect_garbage(vm);
+                return 1;
+            }
+        }
+
+        int did_direct_set = 0;
+        int slot = -1;
         Value dummy;
-        if (table_get(&t->table, AS_STRING(key), &dummy)) {
-            table_set(&t->table, AS_STRING(key), value);
-        } else if (t->metatable) {
+        if (table_get_with_slot(&t->table, key_str, &dummy, &slot)) {
+            if (!table_set_at_slot(&t->table, slot, key_str, value)) {
+                table_set_with_slot(&t->table, key_str, value, &slot);
+            }
+            did_direct_set = 1;
+        } else if (!t->no_metatable_fast) {
             int handled = handle_new_index_metamethod_local(vm, t, table, key, value, frame, ip);
             if (handled < 0) return 0;
-            if (handled == 0) table_set(&t->table, AS_STRING(key), value);
+            if (handled == 0) {
+                table_set_with_slot(&t->table, key_str, value, &slot);
+                did_direct_set = 1;
+            }
         } else {
-            table_set(&t->table, AS_STRING(key), value);
+            table_set_with_slot(&t->table, key_str, value, &slot);
+            did_direct_set = 1;
+        }
+
+        if (did_direct_set &&
+            t->no_metatable_fast &&
+            opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+            chunk->set_table_ic_tables != NULL) {
+            chunk->set_table_ic_tables[opcode_offset] = t;
+            chunk->set_table_ic_keys[opcode_offset] = key_str;
+            if (chunk->set_table_ic_slots != NULL) {
+                chunk->set_table_ic_slots[opcode_offset] = slot;
+            }
+            chunk->set_table_ic_versions[opcode_offset] = t->table.shape_version;
         }
     } else if (IS_NUMBER(key)) {
         double num_key = AS_NUMBER(key);
@@ -391,15 +599,7 @@ int vm_handle_op_set_table(VM* vm, CallFrame** frame, uint8_t** ip) {
         int is_array = 0;
         if (num_key == (double)idx) {
             if (idx < 0) {
-                int len = 0;
-                for (int i = 1; ; i++) {
-                    Value val;
-                    if (!table_get_array(&t->table, i, &val) || IS_NIL(val)) {
-                        len = i - 1;
-                        break;
-                    }
-                }
-                idx = len + idx + 1;
+                idx = t->table.array_max + idx + 1;
             }
             if (table_set_array(&t->table, idx, value)) {
                 is_array = 1;
@@ -411,7 +611,7 @@ int vm_handle_op_set_table(VM* vm, CallFrame** frame, uint8_t** ip) {
             Value dummy;
             if (table_get(&t->table, n_key, &dummy)) {
                 table_set(&t->table, n_key, value);
-            } else if (t->metatable) {
+            } else if (!t->no_metatable_fast) {
                 int handled = handle_new_index_metamethod_local(vm, t, table, key, value, frame, ip);
                 if (handled < 0) return 0;
                 if (handled == 0) table_set(&t->table, n_key, value);
@@ -421,12 +621,89 @@ int vm_handle_op_set_table(VM* vm, CallFrame** frame, uint8_t** ip) {
         }
     }
 
-    push(vm, value);
+    push(vm, keep_table ? table : value);
     maybe_collect_garbage(vm);
     return 1;
 }
 
-int vm_handle_op_delete_table(VM* vm) {
+int vm_handle_op_set_table(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 1;
+    Value value = pop(vm);
+    Value key = pop(vm);
+    Value table = pop(vm);
+    return vm_handle_set_table_inner(vm, frame, ip, chunk, opcode_offset, table, key, value, 0);
+}
+
+int vm_handle_op_set_table_keep(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 1;
+    Value value = pop(vm);
+    Value key = pop(vm);
+    Value table = pop(vm);
+    return vm_handle_set_table_inner(vm, frame, ip, chunk, opcode_offset, table, key, value, 1);
+}
+
+int vm_handle_op_set_table_num(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 1;
+    Value value = pop(vm);
+    Value key = pop(vm);
+    Value table = pop(vm);
+
+    if (IS_TABLE(table) && IS_NUMBER(key)) {
+        ObjTable* t = AS_TABLE(table);
+        double num_key = AS_NUMBER(key);
+        int idx = (int)num_key;
+        int is_array = 0;
+        if (num_key == (double)idx) {
+            if (idx < 0) idx = t->table.array_max + idx + 1;
+            if (table_set_array(&t->table, idx, value)) is_array = 1;
+        }
+        if (!is_array) {
+            ObjString* n_key = number_key_string(num_key);
+            Value dummy;
+            if (table_get(&t->table, n_key, &dummy)) {
+                table_set(&t->table, n_key, value);
+            } else if (!t->no_metatable_fast) {
+                int handled = handle_new_index_metamethod_local(vm, t, table, key, value, frame, ip);
+                if (handled < 0) return 0;
+                if (handled == 0) table_set(&t->table, n_key, value);
+            } else {
+                table_set(&t->table, n_key, value);
+            }
+        }
+        push(vm, value);
+        maybe_collect_garbage(vm);
+        return 1;
+    }
+
+    return vm_handle_set_table_inner(vm, frame, ip, chunk, opcode_offset, table, key, value, 0);
+}
+
+int vm_handle_op_set_field_const(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 2;
+    uint8_t key_index = *(*ip)++;
+    Value key = chunk->constants.values[key_index];
+    Value value = pop(vm);
+    Value table = pop(vm);
+    return vm_handle_set_table_inner(vm, frame, ip, chunk, opcode_offset, table, key, value, 0);
+}
+
+int vm_handle_op_set_field_const_keep(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 2;
+    uint8_t key_index = *(*ip)++;
+    Value key = chunk->constants.values[key_index];
+    Value value = pop(vm);
+    Value table = pop(vm);
+    return vm_handle_set_table_inner(vm, frame, ip, chunk, opcode_offset, table, key, value, 1);
+}
+
+int vm_handle_op_delete_table(VM* vm, CallFrame** frame, uint8_t** ip) {
+    Chunk* chunk = &(*frame)->closure->function->chunk;
+    int opcode_offset = (int)(*ip - chunk->code) - 1;
     Value key = pop(vm);
     Value table = pop(vm);
 
@@ -437,9 +714,47 @@ int vm_handle_op_delete_table(VM* vm) {
     ObjTable* t = AS_TABLE(table);
 
     if (IS_STRING(key)) {
-        if (!table_delete(&t->table, AS_STRING(key))) {
+        ObjString* key_str = AS_STRING(key);
+        if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+            chunk->delete_table_ic_tables != NULL &&
+            chunk->delete_table_ic_versions != NULL &&
+            chunk->delete_table_ic_tables[opcode_offset] == t &&
+            chunk->delete_table_ic_keys[opcode_offset] == key_str &&
+            chunk->delete_table_ic_slots != NULL &&
+            chunk->delete_table_ic_versions[opcode_offset] == t->table.shape_version) {
+            int slot = chunk->delete_table_ic_slots[opcode_offset];
+            if (table_delete_at_slot(&t->table, slot, key_str)) {
+                chunk->delete_table_ic_versions[opcode_offset] = t->table.shape_version;
+                return 1;
+            }
+        }
+        if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+            chunk->delete_table_ic_slots != NULL &&
+            chunk->delete_table_ic_keys != NULL &&
+            chunk->delete_table_ic_keys[opcode_offset] == key_str) {
+            int slot = chunk->delete_table_ic_slots[opcode_offset];
+            if (table_delete_at_slot(&t->table, slot, key_str)) {
+                return 1;
+            }
+        }
+        int slot = -1;
+        Value dummy;
+        if (!table_get_with_slot(&t->table, key_str, &dummy, &slot)) {
             vm_runtime_error(vm, "Key not found.");
             return 0;
+        }
+        if (!table_delete_at_slot(&t->table, slot, key_str)) {
+            vm_runtime_error(vm, "Key not found.");
+            return 0;
+        }
+        if (opcode_offset >= 0 && opcode_offset < chunk->capacity &&
+            chunk->delete_table_ic_tables != NULL) {
+            chunk->delete_table_ic_tables[opcode_offset] = t;
+            chunk->delete_table_ic_keys[opcode_offset] = key_str;
+            if (chunk->delete_table_ic_slots != NULL) {
+                chunk->delete_table_ic_slots[opcode_offset] = slot;
+            }
+            chunk->delete_table_ic_versions[opcode_offset] = t->table.shape_version;
         }
         return 1;
     }
@@ -449,15 +764,7 @@ int vm_handle_op_delete_table(VM* vm) {
         int idx = (int)num_key;
         if (num_key == (double)idx) {
             if (idx < 0) {
-                int len = 0;
-                for (int i = 1; ; i++) {
-                    Value val;
-                    if (!table_get_array(&t->table, i, &val) || IS_NIL(val)) {
-                        len = i - 1;
-                        break;
-                    }
-                }
-                idx = len + idx + 1;
+                idx = t->table.array_max + idx + 1;
             }
             if (idx >= 1 && idx <= t->table.array_capacity) {
                 if (!IS_NIL(t->table.array[idx - 1])) {

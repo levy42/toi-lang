@@ -1,5 +1,6 @@
 from lib.test import assert_true
 
+
 caught_int = false
 try
   int("nope")
@@ -32,7 +33,6 @@ assert_true(caught_error)
 
 print "try native exceptions ok"
 
-from lib.test import assert_eq, assert_true
 
 T = {check = fn(self, s) return s != nil}
 T.__index = T

@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 table = import table
 
 t = {}
@@ -31,7 +32,6 @@ assert_true(caught)
 
 print "append operator ok"
 
-from lib.test import assert_eq, assert_true
 
 socket = import socket
 thread = import thread

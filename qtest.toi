@@ -1,9 +1,3 @@
-import io, os
+from types import *
 
-fn a()
-  with io.open('.env') as f
-    for line in f
-      key, value = line.trim().split('=')
-      os.setenv(key.upper().trim(), value.trim())
-
-a()
+a = {a=4,b=5,c=6,d=7,e=8}

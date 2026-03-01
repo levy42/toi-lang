@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 mod = import tests.module_ctx.outer
 
 assert_eq(__name, "__main")
@@ -25,7 +26,6 @@ assert_eq(math.__main, false)
 
 print "module context ok"
 
-from lib.test import assert_eq
 
 math = import math
 
@@ -44,7 +44,6 @@ assert_eq(d3[2], -3)
 
 print "math.divmod ok"
 
-from lib.test import assert_eq, assert_true
 
 path = import path
 

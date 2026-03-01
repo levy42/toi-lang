@@ -858,6 +858,8 @@ static void for_statement() {
             mark_initialized_count(2);
             int var_slot = current->local_count - 2;
             int end_slot = current->local_count - 1;
+            set_local_type(var_slot, TYPEHINT_FLOAT);
+            set_local_type(end_slot, TYPEHINT_FLOAT);
 
             int loop_start = current_chunk()->count;
             loop.start = loop_start;

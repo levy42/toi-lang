@@ -103,9 +103,9 @@ Selector.wait = fn(sel, timeout = nil)
 
   for row in rows
     key = fd_key(row.fd)
-    if row["in"] and read_by_fd[key]
+    if (row["in"] or row["hup"] or row["err"] or row["nval"]) and read_by_fd[key]
       ready_read <+ read_by_fd[key]
-    if row["out"] and write_by_fd[key]
+    if (row["out"] or row["err"] or row["nval"]) and write_by_fd[key]
       ready_write <+ write_by_fd[key]
 
   return ready_read, ready_write

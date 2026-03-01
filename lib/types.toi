@@ -4,6 +4,7 @@ string_mod = import string
 
 Type = {}
 Type.__index = Type
+_RUN_CHECK_OPTS = nil
 
 fn type_new(self, obj)
   if obj == nil obj = {}
@@ -27,7 +28,9 @@ fn child_path(path, key)
   return path + "[" + str(key) + "]"
 
 fn wants_coerce(opts)
-  return opts != nil and opts.coerce
+  if opts != nil and opts.coerce
+    return true
+  return _RUN_CHECK_OPTS != nil and _RUN_CHECK_OPTS.coerce
 
 fn parse_bool(value)
   if istype(value, 'boolean') return true, value
@@ -62,7 +65,18 @@ fn run_check(type_def, value, path = nil, opts = nil)
   if checker == nil
     fail(path, "Invalid type definition: missing check()")
 
-  return checker(value, path, opts)
+  prev_opts = _RUN_CHECK_OPTS
+  if opts != nil
+    _RUN_CHECK_OPTS = opts
+  out = nil
+  try
+    -- Bound methods in current runtime are unstable with a 3rd positional arg.
+    out = checker(value, path)
+  except e
+    _RUN_CHECK_OPTS = prev_opts
+    error(e)
+  _RUN_CHECK_OPTS = prev_opts
+  return out
 
 fn resolve_field_default(type_def)
   if type(type_def) != "table"

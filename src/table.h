@@ -16,7 +16,9 @@ typedef struct {
     int count;
     int capacity;
     Entry* entries;
+    Entry inline_entries[8];
     uint32_t version;
+    uint32_t shape_version;
     
     // Array optimization
     Value* array;
@@ -27,7 +29,12 @@ typedef struct {
 void init_table(Table* table);
 void free_table(Table* table);
 int table_get(Table* table, struct ObjString* key, Value* value);
+int table_get_with_slot(Table* table, struct ObjString* key, Value* value, int* slot_index);
+int table_set_with_slot(Table* table, struct ObjString* key, Value value, int* slot_index);
+int table_set_at_slot(Table* table, int slot_index, struct ObjString* key, Value value);
+int table_set_at_slot_or_empty(Table* table, int slot_index, struct ObjString* key, Value value);
 int table_set(Table* table, struct ObjString* key, Value value);
+int table_delete_at_slot(Table* table, int slot_index, struct ObjString* key);
 int table_delete(Table* table, struct ObjString* key);
 void table_add_all(Table* from, Table* to);
 // ObjString* table_find_string(Table* table, const char* chars, int length, uint32_t hash); // Needs full definition?

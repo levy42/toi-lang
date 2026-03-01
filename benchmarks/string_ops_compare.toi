@@ -32,7 +32,15 @@ fn bench_substring_range()
     sum = sum + #x
   return sum
 
+fn bench_replace()
+  sum = 0
+  for i in 1..ITER
+    x = S.replace("o", "0")
+    sum = sum + #x
+  return sum
+
 print string.format("Toi string ops benchmark (iter=%d)", ITER)
 bench("upper", bench_upper)
 bench("lower", bench_lower)
 bench("substring range", bench_substring_range)
+bench("replace", bench_replace)

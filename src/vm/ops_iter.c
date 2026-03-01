@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "ops_iter.h"
 
 static int is_callable_value_local(Value value) {
@@ -202,23 +204,107 @@ int vm_handle_op_slice(VM* vm, CallFrame** frame, uint8_t** ip) {
     start = NUMBER_VAL((double)start_int);
     end = NUMBER_VAL((double)end_int);
 
-    Value slice_fn = NIL_VAL;
-    if (!table_get(&vm->globals, vm->slice_name, &slice_fn)) {
-        vm_runtime_error(vm, "slice not found.");
-        return 0;
+    if (IS_STRING(obj)) {
+        ObjString* s = AS_STRING(obj);
+        int s0 = start_int;
+        int e0 = end_int;
+        if (s0 < 1) s0 = 1;
+        if (e0 > s->length) e0 = s->length;
+
+        if (step_num > 0) {
+            if (s0 > e0) {
+                push(vm, OBJ_VAL(copy_string("", 0)));
+                return 1;
+            }
+            if (step_num == 1.0 && s0 == 1 && e0 == s->length) {
+                push(vm, obj);
+                return 1;
+            }
+            if (step_num == 1.0) {
+                int out_len = e0 - s0 + 1;
+                push(vm, OBJ_VAL(copy_string_unhashed(s->chars + (s0 - 1), out_len)));
+                return 1;
+            }
+            int out_len = 0;
+            for (int i = s0; i <= e0; i += (int)step_num) out_len++;
+            char* buf = (char*)malloc((size_t)out_len + 1);
+            if (buf == NULL) {
+                vm_runtime_error(vm, "slice() out of memory");
+                return 0;
+            }
+            int w = 0;
+            for (int i = s0; i <= e0; i += (int)step_num) {
+                buf[w++] = s->chars[i - 1];
+            }
+            buf[w] = '\0';
+            push(vm, OBJ_VAL(take_string_unhashed(buf, w)));
+            return 1;
+        }
+
+        if (s0 < e0) {
+            push(vm, OBJ_VAL(copy_string("", 0)));
+            return 1;
+        }
+        int out_len = 0;
+        for (int i = s0; i >= e0; i += (int)step_num) out_len++;
+        char* buf = (char*)malloc((size_t)out_len + 1);
+        if (buf == NULL) {
+            vm_runtime_error(vm, "slice() out of memory");
+            return 0;
+        }
+        int w = 0;
+        for (int i = s0; i >= e0; i += (int)step_num) {
+            buf[w++] = s->chars[i - 1];
+        }
+        buf[w] = '\0';
+        push(vm, OBJ_VAL(take_string_unhashed(buf, w)));
+        return 1;
     }
 
-    push(vm, slice_fn);
-    push(vm, obj);
-    push(vm, start);
-    push(vm, end);
-    push(vm, step);
+    if (IS_TABLE(obj)) {
+        ObjTable* src = AS_TABLE(obj);
+        ObjTable* result = new_table();
+        push(vm, OBJ_VAL(result)); // result on stack
 
-    if (IS_NATIVE(slice_fn) || IS_CLOSURE(slice_fn)) {
-        if (!call_value(vm, slice_fn, 4, frame, ip)) return 0;
-    } else {
-        vm_runtime_error(vm, "Can only call functions.");
-        return 0;
+        int out_index = 1;
+        if (step_num > 0) {
+            for (int i = start_int; i <= end_int; i += (int)step_num) {
+                Value val = NIL_VAL;
+                int found = 0;
+                if (i >= 1 && table_get_array(&src->table, i, &val) && !IS_NIL(val)) {
+                    found = 1;
+                } else {
+                    ObjString* key = number_key_string((double)i);
+                    if (table_get(&src->table, key, &val) && !IS_NIL(val)) {
+                        found = 1;
+                    }
+                }
+                if (found) {
+                    table_set_array(&result->table, out_index, val);
+                }
+                out_index++;
+            }
+        } else {
+            for (int i = start_int; i >= end_int; i += (int)step_num) {
+                Value val = NIL_VAL;
+                int found = 0;
+                if (i >= 1 && table_get_array(&src->table, i, &val) && !IS_NIL(val)) {
+                    found = 1;
+                } else {
+                    ObjString* key = number_key_string((double)i);
+                    if (table_get(&src->table, key, &val) && !IS_NIL(val)) {
+                        found = 1;
+                    }
+                }
+                if (found) {
+                    table_set_array(&result->table, out_index, val);
+                }
+                out_index++;
+            }
+        }
+        return 1;
     }
-    return 1;
+
+    vm_runtime_error(vm, "slice expects table or string.");
+    return 0;
 }

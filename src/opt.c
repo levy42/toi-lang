@@ -6,7 +6,7 @@
 #include "value.h"
 #include "object.h"
 
-static int instr_length(Chunk* chunk, int offset) {
+int chunk_instr_length(Chunk* chunk, int offset) {
     uint8_t op = chunk->code[offset];
     switch (op) {
         case OP_CONSTANT:
@@ -35,10 +35,17 @@ static int instr_length(Chunk* chunk, int offset) {
         case OP_CALL_EXPAND:
         case OP_IMPORT:
         case OP_BUILD_STRING:
+        case OP_GET_FIELD_CONST:
+        case OP_SET_FIELD_CONST:
+        case OP_SET_FIELD_CONST_KEEP:
             return 2;
         case OP_CALL0:
         case OP_CALL1:
         case OP_CALL2:
+        case OP_QCALL2:
+        case OP_QCALL1_STR_FIND:
+        case OP_QINVOKE1_STR_FIND:
+        case OP_SET_TABLE_KEEP:
             return 1;
         case OP_TRY:
             return 7;
@@ -49,8 +56,13 @@ static int instr_length(Chunk* chunk, int offset) {
         case OP_MOD_LOCAL_CONST:
         case OP_UNPACK:
             return 3;
+        case OP_INVOKE:
+        case OP_QINVOKE0_STR_LOWER:
+            return 3;
         case OP_FOR_PREP:
         case OP_FOR_LOOP:
+        case OP_QFOR_PREP_NUM:
+        case OP_QFOR_LOOP_NUM:
             return 5;
         case OP_JUMP:
         case OP_JUMP_IF_FALSE:
@@ -187,15 +199,17 @@ void optimize_chunk(Chunk* chunk) {
             if (fin_jump && fin_target >= 0 && fin_target < old_count) {
                 is_jump_target[fin_target] = 1;
             }
-        } else if (op == OP_FOR_PREP || op == OP_FOR_LOOP) {
+        } else if (op == OP_FOR_PREP || op == OP_FOR_LOOP ||
+                   op == OP_QFOR_PREP_NUM || op == OP_QFOR_LOOP_NUM) {
             uint16_t jump = (uint16_t)(chunk->code[i + 3] << 8);
             jump |= chunk->code[i + 4];
-            int target = (op == OP_FOR_PREP) ? (i + 5 + (int)jump) : (i + 5 - (int)jump);
+            int is_forward = (op == OP_FOR_PREP || op == OP_QFOR_PREP_NUM);
+            int target = is_forward ? (i + 5 + (int)jump) : (i + 5 - (int)jump);
             if (target >= 0 && target < old_count) {
                 is_jump_target[target] = 1;
             }
         }
-        i += instr_length(chunk, i);
+        i += chunk_instr_length(chunk, i);
     }
 
     int* old_to_new = (int*)malloc(sizeof(int) * old_count);
@@ -221,7 +235,7 @@ void optimize_chunk(Chunk* chunk) {
         {
             uint8_t op = chunk->code[i];
             if (is_safe_single_producer(op)) {
-                int len1 = instr_length(chunk, i);
+                int len1 = chunk_instr_length(chunk, i);
                 int next = i + len1;
                 if (next < old_count && chunk->code[next] == OP_POP) {
                     int next2 = next + 1;
@@ -396,7 +410,7 @@ void optimize_chunk(Chunk* chunk) {
             continue;
         }
 
-        int len = instr_length(chunk, i);
+        int len = chunk_instr_length(chunk, i);
         int line = chunk->lines[i];
         if (chunk->code[i] == OP_JUMP || chunk->code[i] == OP_JUMP_IF_FALSE ||
             chunk->code[i] == OP_JUMP_IF_TRUE || chunk->code[i] == OP_LOOP) {
@@ -419,12 +433,13 @@ void optimize_chunk(Chunk* chunk) {
             fin_jump |= chunk->code[i + 6];
             patches[patch_count++] = (JumpPatch){i, new_count, 1, ex_jump, 3};
             patches[patch_count++] = (JumpPatch){i, new_count, 1, fin_jump, 5};
-        } else if (chunk->code[i] == OP_FOR_PREP || chunk->code[i] == OP_FOR_LOOP) {
+        } else if (chunk->code[i] == OP_FOR_PREP || chunk->code[i] == OP_FOR_LOOP ||
+                   chunk->code[i] == OP_QFOR_PREP_NUM || chunk->code[i] == OP_QFOR_LOOP_NUM) {
             if (patch_count + 1 > patch_capacity) {
                 patch_capacity = patch_capacity < 8 ? 8 : patch_capacity * 2;
                 patches = (JumpPatch*)realloc(patches, sizeof(JumpPatch) * patch_capacity);
             }
-            int sign = (chunk->code[i] == OP_FOR_LOOP) ? -1 : 1;
+            int sign = (chunk->code[i] == OP_FOR_LOOP || chunk->code[i] == OP_QFOR_LOOP_NUM) ? -1 : 1;
             uint16_t jump = (uint16_t)(chunk->code[i + 3] << 8);
             jump |= chunk->code[i + 4];
             patches[patch_count++] = (JumpPatch){i, new_count, sign, jump, 3};
@@ -437,17 +452,18 @@ void optimize_chunk(Chunk* chunk) {
 
     for (int i = 0; i < patch_count; i++) {
         JumpPatch p = patches[i];
-        int instr_len = instr_length(chunk, p.old_offset);
+        int instr_len = chunk_instr_length(chunk, p.old_offset);
         int old_target = p.old_offset + instr_len + p.sign * (int)p.old_jump;
         if (old_target < 0 || old_target >= old_count) continue;
         int new_target = old_to_new[old_target];
         if (new_target < 0) continue;
-        int new_instr_len = instr_length(chunk, p.old_offset);
+        int new_instr_len = chunk_instr_length(chunk, p.old_offset);
         int new_jump = p.sign * (new_target - (p.new_offset + new_instr_len));
         if (chunk->code[p.old_offset] == OP_TRY) {
             new_code[p.new_offset + p.write_offset] = (uint8_t)((new_jump >> 8) & 0xff);
             new_code[p.new_offset + p.write_offset + 1] = (uint8_t)(new_jump & 0xff);
-        } else if (chunk->code[p.old_offset] == OP_FOR_PREP || chunk->code[p.old_offset] == OP_FOR_LOOP) {
+        } else if (chunk->code[p.old_offset] == OP_FOR_PREP || chunk->code[p.old_offset] == OP_FOR_LOOP ||
+                   chunk->code[p.old_offset] == OP_QFOR_PREP_NUM || chunk->code[p.old_offset] == OP_QFOR_LOOP_NUM) {
             new_code[p.new_offset + 3] = (uint8_t)((new_jump >> 8) & 0xff);
             new_code[p.new_offset + 4] = (uint8_t)(new_jump & 0xff);
         } else {
@@ -469,6 +485,8 @@ void optimize_chunk(Chunk* chunk) {
     free(chunk->get_table_ic_tables);
     free(chunk->get_table_ic_keys);
     free(chunk->get_table_ic_values);
+    free(chunk->call2_ic_closures);
+    free(chunk->call2_ic_kind);
     chunk->code = new_code;
     chunk->lines = new_lines;
     chunk->count = new_count;
@@ -480,6 +498,8 @@ void optimize_chunk(Chunk* chunk) {
     chunk->get_table_ic_tables = NULL;
     chunk->get_table_ic_keys = NULL;
     chunk->get_table_ic_values = NULL;
+    chunk->call2_ic_closures = NULL;
+    chunk->call2_ic_kind = NULL;
     if (new_capacity > 0) {
         chunk->global_ic_versions = (uint32_t*)malloc(sizeof(uint32_t) * new_capacity);
         chunk->global_ic_names = (ObjString**)malloc(sizeof(ObjString*) * new_capacity);
@@ -488,6 +508,8 @@ void optimize_chunk(Chunk* chunk) {
         chunk->get_table_ic_tables = (ObjTable**)malloc(sizeof(ObjTable*) * new_capacity);
         chunk->get_table_ic_keys = (ObjString**)malloc(sizeof(ObjString*) * new_capacity);
         chunk->get_table_ic_values = (Value*)malloc(sizeof(Value) * new_capacity);
+        chunk->call2_ic_closures = (ObjClosure**)malloc(sizeof(ObjClosure*) * new_capacity);
+        chunk->call2_ic_kind = (uint8_t*)malloc(sizeof(uint8_t) * new_capacity);
         for (int i = 0; i < new_capacity; i++) {
             chunk->global_ic_versions[i] = 0;
             chunk->global_ic_names[i] = NULL;
@@ -496,6 +518,8 @@ void optimize_chunk(Chunk* chunk) {
             chunk->get_table_ic_tables[i] = NULL;
             chunk->get_table_ic_keys[i] = NULL;
             chunk->get_table_ic_values[i] = NIL_VAL;
+            chunk->call2_ic_closures[i] = NULL;
+            chunk->call2_ic_kind[i] = 0;
         }
     }
 }

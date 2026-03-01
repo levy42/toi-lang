@@ -1,4 +1,5 @@
-from lib.test import assert_eq
+from lib.test import assert_eq, assert_true
+
 
 global coroutine = import coroutine
 
@@ -33,7 +34,6 @@ assert_eq(sum, 30)
 
 print "yield generators ok"
 
-from lib.test import assert_eq, assert_true
 
 loadtest = import lib.loadtest
 

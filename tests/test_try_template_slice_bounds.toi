@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 flag = 0
 try
   flag = 1
@@ -67,7 +68,6 @@ except ex
   forwarded_kind = ex.kind
 assert_eq(forwarded_kind, "other")
 
-from lib.test import assert_eq, assert_true
 
 template = import template
 global table = import table
@@ -85,7 +85,6 @@ assert_eq(out, "Hello Toi! ok [a][b][c]")
 
 print "template implicit ctx ok"
 
-from lib.test import assert_eq
 
 s = "hello"
 i = 1

@@ -31,30 +31,27 @@ fn bench_string_concat()
   return #s
 
 fn bench_string_ops()
-  s = "the quick brown fox jumps over the lazy dog"
   total = 0
-  -- x = ""
-  -- y = ""
-  -- z = ""
   for i in 1..20000
+    s = f"the quick brown fox jumps over the lazy dog {i}"
     x = s.upper()
-    -- y = x.lower()
-    -- z = y[5..19]
-    -- total = total + #z
+    y = x.lower()
+    z = y[5..19]
+    total = total + #z
   return total
 
 fn bench_table()
   t = {0}
   table.reserve(t, 200000)
   for i in 1..200000
-    table.push(t, i * 2)
+    t <+ i * 2
   sum = 0
   for i in 1..200000
-    sum = sum + t[i]
+    sum += t[i]
   return sum
 
 fn bench_calls()
-  fn add(a, b)
+  fn add(a: int, b: int)
     return a + b
   acc = 0
   for i in 1..2000000

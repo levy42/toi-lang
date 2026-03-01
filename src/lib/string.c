@@ -5,6 +5,12 @@
 #include <stdint.h>
 #include <limits.h>
 #include <stdbool.h>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 #include "libs.h"
 #include "../object.h"
 #include "../value.h"
@@ -40,6 +46,14 @@ static ObjTable* string_lookup_metatable(VM* vm, const char* key, int key_len) {
         return NULL;
     }
     return AS_TABLE(mt);
+}
+
+static void set_string_fast_kind(ObjTable* string_module, const char* name, NativeFastKind kind) {
+    Value fn = NIL_VAL;
+    ObjString* key = copy_string(name, (int)strlen(name));
+    if (table_get(&string_module->table, key, &fn) && IS_NATIVE(fn)) {
+        AS_NATIVE_OBJ(fn)->fast_kind = (uint8_t)kind;
+    }
 }
 
 static MutableString* mutable_string_from_userdata(VM* vm, ObjUserdata* udata) {
@@ -174,12 +188,136 @@ static int string_sub(VM* vm, int arg_count, Value* args) {
     if (len <= 0) {
         RETURN_STRING("", 0);
     }
+    if (start == 0 && end == str->length) {
+        RETURN_OBJ(str);
+    }
 
-    char* sub = (char*)malloc(len + 1);
+    char* sub = (char*)malloc((size_t)len + 1);
+    if (sub == NULL) {
+        vm_runtime_error(vm, "string.sub(): out of memory.");
+        return 0;
+    }
     memcpy(sub, str->chars + start, len);
     sub[len] = '\0';
 
     RETURN_OBJ(take_string(sub, len));
+}
+
+static inline char ascii_lower_char(unsigned char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : (char)c;
+}
+
+static inline char ascii_upper_char(unsigned char c) {
+    return (c >= 'a' && c <= 'z') ? (char)(c - ('a' - 'A')) : (char)c;
+}
+
+static int ascii_upper_simd_copy(const char* src, char* dst, int len) {
+    int changed = 0;
+    int i = 0;
+#if defined(__ARM_NEON)
+    const uint8x16_t va = vdupq_n_u8((uint8_t)'a');
+    const uint8x16_t vz = vdupq_n_u8((uint8_t)'z');
+    const uint8x16_t vdelta = vdupq_n_u8((uint8_t)('a' - 'A'));
+    for (; i + 16 <= len; i += 16) {
+        uint8x16_t v = vld1q_u8((const uint8_t*)(src + i));
+        uint8x16_t ge = vcgeq_u8(v, va);
+        uint8x16_t le = vcleq_u8(v, vz);
+        uint8x16_t mask = vandq_u8(ge, le);
+        uint8x16_t delta = vandq_u8(mask, vdelta);
+        uint8x16_t out = vsubq_u8(v, delta);
+        vst1q_u8((uint8_t*)(dst + i), out);
+        if (vmaxvq_u8(mask) != 0) changed = 1;
+    }
+#elif defined(__SSE2__)
+    const __m128i va = _mm_set1_epi8('a' - 1);
+    const __m128i vz = _mm_set1_epi8('z' + 1);
+    const __m128i vdelta = _mm_set1_epi8((char)('a' - 'A'));
+    for (; i + 16 <= len; i += 16) {
+        __m128i v = _mm_loadu_si128((const __m128i*)(src + i));
+        __m128i ge = _mm_cmpgt_epi8(v, va);
+        __m128i lt = _mm_cmplt_epi8(v, vz);
+        __m128i mask = _mm_and_si128(ge, lt);
+        __m128i delta = _mm_and_si128(mask, vdelta);
+        __m128i out = _mm_sub_epi8(v, delta);
+        _mm_storeu_si128((__m128i*)(dst + i), out);
+        if (_mm_movemask_epi8(mask) != 0) changed = 1;
+    }
+#endif
+    for (; i < len; i++) {
+        unsigned char c = (unsigned char)src[i];
+        char uppered = ascii_upper_char(c);
+        dst[i] = uppered;
+        if (uppered != src[i]) changed = 1;
+    }
+    return changed;
+}
+
+static int ascii_lower_simd_copy(const char* src, char* dst, int len) {
+    int changed = 0;
+    int i = 0;
+#if defined(__ARM_NEON)
+    const uint8x16_t va = vdupq_n_u8((uint8_t)'A');
+    const uint8x16_t vz = vdupq_n_u8((uint8_t)'Z');
+    const uint8x16_t vdelta = vdupq_n_u8((uint8_t)('a' - 'A'));
+    for (; i + 16 <= len; i += 16) {
+        uint8x16_t v = vld1q_u8((const uint8_t*)(src + i));
+        uint8x16_t ge = vcgeq_u8(v, va);
+        uint8x16_t le = vcleq_u8(v, vz);
+        uint8x16_t mask = vandq_u8(ge, le);
+        uint8x16_t delta = vandq_u8(mask, vdelta);
+        uint8x16_t out = vaddq_u8(v, delta);
+        vst1q_u8((uint8_t*)(dst + i), out);
+        if (vmaxvq_u8(mask) != 0) changed = 1;
+    }
+#elif defined(__SSE2__)
+    const __m128i va = _mm_set1_epi8('A' - 1);
+    const __m128i vz = _mm_set1_epi8('Z' + 1);
+    const __m128i vdelta = _mm_set1_epi8((char)('a' - 'A'));
+    for (; i + 16 <= len; i += 16) {
+        __m128i v = _mm_loadu_si128((const __m128i*)(src + i));
+        __m128i ge = _mm_cmpgt_epi8(v, va);
+        __m128i lt = _mm_cmplt_epi8(v, vz);
+        __m128i mask = _mm_and_si128(ge, lt);
+        __m128i delta = _mm_and_si128(mask, vdelta);
+        __m128i out = _mm_add_epi8(v, delta);
+        _mm_storeu_si128((__m128i*)(dst + i), out);
+        if (_mm_movemask_epi8(mask) != 0) changed = 1;
+    }
+#endif
+    for (; i < len; i++) {
+        unsigned char c = (unsigned char)src[i];
+        char lowered = ascii_lower_char(c);
+        dst[i] = lowered;
+        if (lowered != src[i]) changed = 1;
+    }
+    return changed;
+}
+
+static void replace_char_all_simd_copy(const char* src, char* dst, int len, char old_c, char repl_c) {
+    int i = 0;
+#if defined(__ARM_NEON)
+    uint8x16_t vold = vdupq_n_u8((uint8_t)old_c);
+    uint8x16_t vrepl = vdupq_n_u8((uint8_t)repl_c);
+    for (; i + 16 <= len; i += 16) {
+        uint8x16_t v = vld1q_u8((const uint8_t*)(src + i));
+        uint8x16_t mask = vceqq_u8(v, vold);
+        uint8x16_t out = vbslq_u8(mask, vrepl, v);
+        vst1q_u8((uint8_t*)(dst + i), out);
+    }
+#elif defined(__SSE2__)
+    __m128i vold = _mm_set1_epi8(old_c);
+    __m128i vrepl = _mm_set1_epi8(repl_c);
+    for (; i + 16 <= len; i += 16) {
+        __m128i v = _mm_loadu_si128((const __m128i*)(src + i));
+        __m128i mask = _mm_cmpeq_epi8(v, vold);
+        __m128i out = _mm_or_si128(_mm_and_si128(mask, vrepl), _mm_andnot_si128(mask, v));
+        _mm_storeu_si128((__m128i*)(dst + i), out);
+    }
+#endif
+    for (; i < len; i++) {
+        char ch = src[i];
+        dst[i] = (ch == old_c) ? repl_c : ch;
+    }
 }
 
 static int string_lower(VM* vm, int arg_count, Value* args) {
@@ -189,11 +327,35 @@ static int string_lower(VM* vm, int arg_count, Value* args) {
     ObjString* str = GET_STRING(0);
     const char* chars = str->chars;
     int len = str->length;
-    char* buf = NULL;
+    if (len >= 64) {
+        int all_ascii = 1;
+        for (int i = 0; i < len; i++) {
+            if (((unsigned char)chars[i]) & 0x80u) {
+                all_ascii = 0;
+                break;
+            }
+        }
 
+        if (all_ascii) {
+            char* out = (char*)malloc((size_t)len + 1);
+            if (out == NULL) {
+                vm_runtime_error(vm, "string.lower(): out of memory.");
+                return 0;
+            }
+            int changed = ascii_lower_simd_copy(chars, out, len);
+            if (!changed) {
+                free(out);
+                RETURN_OBJ(str);
+            }
+            out[len] = '\0';
+            RETURN_OBJ(take_string_unhashed(out, len));
+        }
+    }
+
+    char* buf = NULL;
     for (int i = 0; i < len; i++) {
         unsigned char c = (unsigned char)chars[i];
-        char lowered = (char)tolower((int)c);
+        char lowered = c < 128 ? ascii_lower_char(c) : (char)tolower((int)c);
         if (buf != NULL) {
             buf[i] = lowered;
             continue;
@@ -214,7 +376,7 @@ static int string_lower(VM* vm, int arg_count, Value* args) {
     }
 
     buf[len] = '\0';
-    RETURN_OBJ(take_string(buf, len));
+    RETURN_OBJ(take_string_unhashed(buf, len));
 }
 
 static int string_upper(VM* vm, int arg_count, Value* args) {
@@ -224,11 +386,36 @@ static int string_upper(VM* vm, int arg_count, Value* args) {
     ObjString* str = GET_STRING(0);
     const char* chars = str->chars;
     int len = str->length;
+    if (len >= 64) {
+        int all_ascii = 1;
+        for (int i = 0; i < len; i++) {
+            if (((unsigned char)chars[i]) & 0x80u) {
+                all_ascii = 0;
+                break;
+            }
+        }
+
+        if (all_ascii) {
+            char* out = (char*)malloc((size_t)len + 1);
+            if (out == NULL) {
+                vm_runtime_error(vm, "string.upper(): out of memory.");
+                return 0;
+            }
+            int changed = ascii_upper_simd_copy(chars, out, len);
+            if (!changed) {
+                free(out);
+                RETURN_OBJ(str);
+            }
+            out[len] = '\0';
+            RETURN_OBJ(take_string_unhashed(out, len));
+        }
+    }
+
     char* buf = NULL;
 
     for (int i = 0; i < len; i++) {
         unsigned char c = (unsigned char)chars[i];
-        char uppered = (char)toupper((int)c);
+        char uppered = c < 128 ? ascii_upper_char(c) : (char)toupper((int)c);
         if (buf != NULL) {
             buf[i] = uppered;
             continue;
@@ -249,7 +436,7 @@ static int string_upper(VM* vm, int arg_count, Value* args) {
     }
 
     buf[len] = '\0';
-    RETURN_OBJ(take_string(buf, len));
+    RETURN_OBJ(take_string_unhashed(buf, len));
 }
 
 static int string_char(VM* vm, int arg_count, Value* args) {
@@ -281,6 +468,24 @@ static int string_byte(VM* vm, int arg_count, Value* args) {
     RETURN_NUMBER((double)(unsigned char)str->chars[index]);
 }
 
+static const char* string_find_bytes(const char* hay, int hay_len, const char* needle, int needle_len) {
+    if (needle_len == 0) return hay;
+    if (needle_len > hay_len) return NULL;
+    if (needle_len == 1) {
+        return (const char*)memchr(hay, (unsigned char)needle[0], (size_t)hay_len);
+    }
+
+    const unsigned char first = (unsigned char)needle[0];
+    int last = hay_len - needle_len;
+    for (int i = 0; i <= last; i++) {
+        if ((unsigned char)hay[i] != first) continue;
+        if (memcmp(hay + i + 1, needle + 1, (size_t)(needle_len - 1)) == 0) {
+            return hay + i;
+        }
+    }
+    return NULL;
+}
+
 static int string_find(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_GE(2);
     ASSERT_STRING(0);
@@ -294,8 +499,15 @@ static int string_find(VM* vm, int arg_count, Value* args) {
     start--; // 1-based to 0-based
     if (start < 0) start = 0;
     if (start >= str->length) { RETURN_NIL; }
+    if (pattern->length == 0) {
+        int pos = start + 1;
+        push(vm, NUMBER_VAL(pos));
+        push(vm, NUMBER_VAL(pos - 1));
+        return 2;
+    }
 
-    char* found = strstr(str->chars + start, pattern->chars);
+    int hay_len = str->length - start;
+    const char* found = string_find_bytes(str->chars + start, hay_len, pattern->chars, pattern->length);
     if (found == NULL) { RETURN_NIL; }
 
     int pos = (int)(found - str->chars) + 1; // Back to 1-based
@@ -733,6 +945,163 @@ static int string_reverse(VM* vm, int arg_count, Value* args) {
     RETURN_OBJ(take_string(buf, str->length));
 }
 
+static int string_replace(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(3);
+    if (arg_count > 4) {
+        vm_runtime_error(vm, "Expected at most 4 arguments but got %d.", arg_count);
+        return 0;
+    }
+    ASSERT_STRING(0);
+    ASSERT_STRING(1);
+    ASSERT_STRING(2);
+
+    ObjString* str = GET_STRING(0);
+    ObjString* old = GET_STRING(1);
+    ObjString* repl = GET_STRING(2);
+    int limit = -1;
+    if (arg_count == 4) {
+        ASSERT_NUMBER(3);
+        limit = (int)GET_NUMBER(3);
+    }
+
+    if (limit == 0) {
+        RETURN_OBJ(str);
+    }
+
+    const char* src = str->chars;
+    int src_len = str->length;
+    const char* old_chars = old->chars;
+    int old_len = old->length;
+    const char* repl_chars = repl->chars;
+    int repl_len = repl->length;
+
+    if (old_len == 0) {
+        int inserts = src_len + 1;
+        if (limit > 0 && limit < inserts) {
+            inserts = limit;
+        }
+
+        int out_len = src_len + (inserts * repl_len);
+        char* out = (char*)malloc((size_t)out_len + 1);
+        if (out == NULL) {
+            vm_runtime_error(vm, "string.replace(): out of memory.");
+            return 0;
+        }
+
+        int w = 0;
+        int i = 0;
+        while (i < src_len) {
+            if (inserts > 0) {
+                memcpy(out + w, repl_chars, (size_t)repl_len);
+                w += repl_len;
+                inserts--;
+            }
+            out[w++] = src[i++];
+        }
+        if (inserts > 0) {
+            memcpy(out + w, repl_chars, (size_t)repl_len);
+            w += repl_len;
+        }
+        out[w] = '\0';
+        RETURN_OBJ(take_string(out, w));
+    }
+
+    if (old_len == 1 && repl_len == 1) {
+        char old_c = old_chars[0];
+        char repl_c = repl_chars[0];
+        if (old_c == repl_c) {
+            RETURN_OBJ(str);
+        }
+
+        int first = -1;
+        for (int i = 0; i < src_len; i++) {
+            if (src[i] == old_c) {
+                first = i;
+                break;
+            }
+        }
+        if (first < 0) {
+            RETURN_OBJ(str);
+        }
+
+        char* out = (char*)malloc((size_t)src_len + 1);
+        if (out == NULL) {
+            vm_runtime_error(vm, "string.replace(): out of memory.");
+            return 0;
+        }
+
+        if (limit < 0 && src_len >= 64) {
+            replace_char_all_simd_copy(src, out, src_len, old_c, repl_c);
+        } else {
+            int replaced = 0;
+            for (int i = 0; i < src_len; i++) {
+                char ch = src[i];
+                if (ch == old_c && (limit < 0 || replaced < limit)) {
+                    ch = repl_c;
+                    replaced++;
+                }
+                out[i] = ch;
+            }
+            out[src_len] = '\0';
+            RETURN_OBJ(take_string_unhashed(out, src_len));
+        }
+        out[src_len] = '\0';
+        RETURN_OBJ(take_string_unhashed(out, src_len));
+    }
+
+    int matches = 0;
+    const char* p = src;
+    int remaining = src_len;
+    while ((p = string_find_bytes(p, remaining, old_chars, old_len)) != NULL) {
+        matches++;
+        if (limit > 0 && matches >= limit) {
+            break;
+        }
+        int consumed = (int)((p - src) + old_len);
+        p += old_len;
+        remaining = src_len - consumed;
+    }
+
+    if (matches == 0) {
+        RETURN_OBJ(str);
+    }
+
+    int out_len = src_len + (repl_len - old_len) * matches;
+    char* out = (char*)malloc((size_t)out_len + 1);
+    if (out == NULL) {
+        vm_runtime_error(vm, "string.replace(): out of memory.");
+        return 0;
+    }
+
+    int w = 0;
+    const char* cur = src;
+    int replaced = 0;
+    int cur_remaining = src_len;
+    while ((p = string_find_bytes(cur, cur_remaining, old_chars, old_len)) != NULL) {
+        int chunk = (int)(p - cur);
+        if (chunk > 0) {
+            memcpy(out + w, cur, (size_t)chunk);
+            w += chunk;
+        }
+        memcpy(out + w, repl_chars, (size_t)repl_len);
+        w += repl_len;
+        cur = p + old_len;
+        replaced++;
+        cur_remaining = src_len - (int)(cur - src);
+        if (limit > 0 && replaced >= limit) {
+            break;
+        }
+    }
+
+    int tail = (int)(src + src_len - cur);
+    if (tail > 0) {
+        memcpy(out + w, cur, (size_t)tail);
+        w += tail;
+    }
+    out[w] = '\0';
+    RETURN_OBJ(take_string(out, w));
+}
+
 static int string_join(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(2);
     ASSERT_STRING(0);
@@ -1079,6 +1448,7 @@ void register_string(VM* vm) {
         {"is_space", string_is_space},
         {"escape_html", string_escape_html},
         {"split", string_split},
+        {"replace", string_replace},
         {"join", string_join},
         {"rep", string_rep},
 
@@ -1088,6 +1458,12 @@ void register_string(VM* vm) {
     };
     register_module(vm, "string", string_funcs);
     ObjTable* string_module_table = AS_TABLE(peek(vm, 0));
+    set_string_fast_kind(string_module_table, "upper", NATIVE_FAST_STR_UPPER);
+    set_string_fast_kind(string_module_table, "lower", NATIVE_FAST_STR_LOWER);
+    set_string_fast_kind(string_module_table, "find", NATIVE_FAST_STR_FIND);
+    set_string_fast_kind(string_module_table, "replace", NATIVE_FAST_STR_REPLACE);
+    set_string_fast_kind(string_module_table, "join", NATIVE_FAST_STR_JOIN);
+    set_string_fast_kind(string_module_table, "format", NATIVE_FAST_STR_FORMAT);
 
     // Add __call metamethod to string module to act as str() constructor
     Value string_module = peek(vm, 0); // peek string module
@@ -1101,7 +1477,7 @@ void register_string(VM* vm) {
     pop(vm); // native
     pop(vm); // call_str
 
-    AS_TABLE(string_module)->metatable = mt;
+    objtable_set_metatable(AS_TABLE(string_module), mt);
 
     // Alias 'str' global to 'string' module so str(x) works via __call
     ObjString* str_name = copy_string("str", 3);

@@ -13,6 +13,13 @@ except e
   thread = nil
 
 Transport = {}
+DEBUG_ERRORS = os.getenv("HTTP_SERVER_DEBUG_ERRORS") == "1"
+
+fn safe_str(v)
+  try
+    return str(v)
+  except e
+    return "<unprintable>"
 
 fn set_nonblocking(sock)
   sock.settimeout(sock, 0)
@@ -68,16 +75,58 @@ fn is_closed_error(err)
   lower_err = string.lower(str(err))
   return lower_err.find("closed") != nil or lower_err.find("reset") != nil
 
+fn is_wouldblock_error(err)
+  if err == nil
+    return false
+  lower_err = string.lower(str(err))
+  return lower_err.find("would block") != nil or lower_err.find("temporarily unavailable") != nil or lower_err.find("again") != nil
+
+fn safe_selector_wait(sel, timeout)
+  try
+    ready_read, ready_write = selector.wait(sel, timeout)
+    return {read = ready_read, write = ready_write}, nil
+  except e
+    return nil, safe_str(e)
+
+fn safe_accept(server_sock)
+  try
+    client, ip_or_err = server_sock.accept(server_sock)
+    if client == nil
+      if ip_or_err == nil
+        return nil, nil, "would block"
+      return nil, nil, safe_str(ip_or_err)
+    return client, ip_or_err, nil
+  except e
+    return nil, nil, safe_str(e)
+
+fn accept_pending_connections(server, on_client)
+  accepted = 0
+  while true
+    client, ip, accept_err = safe_accept(server.socket)
+    if accept_err != nil
+      if is_timeout_error(accept_err) or is_wouldblock_error(accept_err)
+        return accepted
+      if DEBUG_ERRORS
+        print("[http_server] accept error: " + safe_str(accept_err))
+      return accepted
+    if client == nil
+      return accepted
+    accepted = accepted + 1
+    on_client(client)
+
 fn upsert_response_header(raw_response, key, value)
   if type(raw_response) != "string"
     return raw_response
 
-  head_i, head_j = string.find(raw_response, "\r\n\r\n")
+  head_i = string.find(raw_response, "\r\n\r\n")
   if head_i == nil
     return raw_response
 
+  -- string.find returns the start index in this runtime, so compute the
+  -- separator end explicitly instead of relying on a second return value.
+  head_end = head_i + 3
   head = string.sub(raw_response, 1, head_i - 1)
-  body = string.sub(raw_response, head_j + 1)
+  body = string.sub(raw_response, head_end + 1)
   lines = string.split(head, "\r\n")
   if #lines == 0
     return raw_response
@@ -89,7 +138,7 @@ fn upsert_response_header(raw_response, key, value)
   if #lines > 1
     for i in 2..#lines
       line = lines[i]
-      colon_i, colon_j = string.find(line, ":")
+      colon_i = string.find(line, ":")
       if colon_i and colon_i > 1
         name = string.lower(string.trim(string.sub(line, 1, colon_i - 1)))
         if name == target
@@ -107,9 +156,12 @@ fn upsert_response_header(raw_response, key, value)
   return table.concat(out, "\r\n") + "\r\n\r\n" + body
 
 fn decorate_connection_headers(raw_response, keep_alive)
-  if keep_alive
-    return upsert_response_header(raw_response, "Connection", "keep-alive")
-  return upsert_response_header(raw_response, "Connection", "close")
+  try
+    if keep_alive
+      return upsert_response_header(raw_response, "Connection", "keep-alive")
+    return upsert_response_header(raw_response, "Connection", "close")
+  except e
+    return raw_response
 
 fn is_stream_response(res)
   return type(res) == "table" and res.__stream and res.stream != nil
@@ -143,7 +195,7 @@ fn send_chunked_stream(server, client, stream_res, keep_alive)
   return true
 
 fn should_force_close(server)
-  if server == nil
+  if server == nil or type(server) != "table"
     return false
   if not server.stop_requested
     return false
@@ -169,6 +221,8 @@ fn recv_next_chunk(server, client)
   while true
     if should_force_close(server)
       return nil, "closed", client
+    if client == nil or type(client) != "userdata"
+      return nil, "closed", client
 
     data, err = client.recv(client, 4096)
     if data and string.len(data) > 0
@@ -177,7 +231,7 @@ fn recv_next_chunk(server, client)
     if data and string.len(data) == 0
       return nil, "closed", client
 
-    if err and is_timeout_error(err)
+    if err and (is_timeout_error(err) or is_wouldblock_error(err))
       client = coroutine.yield("read")
       continue
 
@@ -186,9 +240,16 @@ fn recv_next_chunk(server, client)
     return nil, err, client
 
 fn handle_connection(server, client)
+  if type(server) != "table" and type(client) == "table"
+    tmp = server
+    server = client
+    client = tmp
+  if type(server) != "table" or type(client) != "userdata"
+    return "done"
   server.active_connections = server.active_connections + 1
   buffer = ""
   keep_running = true
+  fallback_500 = "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 21\r\n\r\nInternal Server Error"
 
   while keep_running
     if should_force_close(server)
@@ -222,7 +283,10 @@ fn handle_connection(server, client)
 
     if bad_request
       server.request_count = server.request_count + 1
-      client.send(client, decorate_connection_headers(http.response(400, nil, "Bad Request"), false))
+      try
+        client.send(client, decorate_connection_headers(http.response(400, nil, "Bad Request"), false))
+      except e
+        nil
       break
 
     consumed = req.consumed
@@ -234,22 +298,47 @@ fn handle_connection(server, client)
       buffer = ""
 
     request_keep_alive = keep_alive_request(req)
+    if not server.keep_alive
+      request_keep_alive = false
     if server.stop_requested or should_force_close(server)
       request_keep_alive = false
 
+    phase = "handler"
     try
       res = server.handler(req)
       server.request_count = server.request_count + 1
+      phase = "normalize"
       normalized = server.normalize_response(res)
       if is_stream_response(normalized)
+        phase = "stream_send"
         ok = send_chunked_stream(server, client, normalized, request_keep_alive)
         if not ok
           break
       else
-        client.send(client, decorate_connection_headers(normalized, request_keep_alive))
+        phase = "send"
+        payload = normalized
+        try
+          payload = decorate_connection_headers(normalized, request_keep_alive)
+        except e
+          payload = normalized
+        client.send(client, payload)
     except e
       server.request_count = server.request_count + 1
-      client.send(client, decorate_connection_headers(http.response(500, nil, "Internal Server Error"), false))
+      if DEBUG_ERRORS
+        p = req != nil ? (req.path or "?") : "?"
+        m = req != nil ? (req.method or "?") : "?"
+        print("[http_server] request error (" + phase + ") " + safe_str(m) + " " + safe_str(p) + ": " + safe_str(e))
+      payload = fallback_500
+      try
+        candidate = decorate_connection_headers(http.response(500, nil, "Internal Server Error"), false)
+        if type(candidate) == "string"
+          payload = candidate
+      except inner
+        payload = fallback_500
+      try
+        client.send(client, payload)
+      except send_err
+        nil
       break
 
     if not request_keep_alive
@@ -291,7 +380,6 @@ fn run_maintenance(server, last_gc_req)
 
 fn run_coroutine_loop(server)
   connections = {}
-  sel = selector.new()
   last_gc_req = 0
 
   accepting = true
@@ -309,42 +397,38 @@ fn run_coroutine_loop(server)
     if not accepting and #connections == 0
       break
 
-    selector.clear(sel)
+    accepted = 0
     if accepting
-      selector.add_read(sel, server.socket)
+      accepted = accept_pending_connections(server, fn(client)
+        tls_err = ensure_tls_on_client(server, client)
+        if tls_err != true
+          try
+            client.close(client)
+          except e
+            nil
+          return nil
+        set_nonblocking(client)
+        conn = start_connection(server, client)
+        if conn.mode != "dead"
+          connections <+ conn
+        else
+          close_connection(conn)
+      )
+
+    resumed = 0
     for conn in connections
       if conn.mode == "read"
-        selector.add_read(sel, conn.sock)
-
-    ready_read, ready_write = selector.wait(sel, 0.1)
-
-    if ready_read
-      for sock in ready_read
-        if accepting and sock == server.socket
-          client, ip = server.socket.accept(server.socket)
-          if client
-            tls_err = ensure_tls_on_client(server, client)
-            if tls_err != true
-              try
-                client.close(client)
-              except e
-                nil
-              continue
-            set_nonblocking(client)
-            conn = start_connection(server, client)
-            if conn.mode != "dead"
-              connections <+ conn
-            else
-              close_connection(conn)
-        else
-          idx = find_connection_index(connections, sock)
-          if idx > 0
-            conn = connections[idx]
-            ok, mode = coroutine.resume(conn.coro, conn.sock)
-            update_connection_state(server, conn, mode)
+        ok, mode = coroutine.resume(conn.coro, conn.sock)
+        if not ok and DEBUG_ERRORS
+          print("[http_server] connection coroutine error: " + safe_str(mode))
+        update_connection_state(server, conn, mode)
+        resumed = resumed + 1
 
     connections = compact_connections(connections)
     last_gc_req = run_maintenance(server, last_gc_req)
+    if accepted == 0 and resumed == 0
+      if thread and thread.sleep
+        thread.sleep(0.001)
     if thread
       thread.yield()
 
@@ -354,7 +438,6 @@ fn run_coroutine_loop(server)
 
 fn run_worker_loop(server, queue, select_timeout)
   connections = {}
-  sel = selector.new()
 
   while true
     got_new = false
@@ -390,21 +473,16 @@ fn run_worker_loop(server, queue, select_timeout)
       else
         close_connection(conn)
 
-    selector.clear(sel)
+    resumed = 0
     for conn in connections
       if conn.mode == "read"
-        selector.add_read(sel, conn.sock)
+        ok, mode = coroutine.resume(conn.coro, conn.sock)
+        if not ok and DEBUG_ERRORS
+          print("[http_server] worker connection coroutine error: " + safe_str(mode))
+        update_connection_state(server, conn, mode)
+        resumed = resumed + 1
 
-    if selector.read_count(sel) > 0
-      ready_read, ready_write = selector.wait(sel, select_timeout)
-      if ready_read
-        for sock in ready_read
-          idx = find_connection_index(connections, sock)
-          if idx > 0
-            conn = connections[idx]
-            ok, mode = coroutine.resume(conn.coro, conn.sock)
-            update_connection_state(server, conn, mode)
-    else
+    if resumed == 0 and not got_new
       thread.sleep(select_timeout)
 
     connections = compact_connections(connections)
@@ -427,8 +505,6 @@ fn run_threaded_loop(server)
 
   next_worker = 1
   last_gc_req = 0
-  accept_selector = selector.new()
-
   accepting = true
   while true
     if server.stop_requested and accepting
@@ -441,27 +517,25 @@ fn run_threaded_loop(server)
       break
 
     if accepting
-      selector.clear(accept_selector)
-      selector.add_read(accept_selector, server.socket)
-      ready_read, ready_write = selector.wait(accept_selector, 0.1)
-      if ready_read and #ready_read > 0
-        client, ip = server.socket.accept(server.socket)
-        if client
-          tls_err = ensure_tls_on_client(server, client)
-          if tls_err != true
-            try
-              client.close(client)
-            except e
-              nil
-            continue
-          set_nonblocking(client)
-          target = queues[next_worker]
-          next_worker = next_worker + 1
-          if next_worker > worker_count
-            next_worker = 1
-          ok = target.send(target, client)
-          if not ok
+      accepted = accept_pending_connections(server, fn(client)
+        tls_err = ensure_tls_on_client(server, client)
+        if tls_err != true
+          try
             client.close(client)
+          except e
+            nil
+          return nil
+        set_nonblocking(client)
+        target = queues[next_worker]
+        next_worker = next_worker + 1
+        if next_worker > worker_count
+          next_worker = 1
+        ok = target.send(target, client)
+        if not ok
+          client.close(client)
+      )
+      if accepted == 0
+        thread.sleep(0.01)
     else
       thread.sleep(0.01)
 
@@ -488,7 +562,9 @@ Transport.run = fn(self, server_override = nil)
     error("http_server ssl=true but TLS is unavailable in this build")
   server.socket.bind(server.socket, server.host, server.port)
   server.socket.listen(server.socket, 128)
-  set_nonblocking(server.socket)
+  -- Listener socket: short timeout accept tends to be more stable than
+  -- strict nonblocking accept across platforms.
+  server.socket.settimeout(server.socket, 0.01)
   server.running = true
 
   scheme = "HTTP"

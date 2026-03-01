@@ -10,6 +10,10 @@
 #if defined(__linux__)
 #include <sys/random.h>
 #endif
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+/* `arc4random_buf` may be hidden behind feature macros under strict C99. */
+void arc4random_buf(void *buf, size_t nbytes);
+#endif
 #include "libs.h"
 #include "../object.h"
 #include "../value.h"

@@ -34,9 +34,9 @@ def bench_string_concat():
 
 
 def bench_string_ops():
-    s = "the quick brown fox jumps over the lazy dog"
     total = 0
-    for _ in range(20_000):
+    for i in range(20_000):
+        s = f"the quick brown fox jumps over the lazy dog {i}"
         x = s.upper()
         y = x.lower()
         z = y[4:19]

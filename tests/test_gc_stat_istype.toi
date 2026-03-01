@@ -1,4 +1,5 @@
-from lib.test import assert_true
+from lib.test import assert_eq, assert_true
+
 
 fn churn(count)
   for i in 1..count
@@ -32,7 +33,6 @@ gc
 after_drop = mem()
 assert_true(after_drop < with_live)
 
-from lib.test import assert_eq, assert_true
 
 stat = import stat
 os = import os
@@ -74,7 +74,6 @@ assert_true(rm_ok == true)
 
 print "stat ok"
 
-from lib.test import assert_true, assert_eq
 
 assert_true(istype(nil, "nil"))
 assert_true(istype(true, "boolean"))

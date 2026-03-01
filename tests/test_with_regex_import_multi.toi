@@ -1,4 +1,4 @@
-from lib.test import assert_eq
+from lib.test import assert_eq, assert_true
 
 log = ""
 fn enter(self)
@@ -30,8 +30,6 @@ with {__enter = fn(self) return "ok"} as v
   log = log + v
 assert_eq(log, "ok")
 
-from lib.test import assert_eq, assert_true
-
 regex = import regex
 
 assert_true(regex.match("^abc$", "abc"))
@@ -56,6 +54,15 @@ assert_eq(iters[3].match, "ccc")
 assert_eq(regex.replace("[0-9]+", "a1b22c333", "#"), "a#b#c#")
 assert_eq(regex.replace("[0-9]+", "a1b22c333", "#", 2), "a#b#c333")
 
+for i in 1..2000
+  hit = regex.search("a([0-9]+)b", "xa42by")
+  assert_true(hit != nil)
+  assert_eq(hit.groups[1], "42")
+
+assert_true(regex.search("^a.b$", "a\nb") != nil)
+assert_eq(regex.search("^a.b$", "a\nb", "n"), nil)
+assert_true(regex.search("^a.b$", "a\nb") != nil)
+
 parts = regex.split("[,;]+", "a,b;;c,d")
 assert_eq(parts[1], "a")
 assert_eq(parts[2], "b")
@@ -74,8 +81,6 @@ assert_eq(citer[1].match, "a1b")
 assert_eq(citer[3].groups[1], "333")
 
 print "regex ok"
-
-from lib.test import assert_eq, assert_true
 
 import os, io, string, lib.types
 

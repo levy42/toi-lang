@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 fn calc(a, b, c = 4, d = 5)
   return a + b + c + d
 
@@ -52,7 +53,6 @@ assert_true(caught)
 
 print "named forwarding ok"
 
-from lib.test import assert_eq, assert_true
 
 http_server = import lib.http_server
 io = import io

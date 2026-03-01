@@ -42,6 +42,7 @@ This directory contains user-facing docs for the Toi language and standard libra
 - `docs/stdlib/btree.md`
 - `docs/stdlib/uuid.md`
 - `docs/stdlib/coroutine.md`
+- `docs/stdlib/context.md`
 - `docs/stdlib/thread.md`
 - `docs/stdlib/socket.md`
 - `docs/stdlib/toi-libraries.md`

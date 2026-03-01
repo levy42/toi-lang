@@ -45,6 +45,15 @@ static int double_byte_instruction(const char* name, Chunk* chunk, int offset) {
     return offset + 3;
 }
 
+static int invoke_instruction(const char* name, Chunk* chunk, int offset) {
+    uint8_t method = chunk->code[offset + 1];
+    uint8_t argc = chunk->code[offset + 2];
+    printf("%-16s %4d %4d '", name, method, argc);
+    print_value(chunk->constants.values[method]);
+    printf("'\n");
+    return offset + 3;
+}
+
 static int try_instruction(const char* name, Chunk* chunk, int offset) {
     uint8_t depth = chunk->code[offset + 1];
     uint8_t flags = chunk->code[offset + 2];
@@ -111,6 +120,22 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             printf("%-16s %4d %4d -> %d\n", "OP_FOR_LOOP", var_slot, end_slot, offset + 5 - jump);
             return offset + 5;
         }
+        case OP_QFOR_PREP_NUM: {
+            uint8_t var_slot = chunk->code[offset + 1];
+            uint8_t end_slot = chunk->code[offset + 2];
+            uint16_t jump = (uint16_t)(chunk->code[offset + 3] << 8);
+            jump |= chunk->code[offset + 4];
+            printf("%-16s %4d %4d -> %d\n", "OP_QFOR_PREP_NUM", var_slot, end_slot, offset + 5 + jump);
+            return offset + 5;
+        }
+        case OP_QFOR_LOOP_NUM: {
+            uint8_t var_slot = chunk->code[offset + 1];
+            uint8_t end_slot = chunk->code[offset + 2];
+            uint16_t jump = (uint16_t)(chunk->code[offset + 3] << 8);
+            jump |= chunk->code[offset + 4];
+            printf("%-16s %4d %4d -> %d\n", "OP_QFOR_LOOP_NUM", var_slot, end_slot, offset + 5 - jump);
+            return offset + 5;
+        }
         case OP_GET_LOCAL:
             return byte_instruction("OP_GET_LOCAL", chunk, offset);
         case OP_SET_LOCAL:
@@ -143,10 +168,22 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return simple_instruction("OP_CLOSE_UPVALUE", offset);
         case OP_GET_TABLE:
             return simple_instruction("OP_GET_TABLE", offset);
+        case OP_GET_TABLE_NUM:
+            return simple_instruction("OP_GET_TABLE_NUM", offset);
+        case OP_GET_FIELD_CONST:
+            return constant_instruction("OP_GET_FIELD_CONST", chunk, offset);
         case OP_GET_META_TABLE:
             return simple_instruction("OP_GET_META_TABLE", offset);
         case OP_SET_TABLE:
             return simple_instruction("OP_SET_TABLE", offset);
+        case OP_SET_TABLE_KEEP:
+            return simple_instruction("OP_SET_TABLE_KEEP", offset);
+        case OP_SET_TABLE_NUM:
+            return simple_instruction("OP_SET_TABLE_NUM", offset);
+        case OP_SET_FIELD_CONST:
+            return constant_instruction("OP_SET_FIELD_CONST", chunk, offset);
+        case OP_SET_FIELD_CONST_KEEP:
+            return constant_instruction("OP_SET_FIELD_CONST_KEEP", chunk, offset);
         case OP_DELETE_TABLE:
             return simple_instruction("OP_DELETE_TABLE", offset);
         case OP_NEW_TABLE:
@@ -189,12 +226,22 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return jump_instruction("OP_LOOP", -1, chunk, offset);
         case OP_CALL:
             return byte_instruction("OP_CALL", chunk, offset);
+        case OP_INVOKE:
+            return invoke_instruction("OP_INVOKE", chunk, offset);
         case OP_CALL0:
             return simple_instruction("OP_CALL0", offset);
         case OP_CALL1:
             return simple_instruction("OP_CALL1", offset);
         case OP_CALL2:
             return simple_instruction("OP_CALL2", offset);
+        case OP_QCALL2:
+            return simple_instruction("OP_QCALL2", offset);
+        case OP_QCALL1_STR_FIND:
+            return simple_instruction("OP_QCALL1_STR_FIND", offset);
+        case OP_QINVOKE1_STR_FIND:
+            return simple_instruction("OP_QINVOKE1_STR_FIND", offset);
+        case OP_QINVOKE0_STR_LOWER:
+            return invoke_instruction("OP_QINVOKE0_STR_LOWER", chunk, offset);
         case OP_CALL_NAMED:
             return byte_instruction("OP_CALL_NAMED", chunk, offset);
         case OP_CALL_EXPAND:
@@ -269,6 +316,18 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return simple_instruction("OP_FDIV", offset);
         case OP_FMOD:
             return simple_instruction("OP_FMOD", offset);
+        case OP_QFADD:
+            return simple_instruction("OP_QFADD", offset);
+        case OP_QFSUB:
+            return simple_instruction("OP_QFSUB", offset);
+        case OP_QFMUL:
+            return simple_instruction("OP_QFMUL", offset);
+        case OP_QFDIV:
+            return simple_instruction("OP_QFDIV", offset);
+        case OP_QGREATER_NUM:
+            return simple_instruction("OP_QGREATER_NUM", offset);
+        case OP_QLESS_NUM:
+            return simple_instruction("OP_QLESS_NUM", offset);
         case OP_MOD_CONST:
             return constant_instruction("OP_MOD_CONST", chunk, offset);
         case OP_GC:

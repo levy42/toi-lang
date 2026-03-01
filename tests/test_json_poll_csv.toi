@@ -1,4 +1,5 @@
-from lib.test import assert_true
+from lib.test import assert_eq, assert_true
+
 
 json = import json
 time = import time
@@ -55,7 +56,6 @@ assert_true(decode_elapsed >= 0, "decode benchmark clock went backwards")
 
 print string.format("json perf: encode=%fs decode=%fs payload_bytes=%d", encode_elapsed, decode_elapsed, #encoded)
 
-from lib.test import assert_eq, assert_true
 
 socket = import socket
 poll = import poll
@@ -86,7 +86,6 @@ assert_true(s.close(s) == true)
 
 print "poll ok"
 
-from lib.test import assert_eq, assert_true
 
 csv = import csv
 

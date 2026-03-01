@@ -1,4 +1,5 @@
-from lib.test import assert_eq
+from lib.test import assert_eq, assert_true
+
 
 global __import_cache_counter = 0
 
@@ -11,7 +12,6 @@ assert_eq(second.runs, 1)
 
 print "import cache ok"
 
-from lib.test import assert_eq, assert_true
 
 global coroutine = import coroutine
 
@@ -40,7 +40,6 @@ assert_eq(ok3, 3)
 
 print "generator functions ok"
 
-from lib.test import assert_eq, assert_true
 
 obj = {x = 7}
 mt = {

@@ -1,4 +1,5 @@
-from lib.test import assert_eq
+from lib.test import assert_eq, assert_true
+
 
 -- for-in: key/value and values-only
 kv_sum = 0
@@ -78,7 +79,6 @@ syn_neg = {10, 20, 30, 40, 50}[..-1]
 assert_eq(syn_neg[1], 10)
 assert_eq(syn_neg[4], 40)
 
-from lib.test import assert_eq, assert_true
 
 uuid = import uuid
 
@@ -120,20 +120,22 @@ for c in sec3
 
 print "uuid ok"
 
-from lib.test import assert_eq
 
-name = "Toi"
-x = 3.14159
+fn run_fstring_multiline_tests()
+  name = "Toi"
+  x = 3.14159
 
-s1 = f[[Hello, {name}!
+  s1 = f[[Hello, {name}!
 Line2 value={x|.2f}]]
-assert_eq(s1, "Hello, Toi!\nLine2 value=3.14")
+  assert_eq(s1, "Hello, Toi!\nLine2 value=3.14")
 
-s2 = f[[A {1 + 2} B]]
-assert_eq(s2, "A 3 B")
+  s2 = f[[A {1 + 2} B]]
+  assert_eq(s2, "A 3 B")
 
--- Ensure nested braces inside expression strings don't break interpolation scan.
-s3 = f[[{ "{" + name + "}" }]]
-assert_eq(s3, "{Toi}")
+  -- Ensure nested braces inside expression strings don't break interpolation scan.
+  s3 = f[[{ "{" + name + "}" }]]
+  assert_eq(s3, "{Toi}")
 
-print "fstring multiline ok"
+  print "fstring multiline ok"
+
+run_fstring_multiline_tests()

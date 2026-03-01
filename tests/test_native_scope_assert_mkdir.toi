@@ -1,5 +1,6 @@
 from lib.test import assert_eq, assert_true
 
+
 mod = import tests.module_ctx.native_scope
 assert_eq(mod.ok, true)
 
@@ -25,7 +26,6 @@ assert_eq(type(direct_os), "table")
 
 print "native import scope ok"
 
-from lib.test import assert_true, assert_eq
 
 x = 3
 assert x == 3
@@ -49,7 +49,6 @@ assert_true(caught_custom)
 
 print "assert keyword ok"
 
-from lib.test import assert_true
 
 os = import os
 
