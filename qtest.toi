@@ -1,3 +1,7 @@
-from types import *
+a = 11
 
-a = {a=4,b=5,c=6,d=7,e=8}
+match a
+  case 9
+    print("a is 10")
+  case a > 10
+    print("a is not 10")

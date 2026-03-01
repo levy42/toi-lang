@@ -75,6 +75,56 @@ def bench_fstring():
     return total
 
 
+def bench_app_pipeline():
+    methods = ["GET", "POST", "PUT", "DELETE"]
+    paths = ["/users", "/teams", "/search", "/assets", "/health", "/events"]
+
+    routes = {
+        "GET /users": 1,
+        "POST /users": 2,
+        "GET /teams": 3,
+        "PUT /teams": 4,
+        "GET /search": 5,
+        "GET /assets": 6,
+        "GET /health": 7,
+        "POST /events": 8,
+    }
+
+    cache = {}
+    total = 0
+    for i in range(1, 300_000 + 1):
+        method = methods[i % 4]
+        path = paths[i % 6]
+        key = f"{method} {path}"
+
+        route = routes.get(key, 0)
+        auth = (i % 3) != 0
+        user_id = i % 10_000
+        team_id = i % 100
+        body_size = (i * 37) % 2048
+
+        status = 200
+        if (not auth) and path != "/health":
+            status = 401
+        elif method == "POST" and body_size < 32:
+            status = 422
+        elif route == 0:
+            status = 404
+
+        cache_key = f"{path}:{user_id % 32}:{team_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            total += cached
+        else:
+            cache_value = route + status + body_size
+            cache[cache_key] = cache_value
+            total += cache_value
+
+        total += status + route + user_id + team_id
+
+    return total
+
+
 def bench_memory():
     gc.collect()
     tracemalloc.start()
@@ -101,6 +151,7 @@ def main():
     bench("table", bench_table)
     bench("calls", bench_calls)
     bench("f-string", bench_fstring)
+    bench("app pipeline", bench_app_pipeline)
     cur_delta, peak_delta, current, peak = bench("memory", bench_memory)
     print(f"memory current {current} bytes (delta {cur_delta})")
     print(f"memory peak {peak} bytes (delta {peak_delta})")

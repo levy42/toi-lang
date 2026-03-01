@@ -99,6 +99,61 @@ static int append_number(char** buffer, int* length, int* capacity, double numbe
     return append_bytes(buffer, length, capacity, num_buf, num_len);
 }
 
+static inline uint32_t hash_string_local(const char* key, int length) {
+    uint32_t hash = 2166136261u;
+    for (int i = 0; i < length; i++) {
+        hash ^= (uint8_t)key[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static int push_built_string_interned(VM* vm, char* buffer, int length) {
+    uint32_t hash = hash_string_local(buffer, length);
+    uint32_t slot = hash & 65535u;
+    ObjString* cached = vm->build_string_cache[slot];
+    if (cached != NULL) {
+        if (cached->length == length &&
+            objstring_hash(cached) == hash &&
+            memcmp(cached->chars, buffer, (size_t)length) == 0) {
+            free(buffer);
+            push(vm, OBJ_VAL(cached));
+            return 1;
+        }
+    }
+
+    ObjString* built = take_string_with_hash(buffer, length, hash);
+    vm->build_string_cache[slot] = built;
+    push(vm, OBJ_VAL(built));
+    return 1;
+}
+
+static int push_built_string_interned_view(VM* vm, const char* chars, int length) {
+    uint32_t hash = hash_string_local(chars, length);
+    uint32_t slot = hash & 65535u;
+    ObjString* cached = vm->build_string_cache[slot];
+    if (cached != NULL) {
+        if (cached->length == length &&
+            objstring_hash(cached) == hash &&
+            memcmp(cached->chars, chars, (size_t)length) == 0) {
+            push(vm, OBJ_VAL(cached));
+            return 1;
+        }
+    }
+
+    char* heap = (char*)malloc((size_t)length + 1);
+    if (heap == NULL) {
+        vm_runtime_error(vm, "Out of memory while building string.");
+        return 0;
+    }
+    memcpy(heap, chars, (size_t)length);
+    heap[length] = '\0';
+    ObjString* built = take_string_with_hash(heap, length, hash);
+    vm->build_string_cache[slot] = built;
+    push(vm, OBJ_VAL(built));
+    return 1;
+}
+
 int vm_build_string(VM* vm, uint8_t part_count) {
     if (part_count == 0) {
         push(vm, OBJ_VAL(copy_string("", 0)));
@@ -135,6 +190,40 @@ int vm_build_string(VM* vm, uint8_t part_count) {
     }
 
     if (primitive_only) {
+        if (total_len <= 255) {
+            char buffer[256];
+            char* out = buffer;
+            for (int i = part_count - 1; i >= 0; i--) {
+                Value part = peek(vm, i);
+                if (IS_STRING(part)) {
+                    ObjString* s = AS_STRING(part);
+                    memcpy(out, s->chars, (size_t)s->length);
+                    out += s->length;
+                } else if (IS_NUMBER(part)) {
+                    char* next = write_number_text(out, AS_NUMBER(part));
+                    if (next == NULL) {
+                        vm_runtime_error(vm, "Out of memory while building string.");
+                        return 0;
+                    }
+                    out = next;
+                } else if (IS_BOOL(part)) {
+                    if (AS_BOOL(part)) {
+                        memcpy(out, "true", 4);
+                        out += 4;
+                    } else {
+                        memcpy(out, "false", 5);
+                        out += 5;
+                    }
+                } else {
+                    memcpy(out, "nil", 3);
+                    out += 3;
+                }
+            }
+            buffer[total_len] = '\0';
+            for (int i = 0; i < part_count; i++) pop(vm);
+            return push_built_string_interned_view(vm, buffer, total_len);
+        }
+
         char* buffer = (char*)malloc((size_t)total_len + 1);
         if (buffer == NULL) {
             vm_runtime_error(vm, "Out of memory while building string.");
@@ -170,8 +259,7 @@ int vm_build_string(VM* vm, uint8_t part_count) {
         }
         buffer[total_len] = '\0';
         for (int i = 0; i < part_count; i++) pop(vm);
-        push(vm, OBJ_VAL(take_string(buffer, total_len)));
-        return 1;
+        return push_built_string_interned(vm, buffer, total_len);
     }
 
     char* buffer = NULL;
@@ -244,7 +332,7 @@ int vm_build_string(VM* vm, uint8_t part_count) {
     if (buffer == NULL) {
         push(vm, OBJ_VAL(copy_string("", 0)));
     } else {
-        push(vm, OBJ_VAL(take_string(buffer, length)));
+        if (!push_built_string_interned(vm, buffer, length)) return 0;
     }
     return 1;
 }

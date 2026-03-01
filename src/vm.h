@@ -10,7 +10,8 @@ typedef struct VM {
    ObjThread* gc_parked_threads;
    Table globals;
    Table modules;  // Cache of loaded modules (native and .toi)
-   int use_thread_tls;
+   ObjString* build_string_cache[65536];
+    int use_thread_tls;
    int cli_argc;
    char** cli_argv;
     int disable_gc;
@@ -47,6 +48,9 @@ typedef struct VM {
     uint32_t tier2_inline_hot_threshold;
     uint64_t tier2_promote_count;
     uint64_t tier2_exec_count;
+    int opcode_prof_enabled;
+    uint64_t opcode_prof_count[256];
+    uint64_t opcode_prof_ns[256];
     int gc_prof_enabled;
     uint64_t gc_prof_start_ns;
     uint64_t gc_prof_collect_count;

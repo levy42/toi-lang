@@ -19,6 +19,7 @@ typedef enum {
     OBJ_THREAD,
     OBJ_USERDATA,
     OBJ_BOUND_METHOD,
+    OBJ_TYPE_COUNT
 } ObjType;
 
 // VM constants moved here because ObjThread needs them
@@ -282,5 +283,9 @@ void print_object(Value value);
 void mark_object(struct Obj* object);
 void mark_value(Value value);
 void sweep_objects();
+void object_prof_set_enabled(int enabled);
+int object_prof_enabled(void);
+void object_prof_reset(void);
+void object_prof_print(void);
 
 #endif

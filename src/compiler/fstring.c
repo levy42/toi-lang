@@ -345,7 +345,23 @@ void fstring(int can_assign) {
         return;
     }
 
-    emit_bytes(OP_BUILD_STRING, (uint8_t)part_count);
+    switch (part_count) {
+        case 2:
+            emit_byte(OP_BUILD_STRING2);
+            break;
+        case 3:
+            emit_byte(OP_BUILD_STRING3);
+            break;
+        case 4:
+            emit_byte(OP_BUILD_STRING4);
+            break;
+        case 5:
+            emit_byte(OP_BUILD_STRING5);
+            break;
+        default:
+            emit_bytes(OP_BUILD_STRING, (uint8_t)part_count);
+            break;
+    }
     type_stack_top = base_top;
     type_push(TYPEHINT_STR);
 }

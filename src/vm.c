@@ -1010,7 +1010,76 @@ static void vm_prof_record_native_slow(VM* vm, ObjNative* native, uint64_t elaps
     vm->call_prof_native_slow_ns_by_key[min_i] = elapsed_ns;
 }
 
+static const char* vm_opcode_name(uint8_t op) {
+    switch (op) {
+        case OP_CALL: return "OP_CALL";
+        case OP_CALL0: return "OP_CALL0";
+        case OP_CALL1: return "OP_CALL1";
+        case OP_QCALL0: return "OP_QCALL0";
+        case OP_QCALL1: return "OP_QCALL1";
+        case OP_CALL2: return "OP_CALL2";
+        case OP_QCALL2: return "OP_QCALL2";
+        case OP_GET_TABLE: return "OP_GET_TABLE";
+        case OP_SET_TABLE: return "OP_SET_TABLE";
+        case OP_GET_FIELD_CONST: return "OP_GET_FIELD_CONST";
+        case OP_SET_FIELD_CONST: return "OP_SET_FIELD_CONST";
+        case OP_SET_GLOBAL_POP: return "OP_SET_GLOBAL_POP";
+        case OP_SET_LOCAL_POP: return "OP_SET_LOCAL_POP";
+        case OP_SET_UPVALUE_POP: return "OP_SET_UPVALUE_POP";
+        case OP_INVOKE: return "OP_INVOKE";
+        case OP_IMPORT: return "OP_IMPORT";
+        case OP_RETURN: return "OP_RETURN";
+        default: return NULL;
+    }
+}
+
 static void vm_prof_print(VM* vm) {
+    if (vm->opcode_prof_enabled) {
+        fprintf(stderr, "\n[vm-opcode-prof] top opcodes by total ns:\n");
+        uint8_t top_idx[16];
+        uint64_t top_ns[16];
+        for (int i = 0; i < 16; i++) {
+            top_idx[i] = 0;
+            top_ns[i] = 0;
+        }
+        for (int op = 0; op < 256; op++) {
+            uint64_t ns = vm->opcode_prof_ns[op];
+            if (ns == 0) continue;
+            for (int slot = 0; slot < 16; slot++) {
+                if (ns > top_ns[slot]) {
+                    for (int move = 15; move > slot; move--) {
+                        top_ns[move] = top_ns[move - 1];
+                        top_idx[move] = top_idx[move - 1];
+                    }
+                    top_ns[slot] = ns;
+                    top_idx[slot] = (uint8_t)op;
+                    break;
+                }
+            }
+        }
+        for (int i = 0; i < 16; i++) {
+            if (top_ns[i] == 0) continue;
+            uint8_t op = top_idx[i];
+            const char* name = vm_opcode_name(op);
+            if (name == NULL) {
+                fprintf(stderr,
+                        "  - opcode=%u count=%llu ns=%llu avg_ns=%llu\n",
+                        (unsigned)op,
+                        (unsigned long long)vm->opcode_prof_count[op],
+                        (unsigned long long)vm->opcode_prof_ns[op],
+                        (unsigned long long)(vm->opcode_prof_ns[op] / (vm->opcode_prof_count[op] ? vm->opcode_prof_count[op] : 1)));
+            } else {
+                fprintf(stderr,
+                        "  - %s(%u) count=%llu ns=%llu avg_ns=%llu\n",
+                        name,
+                        (unsigned)op,
+                        (unsigned long long)vm->opcode_prof_count[op],
+                        (unsigned long long)vm->opcode_prof_ns[op],
+                        (unsigned long long)(vm->opcode_prof_ns[op] / (vm->opcode_prof_count[op] ? vm->opcode_prof_count[op] : 1)));
+            }
+        }
+    }
+
     if (vm->call_prof_enabled) {
         fprintf(stderr,
                 "\n[vm-call-prof] op_counts call=%llu call0=%llu call1=%llu call2=%llu qcall2=%llu call_named=%llu call_expand=%llu\n",
@@ -1155,6 +1224,9 @@ static void vm_prof_print(VM* vm) {
                 vm->tier2_inline_hot_threshold,
                 (unsigned long long)vm->tier2_promote_count,
                 (unsigned long long)vm->tier2_exec_count);
+    }
+    if (object_prof_enabled()) {
+        object_prof_print();
     }
 }
 
@@ -1462,9 +1534,8 @@ static void maybe_promote_function_tiers(VM* vm, ObjFunction* function) {
 
 static inline void maybe_promote_inline_tiers(VM* vm, ObjFunction* function) {
     if (!vm->tiered_jit_enabled || function == NULL) return;
-    if (vm->tier2_inline_hot_threshold == 0) return;
-    if (function->exec_tier == FUNCTION_TIER2_JIT) return;
     if (function->hot_count < UINT32_MAX) function->hot_count++;
+    if (function->exec_tier == FUNCTION_TIER2_JIT) return;
 
     if (function->exec_tier == FUNCTION_TIER0_INTERPRET &&
         function->hot_count >= vm->tier1_hot_threshold) {
@@ -1480,9 +1551,14 @@ static inline void maybe_promote_inline_tiers(VM* vm, ObjFunction* function) {
         }
     }
 
+    uint32_t tier2_target = vm->tier2_hot_threshold;
+    if (vm->tier2_inline_hot_threshold > vm->tier1_hot_threshold) {
+        tier2_target = vm->tier2_inline_hot_threshold;
+    }
+
     if (function->exec_tier == FUNCTION_TIER1_QUICKENED &&
-        vm->tier2_inline_hot_threshold > vm->tier1_hot_threshold &&
-        function->hot_count >= vm->tier2_inline_hot_threshold) {
+        tier2_target > vm->tier1_hot_threshold &&
+        function->hot_count >= tier2_target) {
         function->exec_tier = FUNCTION_TIER2_JIT;
         vm->tier2_promote_count++;
         if (vm->tiered_jit_profile) {
@@ -2643,6 +2719,11 @@ static void mark_roots(VM* vm) {
             mark_value(entry->value);
         }
     }
+    for (size_t i = 0; i < sizeof(vm->build_string_cache) / sizeof(vm->build_string_cache[0]); i++) {
+        if (vm->build_string_cache[i] != NULL) {
+            mark_object((struct Obj*)vm->build_string_cache[i]);
+        }
+    }
 }
 
 void init_vm(VM* vm) {
@@ -2676,7 +2757,7 @@ void init_vm(VM* vm) {
    vm->str_lower_fn = NIL_VAL;
    vm->str_find_fn = NIL_VAL;
    vm->str_replace_fn = NIL_VAL;
-   vm->tiered_jit_enabled = 0;
+   vm->tiered_jit_enabled = 1;
    vm->tiered_jit_profile = 0;
    vm->tier1_hot_threshold = 2000;
    vm->tier1_promote_count = 0;
@@ -2685,6 +2766,11 @@ void init_vm(VM* vm) {
    vm->tier2_inline_hot_threshold = 0;
    vm->tier2_promote_count = 0;
    vm->tier2_exec_count = 0;
+   vm->opcode_prof_enabled = 0;
+   for (int i = 0; i < 256; i++) {
+       vm->opcode_prof_count[i] = 0;
+       vm->opcode_prof_ns[i] = 0;
+   }
    vm->gc_prof_enabled = 0;
    vm->gc_prof_start_ns = vm_prof_now_ns();
    vm->gc_prof_collect_count = 0;
@@ -2775,6 +2861,20 @@ void init_vm(VM* vm) {
    if (gc_prof != NULL && gc_prof[0] != '\0' && strcmp(gc_prof, "0") != 0) {
        vm->gc_prof_enabled = 1;
    }
+   const char* opcode_prof = getenv("TOI_VM_OPCODE_PROFILE");
+   if (opcode_prof != NULL && opcode_prof[0] != '\0' && strcmp(opcode_prof, "0") != 0) {
+       vm->opcode_prof_enabled = 1;
+   }
+   object_prof_reset();
+   const char* alloc_prof = getenv("TOI_VM_ALLOC_PROFILE");
+   if (alloc_prof == NULL || alloc_prof[0] == '\0' || strcmp(alloc_prof, "0") == 0) {
+       alloc_prof = getenv("TOI_ALLOC_PROFILE");
+   }
+   if (alloc_prof != NULL && alloc_prof[0] != '\0' && strcmp(alloc_prof, "0") != 0) {
+       object_prof_set_enabled(1);
+   } else {
+       object_prof_set_enabled(0);
+   }
    const char* tiered_jit = getenv("TOI_TIERED_JIT");
    if (tiered_jit != NULL && tiered_jit[0] != '\0') {
        vm->tiered_jit_enabled = (strcmp(tiered_jit, "0") != 0);
@@ -2824,6 +2924,9 @@ void init_vm(VM* vm) {
     init_table(&vm->modules);
     vm->cli_argc = 0;
     vm->cli_argv = NULL;
+    for (size_t i = 0; i < sizeof(vm->build_string_cache) / sizeof(vm->build_string_cache[0]); i++) {
+        vm->build_string_cache[i] = NULL;
+    }
    vm_current_thread(vm)->open_upvalues = NULL;
 
     vm->mm_index = copy_string("__index", 7);
@@ -2995,6 +3098,13 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
     (ip += 2, (uint16_t)((ip[-2] << 8) | ip[-1]))
 #define READ_CONSTANT() (frame->closure->function->chunk.constants.values[READ_BYTE()])
 #define READ_STRING() AS_STRING(READ_CONSTANT())
+#define OP_PROF_FLUSH() do { \
+    if (vm->opcode_prof_enabled && opcode_prof_active) { \
+        uint64_t _op_end_ns = vm_prof_now_ns(); \
+        vm->opcode_prof_ns[opcode_prof_active_op] += (_op_end_ns - opcode_prof_start_ns); \
+        opcode_prof_active = 0; \
+    } \
+} while (0)
 
 #if defined(__GNUC__) || defined(__clang__)
 #define TOI_COMPUTED_GOTO 1
@@ -3003,6 +3113,9 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
 #endif
 
     uint8_t instruction = 0;
+    uint8_t opcode_prof_active_op = 0;
+    uint64_t opcode_prof_start_ns = 0;
+    int opcode_prof_active = 0;
 #if TOI_COMPUTED_GOTO
     static void* dispatch_table[256];
     static int dispatch_table_init = 0;
@@ -3029,14 +3142,22 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
         dispatch_table[OP_GET_GLOBAL] = &&op_OP_GET_GLOBAL;
         dispatch_table[OP_DEFINE_GLOBAL] = &&op_OP_DEFINE_GLOBAL;
         dispatch_table[OP_SET_GLOBAL] = &&op_OP_SET_GLOBAL;
+        dispatch_table[OP_SET_GLOBAL_POP] = &&op_OP_SET_GLOBAL_POP;
         dispatch_table[OP_DELETE_GLOBAL] = &&op_OP_DELETE_GLOBAL;
         dispatch_table[OP_GET_LOCAL] = &&op_OP_GET_LOCAL;
+        dispatch_table[OP_GET2_LOCAL] = &&op_OP_GET2_LOCAL;
         dispatch_table[OP_SET_LOCAL] = &&op_OP_SET_LOCAL;
+        dispatch_table[OP_SET_LOCAL_POP] = &&op_OP_SET_LOCAL_POP;
         dispatch_table[OP_ADD_SET_LOCAL] = &&op_OP_ADD_SET_LOCAL;
+        dispatch_table[OP_ADD_SET_LOCAL_POP] = &&op_OP_ADD_SET_LOCAL_POP;
         dispatch_table[OP_SUB_SET_LOCAL] = &&op_OP_SUB_SET_LOCAL;
+        dispatch_table[OP_SUB_SET_LOCAL_POP] = &&op_OP_SUB_SET_LOCAL_POP;
         dispatch_table[OP_MUL_SET_LOCAL] = &&op_OP_MUL_SET_LOCAL;
+        dispatch_table[OP_MUL_SET_LOCAL_POP] = &&op_OP_MUL_SET_LOCAL_POP;
         dispatch_table[OP_DIV_SET_LOCAL] = &&op_OP_DIV_SET_LOCAL;
+        dispatch_table[OP_DIV_SET_LOCAL_POP] = &&op_OP_DIV_SET_LOCAL_POP;
         dispatch_table[OP_MOD_SET_LOCAL] = &&op_OP_MOD_SET_LOCAL;
+        dispatch_table[OP_MOD_SET_LOCAL_POP] = &&op_OP_MOD_SET_LOCAL_POP;
         dispatch_table[OP_INC_LOCAL] = &&op_OP_INC_LOCAL;
         dispatch_table[OP_SUB_LOCAL_CONST] = &&op_OP_SUB_LOCAL_CONST;
         dispatch_table[OP_MUL_LOCAL_CONST] = &&op_OP_MUL_LOCAL_CONST;
@@ -3044,6 +3165,7 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
         dispatch_table[OP_MOD_LOCAL_CONST] = &&op_OP_MOD_LOCAL_CONST;
         dispatch_table[OP_GET_UPVALUE] = &&op_OP_GET_UPVALUE;
         dispatch_table[OP_SET_UPVALUE] = &&op_OP_SET_UPVALUE;
+        dispatch_table[OP_SET_UPVALUE_POP] = &&op_OP_SET_UPVALUE_POP;
         dispatch_table[OP_CLOSE_UPVALUE] = &&op_OP_CLOSE_UPVALUE;
         dispatch_table[OP_GET_TABLE] = &&op_OP_GET_TABLE;
         dispatch_table[OP_GET_TABLE_NUM] = &&op_OP_GET_TABLE_NUM;
@@ -3065,6 +3187,8 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
         dispatch_table[OP_INVOKE] = &&op_OP_INVOKE;
         dispatch_table[OP_CALL0] = &&op_OP_CALL0;
         dispatch_table[OP_CALL1] = &&op_OP_CALL1;
+        dispatch_table[OP_QCALL0] = &&op_OP_QCALL0;
+        dispatch_table[OP_QCALL1] = &&op_OP_QCALL1;
         dispatch_table[OP_CALL2] = &&op_OP_CALL2;
         dispatch_table[OP_QCALL2] = &&op_OP_QCALL2;
         dispatch_table[OP_QCALL1_STR_FIND] = &&op_OP_QCALL1_STR_FIND;
@@ -3099,6 +3223,7 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
         dispatch_table[OP_QFSUB] = &&op_OP_QFSUB;
         dispatch_table[OP_QFMUL] = &&op_OP_QFMUL;
         dispatch_table[OP_QFDIV] = &&op_OP_QFDIV;
+        dispatch_table[OP_QFMOD] = &&op_OP_QFMOD;
         dispatch_table[OP_QGREATER_NUM] = &&op_OP_QGREATER_NUM;
         dispatch_table[OP_QLESS_NUM] = &&op_OP_QLESS_NUM;
         dispatch_table[OP_MOD_CONST] = &&op_OP_MOD_CONST;
@@ -3114,6 +3239,10 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
         dispatch_table[OP_IMPORT_STAR] = &&op_OP_IMPORT_STAR;
         dispatch_table[OP_THROW] = &&op_OP_THROW;
         dispatch_table[OP_BUILD_STRING] = &&op_OP_BUILD_STRING;
+        dispatch_table[OP_BUILD_STRING2] = &&op_OP_BUILD_STRING2;
+        dispatch_table[OP_BUILD_STRING3] = &&op_OP_BUILD_STRING3;
+        dispatch_table[OP_BUILD_STRING4] = &&op_OP_BUILD_STRING4;
+        dispatch_table[OP_BUILD_STRING5] = &&op_OP_BUILD_STRING5;
         dispatch_table[OP_ITER_PREP] = &&op_OP_ITER_PREP;
         dispatch_table[OP_ITER_PREP_IPAIRS] = &&op_OP_ITER_PREP_IPAIRS;
         dispatch_table[OP_RANGE] = &&op_OP_RANGE;
@@ -3127,6 +3256,7 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
 #endif
 
     for (;;) {
+        OP_PROF_FLUSH();
         if (run_stop_thread != NULL && vm_current_thread(vm) == run_stop_thread) {
             return INTERPRET_OK;
         }
@@ -3148,12 +3278,24 @@ InterpretResult vm_run(VM* vm, int min_frame_count) {
 
 #if TOI_COMPUTED_GOTO
         instruction = READ_BYTE();
+        if (vm->opcode_prof_enabled) {
+            vm->opcode_prof_count[instruction]++;
+            opcode_prof_active_op = instruction;
+            opcode_prof_start_ns = vm_prof_now_ns();
+            opcode_prof_active = 1;
+        }
         goto *dispatch_table[instruction];
 op_invalid:
         vm_runtime_error(vm, "Unknown opcode %d.", instruction);
         goto runtime_error;
 #else
         instruction = READ_BYTE();
+        if (vm->opcode_prof_enabled) {
+            vm->opcode_prof_count[instruction]++;
+            opcode_prof_active_op = instruction;
+            opcode_prof_start_ns = vm_prof_now_ns();
+            opcode_prof_active = 1;
+        }
 #endif
         switch (instruction) {
             op_OP_TRY: case OP_TRY: {
@@ -3173,7 +3315,10 @@ op_invalid:
                 goto runtime_error;
             }
             op_OP_CONSTANT: case OP_CONSTANT: {
-                vm_handle_op_constant(vm, frame, &ip);
+                Value constant = frame->closure->function->chunk.constants.values[READ_BYTE()];
+                *vm_current_thread(vm)->stack_top = constant;
+                vm_current_thread(vm)->stack_top++;
+                maybe_collect_garbage(vm);
                 break;
             }
             op_OP_BUILD_STRING: case OP_BUILD_STRING: {
@@ -3181,10 +3326,37 @@ op_invalid:
                 if (!vm_build_string(vm, part_count)) goto runtime_error;
                 break;
             }
-            op_OP_NIL: case OP_NIL: push(vm, NIL_VAL); break;
-            op_OP_TRUE: case OP_TRUE: push(vm, BOOL_VAL(1)); break;
-            op_OP_FALSE: case OP_FALSE: push(vm, BOOL_VAL(0)); break;
-            op_OP_POP: case OP_POP: pop(vm); break;
+            op_OP_BUILD_STRING2: case OP_BUILD_STRING2: {
+                if (!vm_build_string(vm, 2)) goto runtime_error;
+                break;
+            }
+            op_OP_BUILD_STRING3: case OP_BUILD_STRING3: {
+                if (!vm_build_string(vm, 3)) goto runtime_error;
+                break;
+            }
+            op_OP_BUILD_STRING4: case OP_BUILD_STRING4: {
+                if (!vm_build_string(vm, 4)) goto runtime_error;
+                break;
+            }
+            op_OP_BUILD_STRING5: case OP_BUILD_STRING5: {
+                if (!vm_build_string(vm, 5)) goto runtime_error;
+                break;
+            }
+            op_OP_NIL: case OP_NIL:
+                *vm_current_thread(vm)->stack_top = NIL_VAL;
+                vm_current_thread(vm)->stack_top++;
+                break;
+            op_OP_TRUE: case OP_TRUE:
+                *vm_current_thread(vm)->stack_top = BOOL_VAL(1);
+                vm_current_thread(vm)->stack_top++;
+                break;
+            op_OP_FALSE: case OP_FALSE:
+                *vm_current_thread(vm)->stack_top = BOOL_VAL(0);
+                vm_current_thread(vm)->stack_top++;
+                break;
+            op_OP_POP: case OP_POP:
+                vm_current_thread(vm)->stack_top--;
+                break;
             op_OP_GET_GLOBAL: case OP_GET_GLOBAL: {
                 if (!vm_handle_op_get_global(vm, frame, &ip)) goto runtime_error;
                 break;
@@ -3197,36 +3369,86 @@ op_invalid:
                 vm_handle_op_set_global(vm, frame, &ip);
                 break;
             }
+            op_OP_SET_GLOBAL_POP: case OP_SET_GLOBAL_POP: {
+                ObjString* name = AS_STRING(frame->closure->function->chunk.constants.values[READ_BYTE()]);
+                table_set(&vm->globals, name, peek(vm, 0));
+                vm_current_thread(vm)->stack_top--;
+                maybe_collect_garbage(vm);
+                break;
+            }
             op_OP_DELETE_GLOBAL: case OP_DELETE_GLOBAL: {
                 if (!vm_handle_op_delete_global(vm, frame, &ip)) goto runtime_error;
                 break;
             }
             op_OP_GET_LOCAL: case OP_GET_LOCAL: {
-                vm_handle_op_get_local(vm, frame, &ip);
+                uint8_t slot = READ_BYTE();
+                *vm_current_thread(vm)->stack_top = frame->slots[slot];
+                vm_current_thread(vm)->stack_top++;
+                break;
+            }
+            op_OP_GET2_LOCAL: case OP_GET2_LOCAL: {
+                uint8_t slot_a = READ_BYTE();
+                uint8_t slot_b = READ_BYTE();
+                *vm_current_thread(vm)->stack_top = frame->slots[slot_a];
+                vm_current_thread(vm)->stack_top++;
+                *vm_current_thread(vm)->stack_top = frame->slots[slot_b];
+                vm_current_thread(vm)->stack_top++;
                 break;
             }
             op_OP_SET_LOCAL: case OP_SET_LOCAL: {
-                vm_handle_op_set_local(vm, frame, &ip);
+                uint8_t slot = READ_BYTE();
+                frame->slots[slot] = vm_current_thread(vm)->stack_top[-1];
+                break;
+            }
+            op_OP_SET_LOCAL_POP: case OP_SET_LOCAL_POP: {
+                uint8_t slot = READ_BYTE();
+                frame->slots[slot] = vm_current_thread(vm)->stack_top[-1];
+                vm_current_thread(vm)->stack_top--;
                 break;
             }
             op_OP_ADD_SET_LOCAL: case OP_ADD_SET_LOCAL: {
                 if (!vm_handle_op_add_set_local(vm, &frame, &ip)) goto runtime_error;
                 break;
             }
+            op_OP_ADD_SET_LOCAL_POP: case OP_ADD_SET_LOCAL_POP: {
+                if (!vm_handle_op_add_set_local(vm, &frame, &ip)) goto runtime_error;
+                vm_current_thread(vm)->stack_top--;
+                break;
+            }
             op_OP_SUB_SET_LOCAL: case OP_SUB_SET_LOCAL: {
                 if (!vm_handle_op_sub_set_local(vm, &frame, &ip)) goto runtime_error;
+                break;
+            }
+            op_OP_SUB_SET_LOCAL_POP: case OP_SUB_SET_LOCAL_POP: {
+                if (!vm_handle_op_sub_set_local(vm, &frame, &ip)) goto runtime_error;
+                vm_current_thread(vm)->stack_top--;
                 break;
             }
             op_OP_MUL_SET_LOCAL: case OP_MUL_SET_LOCAL: {
                 if (!vm_handle_op_mul_set_local(vm, &frame, &ip)) goto runtime_error;
                 break;
             }
+            op_OP_MUL_SET_LOCAL_POP: case OP_MUL_SET_LOCAL_POP: {
+                if (!vm_handle_op_mul_set_local(vm, &frame, &ip)) goto runtime_error;
+                vm_current_thread(vm)->stack_top--;
+                break;
+            }
             op_OP_DIV_SET_LOCAL: case OP_DIV_SET_LOCAL: {
                 if (!vm_handle_op_div_set_local(vm, &frame, &ip)) goto runtime_error;
                 break;
             }
+            op_OP_DIV_SET_LOCAL_POP: case OP_DIV_SET_LOCAL_POP: {
+                if (!vm_handle_op_div_set_local(vm, &frame, &ip)) goto runtime_error;
+                vm_current_thread(vm)->stack_top--;
+                break;
+            }
             op_OP_MOD_SET_LOCAL: case OP_MOD_SET_LOCAL: {
                 if (!vm_handle_op_mod_set_local(vm, &frame, &ip)) goto runtime_error;
+                break;
+            }
+            op_OP_MOD_SET_LOCAL_POP: case OP_MOD_SET_LOCAL_POP: {
+                if (!vm_handle_op_mod_set_local(vm, &frame, &ip)) goto runtime_error;
+                vm_current_thread(vm)->stack_top--;
                 break;
             }
             op_OP_INC_LOCAL: case OP_INC_LOCAL: {
@@ -3250,11 +3472,20 @@ op_invalid:
                 break;
             }
             op_OP_GET_UPVALUE: case OP_GET_UPVALUE: {
-                vm_handle_op_get_upvalue(vm, frame, &ip);
+                uint8_t slot = READ_BYTE();
+                *vm_current_thread(vm)->stack_top = *frame->closure->upvalues[slot]->location;
+                vm_current_thread(vm)->stack_top++;
                 break;
             }
             op_OP_SET_UPVALUE: case OP_SET_UPVALUE: {
-                vm_handle_op_set_upvalue(vm, frame, &ip);
+                uint8_t slot = READ_BYTE();
+                *frame->closure->upvalues[slot]->location = vm_current_thread(vm)->stack_top[-1];
+                break;
+            }
+            op_OP_SET_UPVALUE_POP: case OP_SET_UPVALUE_POP: {
+                uint8_t slot = READ_BYTE();
+                *frame->closure->upvalues[slot]->location = vm_current_thread(vm)->stack_top[-1];
+                vm_current_thread(vm)->stack_top--;
                 break;
             }
             op_OP_CLOSE_UPVALUE: case OP_CLOSE_UPVALUE: {
@@ -3549,6 +3780,8 @@ op_invalid:
             op_OP_CALL0: case OP_CALL0: {
                 uint64_t start_ns = vm->call_prof_enabled ? vm_prof_now_ns() : 0;
                 if (vm->call_prof_enabled) vm->call_prof_op_call0_count++;
+                int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
+                Chunk* chunk = &frame->closure->function->chunk;
                 ObjThread* thread = vm_current_thread(vm);
                 Value callee = peek(vm, 0);
                 if (IS_BOUND_METHOD(callee)) {
@@ -3577,6 +3810,14 @@ op_invalid:
                         function->defaults_count == 0 &&
                         function->param_types_count == 0 &&
                         function->arity == 0) {
+                        if (opcode_offset >= 0 &&
+                            chunk->call_ic_closures != NULL &&
+                            chunk->call_ic_argc != NULL) {
+                            chunk->code[opcode_offset] = OP_QCALL0;
+                            chunk->call_ic_closures[opcode_offset] = closure;
+                            chunk->call_ic_argc[opcode_offset] = 0;
+                        }
+                        if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
                         frame->ip = ip;
                         if (!enter_closure_frame(vm, closure, 0)) goto runtime_error;
                         thread = vm_current_thread(vm);
@@ -3584,12 +3825,30 @@ op_invalid:
                         ip = frame->ip;
                         if (vm->call_prof_enabled) vm->call_prof_call0_direct_fast_count++;
                     } else if (!invoke_call0(vm, &frame, &ip)) {
+                        if (opcode_offset >= 0 &&
+                            chunk->call_ic_closures != NULL &&
+                            chunk->call_ic_argc != NULL) {
+                            chunk->call_ic_closures[opcode_offset] = NULL;
+                            chunk->call_ic_argc[opcode_offset] = 0;
+                        }
                         if (vm->call_prof_enabled) vm->call_prof_call0_fallback_count++;
                         goto runtime_error;
                     } else if (vm->call_prof_enabled) {
+                        if (opcode_offset >= 0 &&
+                            chunk->call_ic_closures != NULL &&
+                            chunk->call_ic_argc != NULL) {
+                            chunk->call_ic_closures[opcode_offset] = NULL;
+                            chunk->call_ic_argc[opcode_offset] = 0;
+                        }
                         vm->call_prof_call0_fallback_count++;
                     }
                 } else if (IS_NATIVE(callee)) {
+                    if (opcode_offset >= 0 &&
+                        chunk->call_ic_closures != NULL &&
+                        chunk->call_ic_argc != NULL) {
+                        chunk->call_ic_closures[opcode_offset] = NULL;
+                        chunk->call_ic_argc[opcode_offset] = 0;
+                    }
                     if (vm->call_prof_enabled) vm->call_prof_call0_native_count++;
                     ObjNative* native_obj = AS_NATIVE_OBJ(callee);
                     NativeFastKind fast_kind = (NativeFastKind)native_obj->fast_kind;
@@ -3626,9 +3885,21 @@ op_invalid:
                         }
                     }
                 } else if (!invoke_call0(vm, &frame, &ip)) {
+                    if (opcode_offset >= 0 &&
+                        chunk->call_ic_closures != NULL &&
+                        chunk->call_ic_argc != NULL) {
+                        chunk->call_ic_closures[opcode_offset] = NULL;
+                        chunk->call_ic_argc[opcode_offset] = 0;
+                    }
                     if (vm->call_prof_enabled) vm->call_prof_call0_fallback_count++;
                     goto runtime_error;
                 } else if (vm->call_prof_enabled) {
+                    if (opcode_offset >= 0 &&
+                        chunk->call_ic_closures != NULL &&
+                        chunk->call_ic_argc != NULL) {
+                        chunk->call_ic_closures[opcode_offset] = NULL;
+                        chunk->call_ic_argc[opcode_offset] = 0;
+                    }
                     vm->call_prof_call0_fallback_count++;
                 }
                 if (vm->call_prof_enabled) vm->call_prof_op_call0_ns += vm_prof_now_ns() - start_ns;
@@ -3683,6 +3954,14 @@ op_invalid:
                         function->defaults_count == 0 &&
                         function->param_types_count == 0 &&
                         function->arity == 1) {
+                        if (opcode_offset >= 0 &&
+                            chunk->call_ic_closures != NULL &&
+                            chunk->call_ic_argc != NULL) {
+                            chunk->code[opcode_offset] = OP_QCALL1;
+                            chunk->call_ic_closures[opcode_offset] = closure;
+                            chunk->call_ic_argc[opcode_offset] = 1;
+                        }
+                        if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
                         frame->ip = ip;
                         if (!enter_closure_frame(vm, closure, 1)) goto runtime_error;
                         thread = vm_current_thread(vm);
@@ -3698,6 +3977,14 @@ op_invalid:
                                 function->param_types[0] == TYPEHINT_FLOAT)) {
                         Value arg0 = peek(vm, 0);
                         if (value_matches_numeric_hint_fast(arg0, function->param_types[0])) {
+                            if (opcode_offset >= 0 &&
+                                chunk->call_ic_closures != NULL &&
+                                chunk->call_ic_argc != NULL) {
+                                chunk->code[opcode_offset] = OP_QCALL1;
+                                chunk->call_ic_closures[opcode_offset] = closure;
+                                chunk->call_ic_argc[opcode_offset] = 1;
+                            }
+                            if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
                             frame->ip = ip;
                             if (!enter_closure_frame(vm, closure, 1)) goto runtime_error;
                             thread = vm_current_thread(vm);
@@ -3705,28 +3992,215 @@ op_invalid:
                             ip = frame->ip;
                             if (vm->call_prof_enabled) vm->call_prof_call1_typed_fast_count++;
                         } else if (!invoke_call1(vm, &frame, &ip)) {
+                            if (opcode_offset >= 0 &&
+                                chunk->call_ic_closures != NULL &&
+                                chunk->call_ic_argc != NULL) {
+                                chunk->call_ic_closures[opcode_offset] = NULL;
+                                chunk->call_ic_argc[opcode_offset] = 0;
+                            }
                             if (vm->call_prof_enabled) vm->call_prof_call1_fallback_count++;
                             goto runtime_error;
                         } else if (vm->call_prof_enabled) {
+                            if (opcode_offset >= 0 &&
+                                chunk->call_ic_closures != NULL &&
+                                chunk->call_ic_argc != NULL) {
+                                chunk->call_ic_closures[opcode_offset] = NULL;
+                                chunk->call_ic_argc[opcode_offset] = 0;
+                            }
                             vm->call_prof_call1_fallback_count++;
                         }
                     } else if (!invoke_call1(vm, &frame, &ip)) {
+                        if (opcode_offset >= 0 &&
+                            chunk->call_ic_closures != NULL &&
+                            chunk->call_ic_argc != NULL) {
+                            chunk->call_ic_closures[opcode_offset] = NULL;
+                            chunk->call_ic_argc[opcode_offset] = 0;
+                        }
                         if (vm->call_prof_enabled) vm->call_prof_call1_fallback_count++;
                         goto runtime_error;
                     } else if (vm->call_prof_enabled) {
+                        if (opcode_offset >= 0 &&
+                            chunk->call_ic_closures != NULL &&
+                            chunk->call_ic_argc != NULL) {
+                            chunk->call_ic_closures[opcode_offset] = NULL;
+                            chunk->call_ic_argc[opcode_offset] = 0;
+                        }
                         vm->call_prof_call1_fallback_count++;
                     }
                 } else if (IS_NATIVE(callee)) {
+                    if (opcode_offset >= 0 &&
+                        chunk->call_ic_closures != NULL &&
+                        chunk->call_ic_argc != NULL) {
+                        chunk->call_ic_closures[opcode_offset] = NULL;
+                        chunk->call_ic_argc[opcode_offset] = 0;
+                    }
                     if (vm->call_prof_enabled) vm->call_prof_call1_native_count++;
                     if (!call_value(vm, callee, 1, &frame, &ip)) {
                         goto runtime_error;
                     }
                 } else if (!invoke_call1(vm, &frame, &ip)) {
+                    if (opcode_offset >= 0 &&
+                        chunk->call_ic_closures != NULL &&
+                        chunk->call_ic_argc != NULL) {
+                        chunk->call_ic_closures[opcode_offset] = NULL;
+                        chunk->call_ic_argc[opcode_offset] = 0;
+                    }
                     if (vm->call_prof_enabled) vm->call_prof_call1_fallback_count++;
                     goto runtime_error;
                 } else if (vm->call_prof_enabled) {
+                    if (opcode_offset >= 0 &&
+                        chunk->call_ic_closures != NULL &&
+                        chunk->call_ic_argc != NULL) {
+                        chunk->call_ic_closures[opcode_offset] = NULL;
+                        chunk->call_ic_argc[opcode_offset] = 0;
+                    }
                     vm->call_prof_call1_fallback_count++;
                 }
+                if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
+                break;
+            }
+            op_OP_QCALL0: case OP_QCALL0: {
+                uint64_t start_ns = vm->call_prof_enabled ? vm_prof_now_ns() : 0;
+                if (vm->call_prof_enabled) vm->call_prof_op_call0_count++;
+                int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
+                Chunk* chunk = &frame->closure->function->chunk;
+                ObjThread* thread = vm_current_thread(vm);
+                Value callee = peek(vm, 0);
+
+                ObjClosure* cached = (opcode_offset >= 0 && chunk->call_ic_closures != NULL)
+                    ? chunk->call_ic_closures[opcode_offset]
+                    : NULL;
+                uint8_t cached_argc = (opcode_offset >= 0 && chunk->call_ic_argc != NULL)
+                    ? chunk->call_ic_argc[opcode_offset]
+                    : 0;
+
+                if (!IS_CLOSURE(callee) || AS_CLOSURE(callee) != cached || cached_argc != 0) {
+                    if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                    if (opcode_offset >= 0) {
+                        chunk->code[opcode_offset] = OP_CALL0;
+                        if (chunk->call_ic_closures != NULL) chunk->call_ic_closures[opcode_offset] = NULL;
+                        if (chunk->call_ic_argc != NULL) chunk->call_ic_argc[opcode_offset] = 0;
+                    }
+                    if (!invoke_call0(vm, &frame, &ip)) {
+                        if (vm->call_prof_enabled) vm->call_prof_call0_fallback_count++;
+                        goto runtime_error;
+                    }
+                    if (vm->call_prof_enabled) vm->call_prof_call0_fallback_count++;
+                    if (vm->call_prof_enabled) vm->call_prof_op_call0_ns += vm_prof_now_ns() - start_ns;
+                    break;
+                }
+
+                ObjFunction* function = cached->function;
+                if (function->is_generator ||
+                    function->is_variadic ||
+                    function->defaults_count != 0 ||
+                    function->param_types_count != 0 ||
+                    function->arity != 0) {
+                    if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                    if (opcode_offset >= 0) {
+                        chunk->code[opcode_offset] = OP_CALL0;
+                        if (chunk->call_ic_closures != NULL) chunk->call_ic_closures[opcode_offset] = NULL;
+                        if (chunk->call_ic_argc != NULL) chunk->call_ic_argc[opcode_offset] = 0;
+                    }
+                    if (!invoke_call0(vm, &frame, &ip)) {
+                        if (vm->call_prof_enabled) vm->call_prof_call0_fallback_count++;
+                        goto runtime_error;
+                    }
+                    if (vm->call_prof_enabled) vm->call_prof_call0_fallback_count++;
+                    if (vm->call_prof_enabled) vm->call_prof_op_call0_ns += vm_prof_now_ns() - start_ns;
+                    break;
+                }
+
+                if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
+                frame->ip = ip;
+                if (!enter_closure_frame(vm, cached, 0)) goto runtime_error;
+                thread = vm_current_thread(vm);
+                frame = &thread->frames[thread->frame_count - 1];
+                ip = frame->ip;
+                if (vm->call_prof_enabled) vm->call_prof_call0_direct_fast_count++;
+                if (vm->call_prof_enabled) vm->call_prof_op_call0_ns += vm_prof_now_ns() - start_ns;
+                break;
+            }
+            op_OP_QCALL1: case OP_QCALL1: {
+                uint64_t start_ns = vm->call_prof_enabled ? vm_prof_now_ns() : 0;
+                if (vm->call_prof_enabled) vm->call_prof_op_call1_count++;
+                int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
+                Chunk* chunk = &frame->closure->function->chunk;
+                ObjThread* thread = vm_current_thread(vm);
+                Value callee = peek(vm, 1);
+
+                ObjClosure* cached = (opcode_offset >= 0 && chunk->call_ic_closures != NULL)
+                    ? chunk->call_ic_closures[opcode_offset]
+                    : NULL;
+                uint8_t cached_argc = (opcode_offset >= 0 && chunk->call_ic_argc != NULL)
+                    ? chunk->call_ic_argc[opcode_offset]
+                    : 0;
+
+                if (!IS_CLOSURE(callee) || AS_CLOSURE(callee) != cached || cached_argc != 1) {
+                    if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                    if (opcode_offset >= 0) {
+                        chunk->code[opcode_offset] = OP_CALL1;
+                        if (chunk->call_ic_closures != NULL) chunk->call_ic_closures[opcode_offset] = NULL;
+                        if (chunk->call_ic_argc != NULL) chunk->call_ic_argc[opcode_offset] = 0;
+                    }
+                    if (!invoke_call1(vm, &frame, &ip)) {
+                        if (vm->call_prof_enabled) vm->call_prof_call1_fallback_count++;
+                        goto runtime_error;
+                    }
+                    if (vm->call_prof_enabled) vm->call_prof_call1_fallback_count++;
+                    if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
+                    break;
+                }
+
+                ObjFunction* function = cached->function;
+                if (!function->is_generator &&
+                    !function->is_variadic &&
+                    function->defaults_count == 0 &&
+                    function->param_types_count == 0 &&
+                    function->arity == 1) {
+                    if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
+                    frame->ip = ip;
+                    if (!enter_closure_frame(vm, cached, 1)) goto runtime_error;
+                    thread = vm_current_thread(vm);
+                    frame = &thread->frames[thread->frame_count - 1];
+                    ip = frame->ip;
+                    if (vm->call_prof_enabled) vm->call_prof_call1_direct_fast_count++;
+                    if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
+                    break;
+                }
+
+                if (!function->is_generator &&
+                    !function->is_variadic &&
+                    function->defaults_count == 0 &&
+                    function->param_types_count == 1 &&
+                    function->arity == 1 &&
+                    (function->param_types[0] == TYPEHINT_INT ||
+                     function->param_types[0] == TYPEHINT_FLOAT)) {
+                    Value arg0 = peek(vm, 0);
+                    if (value_matches_numeric_hint_fast(arg0, function->param_types[0])) {
+                        if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
+                        frame->ip = ip;
+                        if (!enter_closure_frame(vm, cached, 1)) goto runtime_error;
+                        thread = vm_current_thread(vm);
+                        frame = &thread->frames[thread->frame_count - 1];
+                        ip = frame->ip;
+                        if (vm->call_prof_enabled) vm->call_prof_call1_typed_fast_count++;
+                        if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
+                        break;
+                    }
+                }
+
+                if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                if (opcode_offset >= 0) {
+                    chunk->code[opcode_offset] = OP_CALL1;
+                    if (chunk->call_ic_closures != NULL) chunk->call_ic_closures[opcode_offset] = NULL;
+                    if (chunk->call_ic_argc != NULL) chunk->call_ic_argc[opcode_offset] = 0;
+                }
+                if (!invoke_call1(vm, &frame, &ip)) {
+                    if (vm->call_prof_enabled) vm->call_prof_call1_fallback_count++;
+                    goto runtime_error;
+                }
+                if (vm->call_prof_enabled) vm->call_prof_call1_fallback_count++;
                 if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
                 break;
             }
@@ -3886,9 +4360,7 @@ op_invalid:
                     ObjClosure* closure = AS_CLOSURE(callee);
                     ObjFunction* function = closure->function;
                     if (function->tiny_inline_kind != TINY_INLINE_NONE) {
-                        if (vm->tier2_inline_hot_threshold > 0) {
-                            maybe_promote_inline_tiers(vm, function);
-                        }
+                        maybe_promote_inline_tiers(vm, function);
                     }
                     if (function->exec_tier == FUNCTION_TIER2_JIT &&
                         try_execute_tier2_template(vm, closure, 2)) {
@@ -4042,9 +4514,7 @@ op_invalid:
                 if (vm->call_prof_enabled) vm->call_prof_call2_ic_hit_count++;
                 ObjFunction* function = cached->function;
                 if (kind == CALL2_IC_TINY_INLINE) {
-                    if (vm->tier2_inline_hot_threshold > 0) {
-                        maybe_promote_inline_tiers(vm, function);
-                    }
+                    maybe_promote_inline_tiers(vm, function);
                 }
                 if (function->exec_tier == FUNCTION_TIER2_JIT &&
                     try_execute_tier2_template(vm, cached, 2)) {
@@ -4404,7 +4874,11 @@ op_invalid:
                 if (!vm_handle_op_append(vm, &frame, &ip)) goto runtime_error;
                 break;
             op_OP_IADD: case OP_IADD:
-                vm_handle_op_i_add(vm);
+                {
+                    double b = AS_NUMBER(pop(vm));
+                    double a = AS_NUMBER(pop(vm));
+                    push(vm, NUMBER_VAL(a + b));
+                }
                 break;
             op_OP_SUB_CONST: case OP_SUB_CONST: {
                 Value b = READ_CONSTANT();
@@ -4412,7 +4886,11 @@ op_invalid:
                 break;
             }
             op_OP_ISUB: case OP_ISUB:
-                vm_handle_op_i_sub(vm);
+                {
+                    double b = AS_NUMBER(pop(vm));
+                    double a = AS_NUMBER(pop(vm));
+                    push(vm, NUMBER_VAL(a - b));
+                }
                 break;
             op_OP_MUL_CONST: case OP_MUL_CONST: {
                 Value b = READ_CONSTANT();
@@ -4420,7 +4898,11 @@ op_invalid:
                 break;
             }
             op_OP_IMUL: case OP_IMUL:
-                vm_handle_op_i_mul(vm);
+                {
+                    double b = AS_NUMBER(pop(vm));
+                    double a = AS_NUMBER(pop(vm));
+                    push(vm, NUMBER_VAL(a * b));
+                }
                 break;
             op_OP_DIV_CONST: case OP_DIV_CONST: {
                 Value b = READ_CONSTANT();
@@ -4428,7 +4910,11 @@ op_invalid:
                 break;
             }
             op_OP_IDIV: case OP_IDIV:
-                vm_handle_op_i_div(vm);
+                {
+                    double b = AS_NUMBER(pop(vm));
+                    double a = AS_NUMBER(pop(vm));
+                    push(vm, NUMBER_VAL(a / b));
+                }
                 break;
             op_OP_NEGATE: case OP_NEGATE:
                 vm_handle_op_negate(vm);
@@ -4508,27 +4994,48 @@ op_invalid:
                 break;
             }
             op_OP_IMOD: case OP_IMOD: {
-                vm_handle_op_i_mod(vm);
+                double bd = AS_NUMBER(pop(vm));
+                double ad = AS_NUMBER(pop(vm));
+                if (ad > (double)INT64_MIN && ad < (double)INT64_MAX &&
+                    bd > (double)INT64_MIN && bd < (double)INT64_MAX) {
+                    int64_t ia = (int64_t)ad;
+                    int64_t ib = (int64_t)bd;
+                    if ((double)ia == ad && (double)ib == bd && ib != 0) {
+                        push(vm, NUMBER_VAL((double)(ia % ib)));
+                        break;
+                    }
+                }
+                push(vm, NUMBER_VAL(fmod(ad, bd)));
                 break;
             }
             op_OP_FADD: case OP_FADD: {
-                vm_handle_op_f_add(vm);
+                double b = AS_NUMBER(pop(vm));
+                double a = AS_NUMBER(pop(vm));
+                push(vm, NUMBER_VAL(a + b));
                 break;
             }
             op_OP_FSUB: case OP_FSUB: {
-                vm_handle_op_f_sub(vm);
+                double b = AS_NUMBER(pop(vm));
+                double a = AS_NUMBER(pop(vm));
+                push(vm, NUMBER_VAL(a - b));
                 break;
             }
             op_OP_FMUL: case OP_FMUL: {
-                vm_handle_op_f_mul(vm);
+                double b = AS_NUMBER(pop(vm));
+                double a = AS_NUMBER(pop(vm));
+                push(vm, NUMBER_VAL(a * b));
                 break;
             }
             op_OP_FDIV: case OP_FDIV: {
-                vm_handle_op_f_div(vm);
+                double b = AS_NUMBER(pop(vm));
+                double a = AS_NUMBER(pop(vm));
+                push(vm, NUMBER_VAL(a / b));
                 break;
             }
             op_OP_FMOD: case OP_FMOD: {
-                vm_handle_op_f_mod(vm);
+                double b = AS_NUMBER(pop(vm));
+                double a = AS_NUMBER(pop(vm));
+                push(vm, NUMBER_VAL(fmod(a, b)));
                 break;
             }
             op_OP_QFADD: case OP_QFADD: {
@@ -4579,6 +5086,27 @@ op_invalid:
                 }
                 break;
             }
+            op_OP_QFMOD: case OP_QFMOD: {
+                if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
+                    double bd = AS_NUMBER(pop(vm));
+                    double ad = AS_NUMBER(pop(vm));
+                    if (ad > (double)INT64_MIN && ad < (double)INT64_MAX &&
+                        bd > (double)INT64_MIN && bd < (double)INT64_MAX) {
+                        int64_t ia = (int64_t)ad;
+                        int64_t ib = (int64_t)bd;
+                        if ((double)ia == ad && (double)ib == bd && ib != 0) {
+                            push(vm, NUMBER_VAL((double)(ia % ib)));
+                            break;
+                        }
+                    }
+                    push(vm, NUMBER_VAL(fmod(ad, bd)));
+                } else {
+                    int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
+                    frame->closure->function->chunk.code[opcode_offset] = OP_MODULO;
+                    if (!vm_handle_op_modulo(vm, &frame, &ip)) goto runtime_error;
+                }
+                break;
+            }
             op_OP_MOD_CONST: case OP_MOD_CONST: {
                 Value b = READ_CONSTANT();
                 if (!vm_handle_op_mod_const(vm, &frame, &ip, b)) goto runtime_error;
@@ -4592,7 +5120,10 @@ op_invalid:
                ObjString* module_name = READ_STRING();
                InterpretResult import_result = vm_handle_op_import(vm, module_name, &frame, &ip);
                if (import_result == INTERPRET_RUNTIME_ERROR) goto runtime_error;
-               if (import_result == INTERPRET_COMPILE_ERROR) return INTERPRET_COMPILE_ERROR;
+               if (import_result == INTERPRET_COMPILE_ERROR) {
+                   OP_PROF_FLUSH();
+                   return INTERPRET_COMPILE_ERROR;
+               }
                 break;
             }
             op_OP_IMPORT_STAR: case OP_IMPORT_STAR: {
@@ -4602,6 +5133,7 @@ op_invalid:
         }
         continue;
 runtime_error:
+        OP_PROF_FLUSH();
         if (handle_exception(vm, &frame, &ip)) {
             continue;
         }
@@ -4612,6 +5144,7 @@ runtime_error:
 #undef READ_SHORT
 #undef READ_CONSTANT
 #undef READ_STRING
+#undef OP_PROF_FLUSH
 }
 
 InterpretResult vm_run_until_thread(VM* vm, int min_frame_count, ObjThread* stop_thread) {

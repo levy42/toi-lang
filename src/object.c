@@ -8,6 +8,79 @@
 struct Obj* objects = NULL;
 size_t bytes_allocated = 0;
 size_t next_gc = 1024 * 1024; // 1MB initial threshold
+static int g_object_prof_enabled = 0;
+static uint64_t g_object_alloc_count[OBJ_TYPE_COUNT];
+static uint64_t g_object_free_count[OBJ_TYPE_COUNT];
+static uint64_t g_object_alloc_bytes[OBJ_TYPE_COUNT];
+static uint64_t g_object_free_bytes[OBJ_TYPE_COUNT];
+
+static const char* object_type_name(ObjType type) {
+    switch (type) {
+        case OBJ_STRING: return "string";
+        case OBJ_TABLE: return "table";
+        case OBJ_FUNCTION: return "function";
+        case OBJ_NATIVE: return "native";
+        case OBJ_UPVALUE: return "upvalue";
+        case OBJ_CLOSURE: return "closure";
+        case OBJ_THREAD: return "thread";
+        case OBJ_USERDATA: return "userdata";
+        case OBJ_BOUND_METHOD: return "bound_method";
+        default: return "unknown";
+    }
+}
+
+static inline void object_prof_add_alloc(ObjType type, uint64_t bytes) {
+    if (!g_object_prof_enabled) return;
+    if ((unsigned)type >= OBJ_TYPE_COUNT) return;
+    g_object_alloc_count[type]++;
+    g_object_alloc_bytes[type] += bytes;
+}
+
+static inline void object_prof_add_alloc_bytes(ObjType type, uint64_t bytes) {
+    if (!g_object_prof_enabled) return;
+    if ((unsigned)type >= OBJ_TYPE_COUNT) return;
+    g_object_alloc_bytes[type] += bytes;
+}
+
+void object_prof_set_enabled(int enabled) {
+    g_object_prof_enabled = enabled ? 1 : 0;
+}
+
+int object_prof_enabled(void) {
+    return g_object_prof_enabled;
+}
+
+void object_prof_reset(void) {
+    memset(g_object_alloc_count, 0, sizeof(g_object_alloc_count));
+    memset(g_object_free_count, 0, sizeof(g_object_free_count));
+    memset(g_object_alloc_bytes, 0, sizeof(g_object_alloc_bytes));
+    memset(g_object_free_bytes, 0, sizeof(g_object_free_bytes));
+}
+
+void object_prof_print(void) {
+    if (!g_object_prof_enabled) return;
+    fprintf(stderr, "\n[vm-alloc-prof] by object type:\n");
+    for (int i = 0; i < OBJ_TYPE_COUNT; i++) {
+        uint64_t alloc_count = g_object_alloc_count[i];
+        uint64_t free_count = g_object_free_count[i];
+        uint64_t alloc_bytes = g_object_alloc_bytes[i];
+        uint64_t free_bytes = g_object_free_bytes[i];
+        if (alloc_count == 0 && free_count == 0 && alloc_bytes == 0 && free_bytes == 0) {
+            continue;
+        }
+        long long live_count = (long long)alloc_count - (long long)free_count;
+        long long live_bytes = (long long)alloc_bytes - (long long)free_bytes;
+        fprintf(stderr,
+                "  - %s alloc_count=%llu free_count=%llu live_count=%lld alloc_bytes=%llu free_bytes=%llu live_bytes=%lld\n",
+                object_type_name((ObjType)i),
+                (unsigned long long)alloc_count,
+                (unsigned long long)free_count,
+                live_count,
+                (unsigned long long)alloc_bytes,
+                (unsigned long long)free_bytes,
+                live_bytes);
+    }
+}
 
 // Simple FNV-1a hash function
 static uint32_t hash_string(const char* key, int length) {
@@ -27,11 +100,13 @@ static struct Obj* allocate_object(size_t size, ObjType type) {
     objects = object;
     
     bytes_allocated += size;
+    object_prof_add_alloc(type, (uint64_t)size);
     return object;
 }
 
 static ObjString* allocate_string(char* chars, int length, uint32_t hash) {
     bytes_allocated += length + 1; // Track string content too
+    object_prof_add_alloc_bytes(OBJ_STRING, (uint64_t)(length + 1));
     ObjString* string = (ObjString*)allocate_object(sizeof(ObjString), OBJ_STRING);
     string->length = length;
     string->chars = chars;
@@ -42,6 +117,7 @@ static ObjString* allocate_string(char* chars, int length, uint32_t hash) {
 
 static ObjString* allocate_string_unhashed(char* chars, int length) {
     bytes_allocated += length + 1; // Track string content too
+    object_prof_add_alloc_bytes(OBJ_STRING, (uint64_t)(length + 1));
     ObjString* string = (ObjString*)allocate_object(sizeof(ObjString), OBJ_STRING);
     string->length = length;
     string->chars = chars;
@@ -160,6 +236,7 @@ ObjClosure* new_closure(ObjFunction* function) {
     closure->upvalues = upvalues;
     closure->upvalue_count = 0;  // Will be set by compiler
     bytes_allocated += sizeof(ObjUpvalue*) * 256;
+    object_prof_add_alloc_bytes(OBJ_CLOSURE, (uint64_t)(sizeof(ObjUpvalue*) * 256));
     return closure;
 }
 
@@ -197,6 +274,9 @@ ObjThread* new_thread_with_caps(int stack_cap, int frame_cap, int handler_cap) {
     bytes_allocated += sizeof(Value) * (size_t)stack_cap;
     bytes_allocated += sizeof(CallFrame) * (size_t)frame_cap;
     bytes_allocated += sizeof(ExceptionHandler) * (size_t)handler_cap;
+    object_prof_add_alloc_bytes(OBJ_THREAD, (uint64_t)(sizeof(Value) * (size_t)stack_cap));
+    object_prof_add_alloc_bytes(OBJ_THREAD, (uint64_t)(sizeof(CallFrame) * (size_t)frame_cap));
+    object_prof_add_alloc_bytes(OBJ_THREAD, (uint64_t)(sizeof(ExceptionHandler) * (size_t)handler_cap));
     return thread;
 }
 
@@ -391,6 +471,10 @@ void print_object(Value value) {
 
             break;
 
+        case OBJ_TYPE_COUNT:
+            printf("<invalid object>");
+            break;
+
     }
 
 }
@@ -534,6 +618,8 @@ static void mark_table(Table* table) {
 }
 
 void free_object(struct Obj* object) {
+    ObjType prof_type = object->type;
+    size_t before_bytes = bytes_allocated;
     switch (object->type) {
         case OBJ_STRING: {
             ObjString* string = (ObjString*)object;
@@ -620,6 +706,15 @@ void free_object(struct Obj* object) {
             bytes_allocated -= sizeof(ObjBoundMethod);
             free(object);
             break;
+        }
+        case OBJ_TYPE_COUNT:
+            free(object);
+            break;
+    }
+    if (g_object_prof_enabled && (unsigned)prof_type < OBJ_TYPE_COUNT) {
+        g_object_free_count[prof_type]++;
+        if (before_bytes > bytes_allocated) {
+            g_object_free_bytes[prof_type] += (uint64_t)(before_bytes - bytes_allocated);
         }
     }
 }

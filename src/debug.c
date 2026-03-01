@@ -104,6 +104,14 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return simple_instruction("OP_THROW", offset);
         case OP_BUILD_STRING:
             return byte_instruction("OP_BUILD_STRING", chunk, offset);
+        case OP_BUILD_STRING2:
+            return simple_instruction("OP_BUILD_STRING2", offset);
+        case OP_BUILD_STRING3:
+            return simple_instruction("OP_BUILD_STRING3", offset);
+        case OP_BUILD_STRING4:
+            return simple_instruction("OP_BUILD_STRING4", offset);
+        case OP_BUILD_STRING5:
+            return simple_instruction("OP_BUILD_STRING5", offset);
         case OP_FOR_PREP: {
             uint8_t var_slot = chunk->code[offset + 1];
             uint8_t end_slot = chunk->code[offset + 2];
@@ -138,18 +146,32 @@ int disassemble_instruction(Chunk* chunk, int offset) {
         }
         case OP_GET_LOCAL:
             return byte_instruction("OP_GET_LOCAL", chunk, offset);
+        case OP_GET2_LOCAL:
+            return double_byte_instruction("OP_GET2_LOCAL", chunk, offset);
         case OP_SET_LOCAL:
             return byte_instruction("OP_SET_LOCAL", chunk, offset);
+        case OP_SET_LOCAL_POP:
+            return byte_instruction("OP_SET_LOCAL_POP", chunk, offset);
         case OP_ADD_SET_LOCAL:
             return byte_instruction("OP_ADD_SET_LOCAL", chunk, offset);
+        case OP_ADD_SET_LOCAL_POP:
+            return byte_instruction("OP_ADD_SET_LOCAL_POP", chunk, offset);
         case OP_SUB_SET_LOCAL:
             return byte_instruction("OP_SUB_SET_LOCAL", chunk, offset);
+        case OP_SUB_SET_LOCAL_POP:
+            return byte_instruction("OP_SUB_SET_LOCAL_POP", chunk, offset);
         case OP_MUL_SET_LOCAL:
             return byte_instruction("OP_MUL_SET_LOCAL", chunk, offset);
+        case OP_MUL_SET_LOCAL_POP:
+            return byte_instruction("OP_MUL_SET_LOCAL_POP", chunk, offset);
         case OP_DIV_SET_LOCAL:
             return byte_instruction("OP_DIV_SET_LOCAL", chunk, offset);
+        case OP_DIV_SET_LOCAL_POP:
+            return byte_instruction("OP_DIV_SET_LOCAL_POP", chunk, offset);
         case OP_MOD_SET_LOCAL:
             return byte_instruction("OP_MOD_SET_LOCAL", chunk, offset);
+        case OP_MOD_SET_LOCAL_POP:
+            return byte_instruction("OP_MOD_SET_LOCAL_POP", chunk, offset);
         case OP_INC_LOCAL:
             return double_byte_instruction("OP_INC_LOCAL", chunk, offset);
         case OP_SUB_LOCAL_CONST:
@@ -164,6 +186,8 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return byte_instruction("OP_GET_UPVALUE", chunk, offset);
         case OP_SET_UPVALUE:
             return byte_instruction("OP_SET_UPVALUE", chunk, offset);
+        case OP_SET_UPVALUE_POP:
+            return byte_instruction("OP_SET_UPVALUE_POP", chunk, offset);
         case OP_CLOSE_UPVALUE:
             return simple_instruction("OP_CLOSE_UPVALUE", offset);
         case OP_GET_TABLE:
@@ -232,6 +256,10 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return simple_instruction("OP_CALL0", offset);
         case OP_CALL1:
             return simple_instruction("OP_CALL1", offset);
+        case OP_QCALL0:
+            return simple_instruction("OP_QCALL0", offset);
+        case OP_QCALL1:
+            return simple_instruction("OP_QCALL1", offset);
         case OP_CALL2:
             return simple_instruction("OP_CALL2", offset);
         case OP_QCALL2:
@@ -272,6 +300,8 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return constant_instruction("OP_DEFINE_GLOBAL", chunk, offset);
         case OP_SET_GLOBAL:
             return constant_instruction("OP_SET_GLOBAL", chunk, offset);
+        case OP_SET_GLOBAL_POP:
+            return constant_instruction("OP_SET_GLOBAL_POP", chunk, offset);
         case OP_DELETE_GLOBAL:
             return constant_instruction("OP_DELETE_GLOBAL", chunk, offset);
         case OP_NIL:
@@ -324,6 +354,8 @@ int disassemble_instruction(Chunk* chunk, int offset) {
             return simple_instruction("OP_QFMUL", offset);
         case OP_QFDIV:
             return simple_instruction("OP_QFDIV", offset);
+        case OP_QFMOD:
+            return simple_instruction("OP_QFMOD", offset);
         case OP_QGREATER_NUM:
             return simple_instruction("OP_QGREATER_NUM", offset);
         case OP_QLESS_NUM:

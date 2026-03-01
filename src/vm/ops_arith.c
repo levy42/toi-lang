@@ -267,6 +267,7 @@ int vm_handle_op_modulo(VM* vm, CallFrame** frame, uint8_t** ip) {
     Value b = pop(vm);
     Value a = pop(vm);
     if (IS_NUMBER(a) && IS_NUMBER(b)) {
+        quicken_current_binary_opcode(*frame, *ip, OP_QFMOD);
         double ad = AS_NUMBER(a);
         double bd = AS_NUMBER(b);
         int64_t ia, ib;

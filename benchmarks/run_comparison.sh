@@ -12,7 +12,7 @@ elif command -v python >/dev/null 2>&1; then
 fi
 
 if [ ! -x "$ROOT_DIR/toi" ]; then
-  echo "toi binary not found. Run 'make' first." >&2
+  echo "toi binary not found. Run 'make release-perf' (or 'make') first." >&2
   exit 1
 fi
 
@@ -21,16 +21,23 @@ if [ -z "$PYA" ]; then
   exit 1
 fi
 
-if ! command -v lua >/dev/null 2>&1; then
-  echo "Lua not found. Install 'lua' to run comparison." >&2
+LUA_BIN=""
+if command -v luajit >/dev/null 2>&1; then
+  LUA_BIN="luajit"
+elif command -v lua >/dev/null 2>&1; then
+  LUA_BIN="lua"
+fi
+
+if [ -z "$LUA_BIN" ]; then
+  echo "Lua runtime not found. Install 'luajit' or 'lua' to run comparison." >&2
   exit 1
 fi
 
 printf "\nPython (%s)\n\n" "$PYA"
 "$PYA" "$ROOT_DIR/benchmarks/perf.py"
 
-printf "\nLua\n\n"
-lua "$ROOT_DIR/benchmarks/perf.lua"
+printf "\nLua (%s)\n\n" "$LUA_BIN"
+"$LUA_BIN" "$ROOT_DIR/benchmarks/perf.lua"
 
 printf "\nToi\n\n"
 "$ROOT_DIR/toi" "$ROOT_DIR/benchmarks/perf.toi"

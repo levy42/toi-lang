@@ -65,6 +65,57 @@ fn bench_fstring()
     total = total + #s
   return total
 
+fn bench_app_pipeline()
+  methods = {"GET", "POST", "PUT", "DELETE"}
+  paths = {"/users", "/teams", "/search", "/assets", "/health", "/events"}
+
+  routes = {}
+  routes["GET /users"] = 1
+  routes["POST /users"] = 2
+  routes["GET /teams"] = 3
+  routes["PUT /teams"] = 4
+  routes["GET /search"] = 5
+  routes["GET /assets"] = 6
+  routes["GET /health"] = 7
+  routes["POST /events"] = 8
+
+  cache = {}
+  total = 0
+  for i in 1..300000
+    method = methods[(i % 4) + 1]
+    path = paths[(i % 6) + 1]
+    key = f"{method} {path}"
+
+    route = routes[key]
+    if not route
+      route = 0
+
+    auth = (i % 3) != 0
+    user_id = i % 10000
+    team_id = i % 100
+    body_size = (i * 37) % 2048
+
+    status = 200
+    if not auth and path != "/health"
+      status = 401
+    elif method == "POST" and body_size < 32
+      status = 422
+    elif route == 0
+      status = 404
+
+    cache_key = f"{path}:{user_id % 32}:{team_id}"
+    cached = cache[cache_key]
+    if cached
+      total = total + cached
+    else
+      cache_value = route + status + body_size
+      cache[cache_key] = cache_value
+      total = total + cache_value
+
+    total = total + status + route + user_id + team_id
+
+  return total
+
 fn bench_memory()
   gc
   base = mem()
@@ -83,5 +134,6 @@ bench("string ops", bench_string_ops)
 bench("table", bench_table)
 bench("calls", bench_calls)
 bench("f-string", bench_fstring)
+bench("app pipeline", bench_app_pipeline)
 used = bench("memory", bench_memory)
 print string.format("memory %d bytes", used)

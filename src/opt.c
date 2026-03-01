@@ -18,16 +18,24 @@ int chunk_instr_length(Chunk* chunk, int offset) {
         case OP_GET_GLOBAL:
         case OP_DEFINE_GLOBAL:
         case OP_SET_GLOBAL:
+        case OP_SET_GLOBAL_POP:
         case OP_DELETE_GLOBAL:
         case OP_GET_LOCAL:
         case OP_SET_LOCAL:
+        case OP_SET_LOCAL_POP:
         case OP_ADD_SET_LOCAL:
+        case OP_ADD_SET_LOCAL_POP:
         case OP_SUB_SET_LOCAL:
+        case OP_SUB_SET_LOCAL_POP:
         case OP_MUL_SET_LOCAL:
+        case OP_MUL_SET_LOCAL_POP:
         case OP_DIV_SET_LOCAL:
+        case OP_DIV_SET_LOCAL_POP:
         case OP_MOD_SET_LOCAL:
+        case OP_MOD_SET_LOCAL_POP:
         case OP_GET_UPVALUE:
         case OP_SET_UPVALUE:
+        case OP_SET_UPVALUE_POP:
         case OP_RETURN_N:
         case OP_ADJUST_STACK:
         case OP_CALL:
@@ -41,10 +49,16 @@ int chunk_instr_length(Chunk* chunk, int offset) {
             return 2;
         case OP_CALL0:
         case OP_CALL1:
+        case OP_QCALL0:
+        case OP_QCALL1:
         case OP_CALL2:
         case OP_QCALL2:
         case OP_QCALL1_STR_FIND:
         case OP_QINVOKE1_STR_FIND:
+        case OP_BUILD_STRING2:
+        case OP_BUILD_STRING3:
+        case OP_BUILD_STRING4:
+        case OP_BUILD_STRING5:
         case OP_SET_TABLE_KEEP:
             return 1;
         case OP_TRY:
@@ -55,6 +69,7 @@ int chunk_instr_length(Chunk* chunk, int offset) {
         case OP_DIV_LOCAL_CONST:
         case OP_MOD_LOCAL_CONST:
         case OP_UNPACK:
+        case OP_GET2_LOCAL:
             return 3;
         case OP_INVOKE:
         case OP_QINVOKE0_STR_LOWER:
@@ -408,6 +423,43 @@ void optimize_chunk(Chunk* chunk) {
             emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, slot);
             i += 3;
             continue;
+        }
+
+        // Fuse OP_GET_LOCAL a; OP_GET_LOCAL b -> OP_GET2_LOCAL a b
+        if (i + 3 < old_count &&
+            !is_jump_target[i] &&
+            !is_jump_target[i + 2] &&
+            chunk->code[i] == OP_GET_LOCAL &&
+            chunk->code[i + 2] == OP_GET_LOCAL) {
+            int line = chunk->lines[i];
+            uint8_t a = chunk->code[i + 1];
+            uint8_t b = chunk->code[i + 3];
+            emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, OP_GET2_LOCAL);
+            emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, a);
+            emit_byte(&new_code, &new_count, &new_capacity, line, &new_lines, b);
+            i += 4;
+            continue;
+        }
+
+        // Fuse OP_*_SET_LOCAL + OP_POP -> OP_*_SET_LOCAL_POP
+        if (i + 2 < old_count &&
+            !is_jump_target[i] &&
+            !is_jump_target[i + 2] &&
+            chunk->code[i + 2] == OP_POP) {
+            uint8_t op = chunk->code[i];
+            uint8_t fused = 0;
+            if (op == OP_ADD_SET_LOCAL) fused = OP_ADD_SET_LOCAL_POP;
+            else if (op == OP_SUB_SET_LOCAL) fused = OP_SUB_SET_LOCAL_POP;
+            else if (op == OP_MUL_SET_LOCAL) fused = OP_MUL_SET_LOCAL_POP;
+            else if (op == OP_DIV_SET_LOCAL) fused = OP_DIV_SET_LOCAL_POP;
+            else if (op == OP_MOD_SET_LOCAL) fused = OP_MOD_SET_LOCAL_POP;
+            if (fused != 0) {
+                int line = chunk->lines[i];
+                uint8_t slot = chunk->code[i + 1];
+                emit_bytes(&new_code, &new_count, &new_capacity, line, &new_lines, fused, slot);
+                i += 3;
+                continue;
+            }
         }
 
         int len = chunk_instr_length(chunk, i);
