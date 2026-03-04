@@ -1,0 +1,92 @@
+from lib.test import assert_eq, assert_true
+
+http_server = import lib.http_server
+db_mod = import lib.db
+types = import lib.types
+admin_mod = import lib.admin
+os = import os
+
+fn assert_has(haystack, needle)
+  if haystack.find(needle) == nil
+    error("expected response to contain: " + needle)
+
+base = "tests/tmp_admin"
+os.remove(base + "_users.db")
+os.remove(base + "_users__idx_email.db")
+
+User = types.Record {
+  id = types.String,
+  name = types.String,
+  email = types.String,
+  age = types.Integer,
+  active = types.Boolean
+}
+User.__name = "users"
+User.__indexes = {
+  {field = "email", unique = true}
+}
+
+db = db_mod.open(base)
+db.create_table(User)
+
+app = http_server(host = "127.0.0.1", port = 0)
+admin = admin_mod.new(app, db, {title = "Test Admin", mount_path = "/admin"})
+admin.register(User, {
+  label = "Users",
+  list_fields = {"id", "name", "email", "age", "active"},
+  search_fields = {"name", "email"},
+  field_types = {active = "bool", age = "int"}
+})
+
+r0 = app.handler({method = "GET", path = "/admin"})
+assert_has(r0, "302 Found")
+assert_has(r0, "Location: /admin/users")
+
+r1 = app.handler({method = "GET", path = "/admin/users", query = "q="})
+assert_has(r1, "200 OK")
+assert_has(r1, "Users")
+assert_has(r1, "New Users")
+
+r2 = app.handler({
+  method = "POST",
+  path = "/admin/users/new",
+  headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+  body = "name=Ana&email=ana%40example.com&age=31&active=on"
+})
+assert_has(r2, "302 Found")
+
+saved = db.users.first(email = "ana@example.com")
+assert_true(saved != nil)
+assert_eq(saved.name, "Ana")
+assert_eq(saved.age, 31)
+assert_eq(saved.active, true)
+
+r3 = app.handler({
+  method = "POST",
+  path = "/admin/users/" + saved.id + "/edit",
+  headers = { ["content-type"] = "application/x-www-form-urlencoded" },
+  body = "name=Ana+Maria&email=ana%40example.com&age=32"
+})
+assert_has(r3, "302 Found")
+
+updated = db.users.get(saved.id)
+assert_eq(updated.name, "Ana Maria")
+assert_eq(updated.age, 32)
+assert_eq(updated.active, false)
+
+r4 = app.handler({method = "GET", path = "/admin/users", query = "q=Maria"})
+assert_has(r4, "200 OK")
+assert_has(r4, "Ana Maria")
+
+r5 = app.handler({
+  method = "POST",
+  path = "/admin/users/" + saved.id + "/delete"
+})
+assert_has(r5, "302 Found")
+assert_eq(db.users.count(), 0)
+
+db.close()
+os.remove(base + "_users.db")
+os.remove(base + "_users__idx_email.db")
+
+print "admin framework ok"

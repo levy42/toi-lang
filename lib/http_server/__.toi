@@ -15,14 +15,14 @@ HttpServer.__index = HttpServer
 
 fn normalize_mount_path(path)
   p = path
-  if type(p) != "string" or p == ""
+  if not istype(p, "string") or p == ""
     p = "/"
 
   if p[1] != "/"
     p = "/" + p
 
   while #p > 1 and p[#p] == "/"
-    p = string.sub(p, 1, #p - 1)
+    p = p.sub(1, #p - 1)
 
   return p
 
@@ -37,7 +37,7 @@ fn clean_relative_path(raw_rel)
   if rel == ""
     return "index.html"
 
-  parts = string.split(rel, "/")
+  parts = rel.split("/")
   out = {}
   for part in parts
     if part == nil or part == "" or part == "."
@@ -52,7 +52,7 @@ fn clean_relative_path(raw_rel)
 
 fn resolve_mount_relative_path(req_path, mount_path)
   path = req_path
-  if type(path) != "string" or path == ""
+  if not istype(path, "string") or path == ""
     path = "/"
 
   if mount_path == "/"
@@ -65,7 +65,7 @@ fn resolve_mount_relative_path(req_path, mount_path)
   if path[..#prefix] != prefix
     return nil
 
-  return clean_relative_path(string.sub(path, #prefix + 1))
+  return clean_relative_path(path.sub(#prefix + 1))
 
 fn join_path(base, rel)
   if base == nil or base == ""
@@ -90,7 +90,7 @@ fn path_extension(path)
   if last_dot == 0 or last_dot <= last_slash or last_dot == #path
     return ""
 
-  return string.lower(string.sub(path, last_dot + 1))
+  return path.sub(last_dot + 1).lower()
 
 fn content_type_for(path)
   ext = path_extension(path)
@@ -131,38 +131,38 @@ fn content_type_for(path)
   return "application/octet-stream"
 
 fn accepts_gzip(req)
-  if type(req) != "table"
+  if not istype(req, "table")
     return false
 
   headers = req.headers
-  if type(headers) != "table"
+  if not istype(headers, "table")
     return false
 
   raw = headers["accept-encoding"]
-  if type(raw) != "string"
+  if not istype(raw, "string")
     return false
 
-  entries = string.split(string.lower(raw), ",")
+  entries = raw.lower().split(",")
   for entry in entries
-    token = string.trim(entry)
+    token = entry.trim()
     if token == ""
       continue
 
-    parts = string.split(token, ";")
-    name = string.trim(parts[1] or "")
+    parts = token.split(";")
+    name = (parts[1] or "").trim()
     if name != "gzip"
       continue
 
     q = 1.0
     i = 2
     while i <= #parts
-      param = string.trim(parts[i] or "")
-      eq_i = string.find(param, "=")
+      param = (parts[i] or "").trim()
+      eq_i = param.find("=")
       eq_j = eq_i == nil ? nil : eq_i
       if eq_i and eq_i > 1
-        key = string.trim(string.sub(param, 1, eq_i - 1))
+        key = param.sub(1, eq_i - 1).trim()
         if key == "q"
-          value = string.trim(string.sub(param, eq_j + 1))
+          value = param.sub(eq_j + 1).trim()
           try
             q = float(value)
           except e
@@ -175,36 +175,25 @@ fn accepts_gzip(req)
   return false
 
 fn read_file(path)
-  f = io.open(path, "r")
-  if f == nil
+  try
+    with io.open(path, "r") as f
+      return f.read()
+  except e
     return nil
-
-  data = nil
-  try
-    data = f.read()
-  except e
-    data = nil
-
-  try
-    f.close()
-  except e
-    nil
-
-  return data
 
 fn request_header(req, name)
-  if type(req) != "table" or type(req.headers) != "table"
+  if not istype(req, "table") or not istype(req.headers, "table")
     return nil
-  key = string.lower(name or "")
+  key = (name or "").lower()
   value = req.headers[key]
   if value
     return value
   return req.headers[name]
 
 fn parse_nonneg_int(raw)
-  if type(raw) != "string"
+  if not istype(raw, "string")
     return nil
-  token = string.trim(raw)
+  token = raw.trim()
   if token == ""
     return nil
   n = nil
@@ -223,11 +212,11 @@ fn build_etag(file_stat)
 
 fn etag_matches(req, etag)
   raw = request_header(req, "if-none-match")
-  if type(raw) != "string"
+  if not istype(raw, "string")
     return false
-  entries = string.split(raw, ",")
+  entries = raw.split(",")
   for entry in entries
-    token = string.trim(entry or "")
+    token = (entry or "").trim()
     if token == "*"
       return true
     if token == etag
@@ -238,7 +227,7 @@ fn etag_matches(req, etag)
 
 fn modified_since_match(req, file_stat)
   raw = request_header(req, "if-modified-since")
-  if type(raw) != "string"
+  if not istype(raw, "string")
     return false
   ts = parse_nonneg_int(raw)
   if ts == nil
@@ -246,27 +235,27 @@ fn modified_since_match(req, file_stat)
   return int(file_stat.mtime or 0) <= ts
 
 fn parse_single_byte_range(raw_range, size)
-  if type(raw_range) != "string"
+  if not istype(raw_range, "string")
     return nil, nil
   if size < 0
     size = 0
 
-  value = string.trim(raw_range)
+  value = raw_range.trim()
   if value == ""
     return nil, nil
-  if string.lower(value[..6]) != "bytes="
+  if value[..6].lower() != "bytes="
     return false, "invalid"
-  spec = string.trim(value[7..])
-  if string.find(spec, ",")
+  spec = value[7..].trim()
+  if spec.find(",")
     return false, "invalid"
 
-  dash_i = string.find(spec, "-")
+  dash_i = spec.find("-")
   dash_j = dash_i == nil ? nil : dash_i
   if dash_i == nil
     return false, "invalid"
 
-  start_raw = string.trim(string.sub(spec, 1, dash_i - 1))
-  end_raw = string.trim(string.sub(spec, dash_j + 1))
+  start_raw = spec.sub(1, dash_i - 1).trim()
+  end_raw = spec.sub(dash_j + 1).trim()
   if start_raw == "" and end_raw == ""
     return false, "invalid"
 
@@ -323,7 +312,7 @@ fn serve_mount_file(mount, req)
   if rel == nil
     return false, nil
 
-  method = string.upper(req.method or "GET")
+  method = (req.method or "GET").upper()
   if method != "GET" and method != "HEAD"
     return true, http.response(405, nil, "Method Not Allowed")
 
@@ -335,7 +324,7 @@ fn serve_mount_file(mount, req)
     return true, http.response(404, nil, "Not Found")
 
   file_stat = stat.stat(file_path)
-  if type(file_stat) != "table"
+  if not istype(file_stat, "table")
     return true, http.response(404, nil, "Not Found")
 
   file_size = int(file_stat.size or 0)
@@ -357,7 +346,7 @@ fn serve_mount_file(mount, req)
   status = 200
   range_enabled = false
   range_req = request_header(req, "range")
-  if type(range_req) == "string" and range_req != ""
+  if istype(range_req, "string") and range_req != ""
     parsed_range, range_err = parse_single_byte_range(range_req, file_size)
     if parsed_range == false
       if range_err == "unsat"
@@ -372,7 +361,7 @@ fn serve_mount_file(mount, req)
     if parsed_range != nil
       range_enabled = true
       status = 206
-      body = string.sub(body, parsed_range.start + 1, parsed_range["end"] + 1)
+      body = body.sub(parsed_range.start + 1, parsed_range["end"] + 1)
       headers["Content-Range"] = "bytes " + str(parsed_range.start) + "-" + str(parsed_range["end"]) + "/" + str(file_size)
 
   if not range_enabled
@@ -395,12 +384,12 @@ fn dispatch_static_mounts(app, req)
 fn _new_http_server_app(cls, opts = nil)
   actual_cls = cls
   actual_opts = opts
-  if actual_opts == nil and type(actual_cls) == "table" and actual_cls.route == nil and actual_cls.get == nil and actual_cls.post == nil
+  if actual_opts == nil and istype(actual_cls, "table") and actual_cls.route == nil and actual_cls.get == nil and actual_cls.post == nil
     actual_opts = actual_cls
     actual_cls = HttpServer
   if actual_opts == nil
     actual_opts = {}
-  if type(actual_cls) != "table"
+  if not istype(actual_cls, "table")
     actual_cls = HttpServer
 
   app = {}
@@ -415,9 +404,9 @@ fn _new_http_server_app(cls, opts = nil)
   app.ssl_cert = actual_opts.ssl_cert or actual_opts.cert or actual_opts.cert_path
   app.ssl_key = actual_opts.ssl_key or actual_opts.key or actual_opts.key_path
   if app.ssl
-    if type(app.ssl_cert) != "string" or app.ssl_cert == ""
+    if not istype(app.ssl_cert, "string") or app.ssl_cert == ""
       error("http_server ssl=true requires ssl_cert")
-    if type(app.ssl_key) != "string" or app.ssl_key == ""
+    if not istype(app.ssl_key, "string") or app.ssl_key == ""
       error("http_server ssl=true requires ssl_key")
   app.running = false
   app.stop_requested = false
@@ -446,21 +435,18 @@ fn _new_http_server_app(cls, opts = nil)
       return Route.dispatch(app, req)
 
   app.handler = fn(req)
-    if type(req) != "table"
+    if not istype(req, "table")
       req = {}
-    if type(req.method) != "string"
+    if not istype(req.method, "string")
       req.method = str(req.method or "GET")
-    if type(req.path) != "string"
+    if not istype(req.path, "string")
       req.path = str(req.path or "/")
-    if type(req.headers) != "table"
+    if not istype(req.headers, "table")
       req.headers = {}
-    if type(req.query) != "string" and req.query != nil
+    if not istype(req.query, "string") and req.query != nil
       req.query = str(req.query)
-    if type(req.body) != "string" and req.body != nil
+    if not istype(req.body, "string") and req.body != nil
       req.body = str(req.body)
-
-    if req.path == "/favicon.ico"
-      return http.response(204, {["Content-Type"] = "image/x-icon", ["Content-Length"] = "0"}, "")
 
     static_res = dispatch_static_mounts(app, req)
     if static_res != nil
@@ -485,7 +471,7 @@ fn _new_http_server_app(cls, opts = nil)
   app.delete = fn(path)
     return app.route("DELETE", path)
   app.serve_dir = fn(dir_path, path, gzip = false)
-    if type(dir_path) != "string" or dir_path == ""
+    if not istype(dir_path, "string") or dir_path == ""
       error("serve_dir(dir_path, path, gzip=false): dir_path must be a non-empty string")
 
     mount_path = normalize_mount_path(path)
@@ -542,7 +528,7 @@ HttpServer.delete = fn(self, path)
   return self.route("DELETE", path)
 
 HttpServer.serve_dir = fn(self, dir_path, path, gzip = false)
-  if type(dir_path) != "string" or dir_path == ""
+  if not istype(dir_path, "string") or dir_path == ""
     error("serve_dir(dir_path, path, gzip=false): dir_path must be a non-empty string")
 
   mount_path = normalize_mount_path(path)
@@ -570,7 +556,7 @@ HttpServer.stop = fn(self, grace_sec = nil)
   grace = grace_sec
   if grace == nil
     grace = self.stop_grace_seconds or 0
-  if type(grace) != "number" or grace < 0
+  if not istype(grace, "number") or grace < 0
     grace = 0
   self.stop_requested = true
   self.stop_deadline = os.clock() + grace

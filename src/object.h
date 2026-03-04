@@ -119,6 +119,7 @@ typedef enum {
     NATIVE_FAST_MATH_FMOD,
     NATIVE_FAST_MATH_DEG,
     NATIVE_FAST_MATH_RAD,
+    NATIVE_FAST_MATH_RANDOM,
     NATIVE_FAST_STR_UPPER,
     NATIVE_FAST_STR_LOWER,
     NATIVE_FAST_STR_FIND,
@@ -147,7 +148,9 @@ typedef enum {
     TINY_INLINE_DIV2 = 12,
     TINY_INLINE_GT2 = 13,
     TINY_INLINE_LT2 = 14,
-    TINY_INLINE_EQ2 = 15
+    TINY_INLINE_EQ2 = 15,
+    TINY_INLINE_RET0_2 = 16,
+    TINY_INLINE_RET1_2 = 17
 } TinyInlineKind;
 
 typedef enum {
@@ -282,6 +285,9 @@ void print_object(Value value);
 
 void mark_object(struct Obj* object);
 void mark_value(Value value);
+void object_intern_init(void);
+void object_intern_free(void);
+void object_mark_interned_strings(void);
 void sweep_objects();
 void object_prof_set_enabled(int enabled);
 int object_prof_enabled(void);

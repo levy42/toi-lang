@@ -15,23 +15,22 @@ fn stream_response(status, headers, stream)
   }
 
 Response.normalize = fn(res)
-  res_type = type(res)
-  if res_type == "string"
+  if istype(res, "string")
     if res[..5] == "HTTP/"
       return res
     return http.response(200, {["Content-Type"] = "text/plain"}, res)
 
-  if STREAM_TYPES[res_type]
+  if STREAM_TYPES[type(res)]
     return stream_response(200, {}, res)
 
-  if res_type == "table"
+  if istype(res, "table")
     if res.__stream or res.stream or STREAM_TYPES[type(res.body)]
       return stream_response(res.status, res.headers, res.stream or res.body)
     if res.status or res.headers or res.body
       return http.response(res.status or 200, res.headers, res.body or "")
     return http.response(200, {["Content-Type"] = "application/json"}, json.encode(res))
 
-  if JSON_SCALAR_TYPES[res_type]
+  if JSON_SCALAR_TYPES[type(res)]
     return http.response(200, {["Content-Type"] = "application/json"}, json.encode(res))
   return http.response(500, nil, "Invalid handler response type")
 

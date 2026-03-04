@@ -18,6 +18,7 @@
 #endif
 
 #include "common.h"
+#include "jit.h"
 #include "opt.h"
 #include "table.h"
 #include "vm.h"
@@ -43,6 +44,8 @@
 #include "vm/ops_unary.h"
 #include "lib/libs.h" // For register_libs
 #include "object.h" // For free_object
+
+extern struct Obj* objects;
 
 // #define DEBUG_TABLE_KEYS
 
@@ -364,6 +367,35 @@ static int try_fast_native_call(VM* vm, ObjNative* native, int arg_count, Value*
         case NATIVE_FAST_MATH_RAD:
             if (arg_count != 1 || !IS_NUMBER(args[0])) goto fast_arg_error;
             push(vm, NUMBER_VAL(AS_NUMBER(args[0]) * (3.14159265358979323846 / 180.0)));
+            return 1;
+        case NATIVE_FAST_MATH_RANDOM:
+            if (arg_count == 0) {
+                push(vm, NUMBER_VAL((double)rand() / (double)RAND_MAX));
+                return 1;
+            }
+            if (arg_count == 1) {
+                if (!IS_NUMBER(args[0])) goto fast_arg_error;
+                int max = (int)AS_NUMBER(args[0]);
+                if (max < 1) {
+                    push(vm, NIL_VAL);
+                } else {
+                    push(vm, NUMBER_VAL((double)(rand() % max) + 1));
+                }
+                return 1;
+            }
+            if (arg_count == 2) {
+                if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) goto fast_arg_error;
+                int min = (int)AS_NUMBER(args[0]);
+                int max = (int)AS_NUMBER(args[1]);
+                if (min > max) {
+                    push(vm, NIL_VAL);
+                } else {
+                    push(vm, NUMBER_VAL((double)(min + rand() % (max - min + 1))));
+                }
+                return 1;
+            }
+            // math.random returns nil when argc > 2.
+            push(vm, NIL_VAL);
             return 1;
         case NATIVE_FAST_STR_UPPER: {
             if (arg_count != 1 || !IS_STRING(args[0])) goto fast_arg_error;
@@ -963,6 +995,19 @@ static int value_matches_type(Value v, uint8_t type) {
     }
 }
 
+static inline int call_args_match_param_types(
+    ObjFunction* function,
+    Value* args,
+    int arg_count) {
+    if (function == NULL || arg_count < 0) return 0;
+    if (function->param_types_count <= 0 || function->param_types == NULL) return 1;
+    int check_count = function->param_types_count < arg_count ? function->param_types_count : arg_count;
+    for (int i = 0; i < check_count; i++) {
+        if (!value_matches_type(args[i], function->param_types[i])) return 0;
+    }
+    return 1;
+}
+
 static inline int value_matches_numeric_hint_fast(Value v, uint8_t type) {
     if (!IS_NUMBER(v)) return 0;
     if (type == TYPEHINT_FLOAT) return 1;
@@ -1173,6 +1218,157 @@ static void vm_prof_print(VM* vm) {
         }
     }
 
+    if (vm->table_prof_enabled) {
+        fprintf(stderr,
+                "\n[vm-table-prof] get_ic exact_hit=%llu slot_hit=%llu miss=%llu generic_lookup=%llu meta_index=%llu\n",
+                (unsigned long long)vm->table_prof_get_ic_exact_hit_count,
+                (unsigned long long)vm->table_prof_get_ic_slot_hit_count,
+                (unsigned long long)vm->table_prof_get_ic_miss_count,
+                (unsigned long long)vm->table_prof_get_generic_lookup_count,
+                (unsigned long long)vm->table_prof_get_meta_index_count);
+        fprintf(stderr,
+                "[vm-table-prof] set_ic exact_hit=%llu slot_hit=%llu miss=%llu generic_store=%llu meta_newindex=%llu\n",
+                (unsigned long long)vm->table_prof_set_ic_exact_hit_count,
+                (unsigned long long)vm->table_prof_set_ic_slot_hit_count,
+                (unsigned long long)vm->table_prof_set_ic_miss_count,
+                (unsigned long long)vm->table_prof_set_generic_store_count,
+                (unsigned long long)vm->table_prof_set_meta_newindex_count);
+    }
+
+    if (vm->table_site_prof_enabled) {
+        typedef struct {
+            ObjFunction* fn;
+            int offset;
+            uint32_t accesses;
+            uint8_t unique;
+        } TableSiteTop;
+        TableSiteTop top_get[8] = {0};
+        TableSiteTop top_set[8] = {0};
+        uint64_t get_sites = 0, set_sites = 0;
+        uint64_t get_poly = 0, set_poly = 0;
+        uint64_t get_mega = 0, set_mega = 0;
+        uint8_t get_max_unique = 0, set_max_unique = 0;
+
+        for (struct Obj* obj = objects; obj != NULL; obj = obj->next) {
+            if (obj->type != OBJ_FUNCTION) continue;
+            ObjFunction* fn = (ObjFunction*)obj;
+            Chunk* chunk = &fn->chunk;
+            if (chunk->capacity <= 0) continue;
+            for (int i = 0; i < chunk->capacity; i++) {
+                if (chunk->get_table_site_accesses != NULL && chunk->get_table_site_unique_keys != NULL) {
+                    uint32_t a = chunk->get_table_site_accesses[i];
+                    uint8_t u = chunk->get_table_site_unique_keys[i];
+                    if (a > 0) {
+                        get_sites++;
+                        if (u >= 2) get_poly++;
+                        if (u >= 4) get_mega++;
+                        if (u > get_max_unique) get_max_unique = u;
+                        uint64_t score = ((uint64_t)a << 8) + (uint64_t)u;
+                        int min_idx = 0;
+                        uint64_t min_score = ((uint64_t)top_get[0].accesses << 8) + (uint64_t)top_get[0].unique;
+                        for (int t = 1; t < 8; t++) {
+                            uint64_t s = ((uint64_t)top_get[t].accesses << 8) + (uint64_t)top_get[t].unique;
+                            if (s < min_score) {
+                                min_score = s;
+                                min_idx = t;
+                            }
+                        }
+                        if (score > min_score) {
+                            top_get[min_idx].fn = fn;
+                            top_get[min_idx].offset = i;
+                            top_get[min_idx].accesses = a;
+                            top_get[min_idx].unique = u;
+                        }
+                    }
+                }
+                if (chunk->set_table_site_accesses != NULL && chunk->set_table_site_unique_keys != NULL) {
+                    uint32_t a = chunk->set_table_site_accesses[i];
+                    uint8_t u = chunk->set_table_site_unique_keys[i];
+                    if (a > 0) {
+                        set_sites++;
+                        if (u >= 2) set_poly++;
+                        if (u >= 4) set_mega++;
+                        if (u > set_max_unique) set_max_unique = u;
+                        uint64_t score = ((uint64_t)a << 8) + (uint64_t)u;
+                        int min_idx = 0;
+                        uint64_t min_score = ((uint64_t)top_set[0].accesses << 8) + (uint64_t)top_set[0].unique;
+                        for (int t = 1; t < 8; t++) {
+                            uint64_t s = ((uint64_t)top_set[t].accesses << 8) + (uint64_t)top_set[t].unique;
+                            if (s < min_score) {
+                                min_score = s;
+                                min_idx = t;
+                            }
+                        }
+                        if (score > min_score) {
+                            top_set[min_idx].fn = fn;
+                            top_set[min_idx].offset = i;
+                            top_set[min_idx].accesses = a;
+                            top_set[min_idx].unique = u;
+                        }
+                    }
+                }
+            }
+        }
+
+        fprintf(stderr,
+                "\n[vm-table-sites] get sites=%llu poly(>=2)=%llu mega(>=4)=%llu max_unique=%u\n",
+                (unsigned long long)get_sites,
+                (unsigned long long)get_poly,
+                (unsigned long long)get_mega,
+                (unsigned)get_max_unique);
+        for (int printed = 0; printed < 8; printed++) {
+            int best = -1;
+            uint64_t best_score = 0;
+            for (int i = 0; i < 8; i++) {
+                if (top_get[i].fn == NULL || top_get[i].accesses == 0) continue;
+                uint64_t s = ((uint64_t)top_get[i].accesses << 8) + (uint64_t)top_get[i].unique;
+                if (best < 0 || s > best_score) {
+                    best = i;
+                    best_score = s;
+                }
+            }
+            if (best < 0) break;
+            const char* fn_name = (top_get[best].fn->name != NULL) ? top_get[best].fn->name->chars : "<script>";
+            fprintf(stderr,
+                    "  - get fn=%s off=%d accesses=%u unique=%u%s\n",
+                    fn_name,
+                    top_get[best].offset,
+                    top_get[best].accesses,
+                    (unsigned)(top_get[best].unique > 5 ? 5 : top_get[best].unique),
+                    (top_get[best].unique >= 5) ? "+" : "");
+            top_get[best].fn = NULL;
+        }
+
+        fprintf(stderr,
+                "[vm-table-sites] set sites=%llu poly(>=2)=%llu mega(>=4)=%llu max_unique=%u\n",
+                (unsigned long long)set_sites,
+                (unsigned long long)set_poly,
+                (unsigned long long)set_mega,
+                (unsigned)set_max_unique);
+        for (int printed = 0; printed < 8; printed++) {
+            int best = -1;
+            uint64_t best_score = 0;
+            for (int i = 0; i < 8; i++) {
+                if (top_set[i].fn == NULL || top_set[i].accesses == 0) continue;
+                uint64_t s = ((uint64_t)top_set[i].accesses << 8) + (uint64_t)top_set[i].unique;
+                if (best < 0 || s > best_score) {
+                    best = i;
+                    best_score = s;
+                }
+            }
+            if (best < 0) break;
+            const char* fn_name = (top_set[best].fn->name != NULL) ? top_set[best].fn->name->chars : "<script>";
+            fprintf(stderr,
+                    "  - set fn=%s off=%d accesses=%u unique=%u%s\n",
+                    fn_name,
+                    top_set[best].offset,
+                    top_set[best].accesses,
+                    (unsigned)(top_set[best].unique > 5 ? 5 : top_set[best].unique),
+                    (top_set[best].unique >= 5) ? "+" : "");
+            top_set[best].fn = NULL;
+        }
+    }
+
     if (vm->gc_prof_enabled) {
         uint64_t uptime_ns = 0;
         if (vm->gc_prof_start_ns != 0) {
@@ -1228,6 +1424,7 @@ static void vm_prof_print(VM* vm) {
     if (object_prof_enabled()) {
         object_prof_print();
     }
+    toi_jit_print_stats(vm);
 }
 
 static void apply_pending_set_local(VM* vm) {
@@ -1446,13 +1643,13 @@ void vm_request_interrupt(void) {
 }
 
 void push(VM* vm, Value value) {
-    *vm_current_thread(vm)->stack_top = value;
-    vm_current_thread(vm)->stack_top++;
+    ObjThread* thread = vm_current_thread(vm);
+    *thread->stack_top++ = value;
 }
 
 Value pop(VM* vm) {
-    vm_current_thread(vm)->stack_top--;
-    return *vm_current_thread(vm)->stack_top;
+    ObjThread* thread = vm_current_thread(vm);
+    return *--thread->stack_top;
 }
 
 static Value get_metamethod_cached(VM* vm, Value val, ObjString* name);
@@ -1518,9 +1715,10 @@ static void maybe_promote_function_tiers(VM* vm, ObjFunction* function) {
     if (function->exec_tier == FUNCTION_TIER1_QUICKENED &&
         vm->tier2_hot_threshold > vm->tier1_hot_threshold &&
         function->hot_count >= vm->tier2_hot_threshold &&
-        function->tiny_inline_kind != TINY_INLINE_NONE) {
+        (vm->native_jit_enabled || function->tiny_inline_kind != TINY_INLINE_NONE)) {
         function->exec_tier = FUNCTION_TIER2_JIT;
         vm->tier2_promote_count++;
+        toi_jit_notify_hot_function(vm, function);
         if (vm->tiered_jit_profile) {
             const char* name = (function->name != NULL) ? function->name->chars : "<script>";
             fprintf(stderr,
@@ -1555,12 +1753,13 @@ static inline void maybe_promote_inline_tiers(VM* vm, ObjFunction* function) {
     if (vm->tier2_inline_hot_threshold > vm->tier1_hot_threshold) {
         tier2_target = vm->tier2_inline_hot_threshold;
     }
-
     if (function->exec_tier == FUNCTION_TIER1_QUICKENED &&
         tier2_target > vm->tier1_hot_threshold &&
-        function->hot_count >= tier2_target) {
+        function->hot_count >= tier2_target &&
+        (vm->native_jit_enabled || function->tiny_inline_kind != TINY_INLINE_NONE)) {
         function->exec_tier = FUNCTION_TIER2_JIT;
         vm->tier2_promote_count++;
+        toi_jit_notify_hot_function(vm, function);
         if (vm->tiered_jit_profile) {
             const char* name = (function->name != NULL) ? function->name->chars : "<script>";
             fprintf(stderr,
@@ -1643,6 +1842,12 @@ static int try_eval_tiny_inline2(ObjFunction* function, Value arg0, Value arg1, 
                 *out = BOOL_VAL(0);
             }
             return 1;
+        case TINY_INLINE_RET0_2:
+            *out = arg0;
+            return 1;
+        case TINY_INLINE_RET1_2:
+            *out = arg1;
+            return 1;
         default:
             return 0;
     }
@@ -1651,6 +1856,19 @@ static int try_eval_tiny_inline2(ObjFunction* function, Value arg0, Value arg1, 
 static int try_execute_tier2_template(VM* vm, ObjClosure* closure, int arg_count) {
     ObjFunction* function = closure->function;
     if (function->exec_tier != FUNCTION_TIER2_JIT) return 0;
+    if (function->param_types_count > 0) {
+        int check_count = function->param_types_count < function->arity ? function->param_types_count : function->arity;
+        Value* args = vm_current_thread(vm)->stack_top - arg_count;
+        for (int i = 0; i < check_count; i++) {
+            uint8_t type = function->param_types[i];
+            if (type == TYPEHINT_ANY) continue;
+            if (!value_matches_type(args[i], type)) return 0;
+        }
+    }
+    if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, arg_count)) {
+        vm->tier2_exec_count++;
+        return 1;
+    }
     if (function->tiny_inline_kind == TINY_INLINE_NONE) return 0;
     if (function->is_variadic || function->defaults_count != 0 || function->arity != 2) return 0;
     if (arg_count != 2) return 0;
@@ -1659,20 +1877,36 @@ static int try_execute_tier2_template(VM* vm, ObjClosure* closure, int arg_count
     Value arg0 = thread->stack_top[-2];
     Value arg1 = thread->stack_top[-1];
 
-    if (function->param_types_count > 0) {
-        int check_count = function->param_types_count < function->arity ? function->param_types_count : function->arity;
-        Value* args = thread->stack_top - arg_count;
-        for (int i = 0; i < check_count; i++) {
-            uint8_t type = function->param_types[i];
-            if (type == TYPEHINT_ANY) continue;
-            if (!value_matches_type(args[i], type)) return 0;
-        }
-    }
     Value out = NIL_VAL;
     if (!try_eval_tiny_inline2(function, arg0, arg1, &out)) return 0;
     thread->stack_top -= 3; // callee + 2 args
     push(vm, out);
     vm->tier2_exec_count++;
+    return 1;
+}
+
+static int call_native_direct(VM* vm, ObjNative* native_obj, int arg_count, Value* args, CallFrame** frame, uint8_t** ip) {
+    NativeFn native = native_obj->function;
+    (*frame)->ip = *ip;
+
+    int fast = try_fast_native_call(vm, native_obj, arg_count, args);
+    if (fast > 0) {
+        return 1;
+    }
+    if (fast < 0) {
+        return 0;
+    }
+
+    ObjThread* current = vm_current_thread(vm);
+    if (!native(vm, arg_count, args)) {
+        return 0;
+    }
+
+    ObjThread* after = vm_current_thread(vm);
+    if (after != current) {
+        *frame = &after->frames[after->frame_count - 1];
+        *ip = (*frame)->ip;
+    }
     return 1;
 }
 
@@ -1703,6 +1937,9 @@ static int call_closure_positional(VM* vm, ObjClosure* closure, int arg_count) {
         function->defaults_count == 0 &&
         function->param_types_count == 0 &&
         arg_count == function->arity) {
+        if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, arg_count)) {
+            return 1;
+        }
         return enter_closure_frame(vm, closure, arg_count);
     }
     return call(vm, closure, arg_count);
@@ -1871,6 +2108,18 @@ static inline void shift_args_right(ObjThread* thread, int arg_count) {
     thread->stack_top++;
 }
 
+// Rewrite [callee, arg1..argN] to [target, implicit_first, arg1..argN].
+static inline void rewrite_call_with_implicit_first_arg(
+    ObjThread* thread, int arg_count, Value target, Value implicit_first) {
+    Value* callee_slot = thread->stack_top - arg_count - 1;
+    if (arg_count > 0) {
+        memmove(callee_slot + 2, callee_slot + 1, (size_t)arg_count * sizeof(Value));
+    }
+    callee_slot[0] = target;
+    callee_slot[1] = implicit_first;
+    thread->stack_top++;
+}
+
 static inline int value_is_self_callable(Value v) {
     if (IS_CLOSURE(v)) return AS_CLOSURE(v)->function->is_self;
     if (IS_NATIVE(v)) return AS_NATIVE_OBJ(v)->is_self;
@@ -1885,11 +2134,7 @@ static int invoke_call_with_arg_count(VM* vm, int arg_count, CallFrame** frame, 
         ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
         Value method_val = OBJ_VAL(bound->method);
 
-        // Stack: [callee, arg1, ..., arg_n]
-        // We want: [method, receiver, arg1, ..., arg_n]
-        shift_args_right(thread, arg_count);
-        thread->stack_top[-arg_count - 1] = bound->receiver;
-        thread->stack_top[-arg_count - 2] = method_val;
+        rewrite_call_with_implicit_first_arg(thread, arg_count, method_val, bound->receiver);
         arg_count++;
         callee = method_val;
     }
@@ -1969,13 +2214,7 @@ static int invoke_call_with_arg_count(VM* vm, int arg_count, CallFrame** frame, 
         // __call metamethod: __call(table, ...)
         Value mm = get_metamethod_cached(vm, callee, vm->mm_call);
         if (IS_CLOSURE(mm) || IS_NATIVE(mm)) {
-            // Stack: [callee, arg1, ..., arg_n]
-            // We want: [mm, callee, arg1, ..., arg_n]
-            shift_args_right(thread, arg_count);
-
-            thread->stack_top[-arg_count] = callee;      // Insert table as first arg
-            thread->stack_top[-arg_count - 1] = mm;      // Replace callee slot with callable
-
+            rewrite_call_with_implicit_first_arg(thread, arg_count, mm, callee);
             arg_count++;
             if (!call_value(vm, mm, arg_count, frame, ip)) {
                 return 0;
@@ -2017,7 +2256,9 @@ static int invoke_call0(VM* vm, CallFrame** frame, uint8_t** ip) {
     }
 
     if (IS_NATIVE(callee)) {
-        return call_value(vm, callee, arg_count, frame, ip);
+        Value* args = thread->stack_top - arg_count;
+        thread->stack_top -= arg_count + 1; // pop args and callee
+        return call_native_direct(vm, AS_NATIVE_OBJ(callee), arg_count, args, frame, ip);
     }
 
     if (IS_TABLE(callee)) {
@@ -2074,7 +2315,9 @@ static int invoke_call1(VM* vm, CallFrame** frame, uint8_t** ip) {
     }
 
     if (IS_NATIVE(callee)) {
-        return call_value(vm, callee, arg_count, frame, ip);
+        Value* args = thread->stack_top - arg_count;
+        thread->stack_top -= arg_count + 1; // pop args and callee
+        return call_native_direct(vm, AS_NATIVE_OBJ(callee), arg_count, args, frame, ip);
     }
 
     if (IS_TABLE(callee)) {
@@ -2122,7 +2365,9 @@ static int invoke_call2(VM* vm, CallFrame** frame, uint8_t** ip) {
     }
 
     if (IS_NATIVE(callee)) {
-        return call_value(vm, callee, arg_count, frame, ip);
+        Value* args = thread->stack_top - arg_count;
+        thread->stack_top -= arg_count + 1; // pop args and callee
+        return call_native_direct(vm, AS_NATIVE_OBJ(callee), arg_count, args, frame, ip);
     }
 
     if (IS_BOUND_METHOD(callee)) {
@@ -2187,9 +2432,7 @@ static int invoke_call_with_named_arg_count(VM* vm, int arg_count, CallFrame** f
         ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
         Value method_val = OBJ_VAL(bound->method);
 
-        shift_args_right(thread, arg_count);
-        thread->stack_top[-arg_count - 1] = bound->receiver;
-        thread->stack_top[-arg_count - 2] = method_val;
+        rewrite_call_with_implicit_first_arg(thread, arg_count, method_val, bound->receiver);
         arg_count++;
         callee = method_val;
     }
@@ -2221,10 +2464,7 @@ static int invoke_call_with_named_arg_count(VM* vm, int arg_count, CallFrame** f
     if (IS_TABLE(callee)) {
         Value mm = get_metamethod_cached(vm, callee, vm->mm_call);
         if (IS_CLOSURE(mm) || IS_NATIVE(mm)) {
-            shift_args_right(thread, arg_count);
-            thread->stack_top[-arg_count] = callee;
-            thread->stack_top[-arg_count - 1] = mm;
-
+            rewrite_call_with_implicit_first_arg(thread, arg_count, mm, callee);
             arg_count++;
             if (IS_CLOSURE(mm)) {
                 (*frame)->ip = *ip;
@@ -2420,6 +2660,7 @@ int call(VM* vm, ObjClosure* closure, int arg_count) {
 
 static int objstring_equals_vm(ObjString* a, ObjString* b) {
     if (a == b) return 1;
+    if (a == NULL || b == NULL) return 0;
     if (objstring_hash(a) != objstring_hash(b)) return 0;
     if (a->length != b->length) return 0;
     return memcmp(a->chars, b->chars, (size_t)a->length) == 0;
@@ -2719,10 +2960,19 @@ static void mark_roots(VM* vm) {
             mark_value(entry->value);
         }
     }
+    object_mark_interned_strings();
+    toi_jit_mark_roots(vm);
     for (size_t i = 0; i < sizeof(vm->build_string_cache) / sizeof(vm->build_string_cache[0]); i++) {
         if (vm->build_string_cache[i] != NULL) {
             mark_object((struct Obj*)vm->build_string_cache[i]);
         }
+    }
+    for (size_t i = 0; i < sizeof(vm->build_string3_cache) / sizeof(vm->build_string3_cache[0]); i++) {
+        BuildString3CacheEntry* e = &vm->build_string3_cache[i];
+        if (e->a != NULL) mark_object((struct Obj*)e->a);
+        if (e->b != NULL) mark_object((struct Obj*)e->b);
+        if (e->c != NULL) mark_object((struct Obj*)e->c);
+        if (e->out != NULL) mark_object((struct Obj*)e->out);
     }
 }
 
@@ -2766,6 +3016,13 @@ void init_vm(VM* vm) {
    vm->tier2_inline_hot_threshold = 0;
    vm->tier2_promote_count = 0;
    vm->tier2_exec_count = 0;
+   vm->native_jit_enabled = 1;
+   vm->native_jit_hot_candidates = 0;
+   vm->native_jit_compile_attempts = 0;
+   vm->native_jit_compiled_count = 0;
+   vm->native_jit_exec_attempts = 0;
+   vm->native_jit_exec_hits = 0;
+   vm->native_jit = NULL;
    vm->opcode_prof_enabled = 0;
    for (int i = 0; i < 256; i++) {
        vm->opcode_prof_count[i] = 0;
@@ -2849,10 +3106,36 @@ void init_vm(VM* vm) {
        vm->call_prof_native_slow_call_counts[i] = 0;
        vm->call_prof_native_slow_ns_by_key[i] = 0;
    }
+   vm->table_prof_enabled = 0;
+   vm->table_site_prof_enabled = 0;
+   vm->table_prof_get_ic_exact_hit_count = 0;
+   vm->table_prof_get_ic_slot_hit_count = 0;
+   vm->table_prof_get_ic_miss_count = 0;
+   vm->table_prof_get_generic_lookup_count = 0;
+   vm->table_prof_get_meta_index_count = 0;
+   vm->table_prof_set_ic_exact_hit_count = 0;
+   vm->table_prof_set_ic_slot_hit_count = 0;
+   vm->table_prof_set_ic_miss_count = 0;
+   vm->table_prof_set_generic_store_count = 0;
+   vm->table_prof_set_meta_newindex_count = 0;
 
    const char* call_prof = getenv("TOI_VM_CALL_PROFILE");
    if (call_prof != NULL && call_prof[0] != '\0' && strcmp(call_prof, "0") != 0) {
        vm->call_prof_enabled = 1;
+   }
+   const char* table_prof = getenv("TOI_VM_TABLE_PROFILE");
+   if (table_prof == NULL || table_prof[0] == '\0' || strcmp(table_prof, "0") == 0) {
+       table_prof = getenv("TOI_TABLE_PROFILE");
+   }
+   if (table_prof != NULL && table_prof[0] != '\0' && strcmp(table_prof, "0") != 0) {
+       vm->table_prof_enabled = 1;
+   }
+   const char* table_site_prof = getenv("TOI_VM_TABLE_SITE_PROFILE");
+   if (table_site_prof == NULL || table_site_prof[0] == '\0' || strcmp(table_site_prof, "0") == 0) {
+       table_site_prof = getenv("TOI_TABLE_SITE_PROFILE");
+   }
+   if (table_site_prof != NULL && table_site_prof[0] != '\0' && strcmp(table_site_prof, "0") != 0) {
+       vm->table_site_prof_enabled = 1;
    }
    const char* gc_prof = getenv("TOI_GC_PROFILE");
    if (gc_prof == NULL || gc_prof[0] == '\0' || strcmp(gc_prof, "0") == 0) {
@@ -2875,41 +3158,9 @@ void init_vm(VM* vm) {
    } else {
        object_prof_set_enabled(0);
    }
-   const char* tiered_jit = getenv("TOI_TIERED_JIT");
-   if (tiered_jit != NULL && tiered_jit[0] != '\0') {
-       vm->tiered_jit_enabled = (strcmp(tiered_jit, "0") != 0);
-   }
-   const char* tier1_hot = getenv("TOI_TIER1_HOT_THRESHOLD");
-   if (tier1_hot != NULL && tier1_hot[0] != '\0') {
-       unsigned long parsed = strtoul(tier1_hot, NULL, 10);
-       if (parsed > 0 && parsed <= UINT32_MAX) {
-           vm->tier1_hot_threshold = (uint32_t)parsed;
-       }
-   }
-   const char* tier2_hot = getenv("TOI_TIER2_HOT_THRESHOLD");
-   if (tier2_hot != NULL && tier2_hot[0] != '\0') {
-       unsigned long parsed = strtoul(tier2_hot, NULL, 10);
-       if (parsed > 0 && parsed <= UINT32_MAX) {
-           vm->tier2_hot_threshold = (uint32_t)parsed;
-       }
-   }
-   const char* tier2_inline_hot = getenv("TOI_TIER2_INLINE_HOT_THRESHOLD");
-   if (tier2_inline_hot != NULL && tier2_inline_hot[0] != '\0') {
-       unsigned long parsed = strtoul(tier2_inline_hot, NULL, 10);
-       if (parsed > 0 && parsed <= UINT32_MAX) {
-           vm->tier2_inline_hot_threshold = (uint32_t)parsed;
-       }
-   }
-   if (vm->tier2_hot_threshold <= vm->tier1_hot_threshold) {
-       vm->tier2_hot_threshold = vm->tier1_hot_threshold + 1;
-   }
-   if (vm->tier2_inline_hot_threshold > 0 &&
-       vm->tier2_inline_hot_threshold <= vm->tier1_hot_threshold) {
-       vm->tier2_inline_hot_threshold = vm->tier1_hot_threshold + 1;
-   }
-   const char* tiered_jit_prof = getenv("TOI_TIERED_JIT_PROFILE");
-   if (tiered_jit_prof != NULL && tiered_jit_prof[0] != '\0' && strcmp(tiered_jit_prof, "0") != 0) {
-       vm->tiered_jit_profile = 1;
+   const char* jit = getenv("TOI_JIT");
+   if (jit != NULL && jit[0] != '\0') {
+       vm->native_jit_enabled = (strcmp(jit, "0") != 0);
    }
    const char* gc_check_interval = getenv("TOI_GC_CHECK_INTERVAL");
    if (gc_check_interval != NULL && gc_check_interval[0] != '\0') {
@@ -2922,10 +3173,17 @@ void init_vm(VM* vm) {
 
     init_table(&vm->globals);
     init_table(&vm->modules);
+    object_intern_init();
     vm->cli_argc = 0;
     vm->cli_argv = NULL;
     for (size_t i = 0; i < sizeof(vm->build_string_cache) / sizeof(vm->build_string_cache[0]); i++) {
         vm->build_string_cache[i] = NULL;
+    }
+    for (size_t i = 0; i < sizeof(vm->build_string3_cache) / sizeof(vm->build_string3_cache[0]); i++) {
+        vm->build_string3_cache[i].a = NULL;
+        vm->build_string3_cache[i].b = NULL;
+        vm->build_string3_cache[i].c = NULL;
+        vm->build_string3_cache[i].out = NULL;
     }
    vm_current_thread(vm)->open_upvalues = NULL;
 
@@ -2946,6 +3204,7 @@ void init_vm(VM* vm) {
     vm->module_name_key = copy_string("__name", 6);
     vm->module_file_key = copy_string("__file", 6);
     vm->module_main_key = copy_string("__main", 6);
+    toi_jit_init(vm);
 
     // Register built-in native functions (from libs module)
     register_libs(vm);
@@ -2953,6 +3212,8 @@ void init_vm(VM* vm) {
 
 void free_vm(VM* vm) {
    vm_prof_print(vm);
+   toi_jit_free(vm);
+   object_intern_free();
    free_table(&vm->globals);
    free_table(&vm->modules);
    // The current_thread will be freed as part of GC if it's reachable.
@@ -3316,8 +3577,10 @@ op_invalid:
             }
             op_OP_CONSTANT: case OP_CONSTANT: {
                 Value constant = frame->closure->function->chunk.constants.values[READ_BYTE()];
-                *vm_current_thread(vm)->stack_top = constant;
-                vm_current_thread(vm)->stack_top++;
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                *top++ = constant;
+                thread->stack_top = top;
                 maybe_collect_garbage(vm);
                 break;
             }
@@ -3343,19 +3606,34 @@ op_invalid:
                 break;
             }
             op_OP_NIL: case OP_NIL:
-                *vm_current_thread(vm)->stack_top = NIL_VAL;
-                vm_current_thread(vm)->stack_top++;
+                {
+                    ObjThread* thread = vm_current_thread(vm);
+                    Value* top = thread->stack_top;
+                    *top++ = NIL_VAL;
+                    thread->stack_top = top;
+                }
                 break;
             op_OP_TRUE: case OP_TRUE:
-                *vm_current_thread(vm)->stack_top = BOOL_VAL(1);
-                vm_current_thread(vm)->stack_top++;
+                {
+                    ObjThread* thread = vm_current_thread(vm);
+                    Value* top = thread->stack_top;
+                    *top++ = BOOL_VAL(1);
+                    thread->stack_top = top;
+                }
                 break;
             op_OP_FALSE: case OP_FALSE:
-                *vm_current_thread(vm)->stack_top = BOOL_VAL(0);
-                vm_current_thread(vm)->stack_top++;
+                {
+                    ObjThread* thread = vm_current_thread(vm);
+                    Value* top = thread->stack_top;
+                    *top++ = BOOL_VAL(0);
+                    thread->stack_top = top;
+                }
                 break;
             op_OP_POP: case OP_POP:
-                vm_current_thread(vm)->stack_top--;
+                {
+                    ObjThread* thread = vm_current_thread(vm);
+                    thread->stack_top--;
+                }
                 break;
             op_OP_GET_GLOBAL: case OP_GET_GLOBAL: {
                 if (!vm_handle_op_get_global(vm, frame, &ip)) goto runtime_error;
@@ -3382,17 +3660,20 @@ op_invalid:
             }
             op_OP_GET_LOCAL: case OP_GET_LOCAL: {
                 uint8_t slot = READ_BYTE();
-                *vm_current_thread(vm)->stack_top = frame->slots[slot];
-                vm_current_thread(vm)->stack_top++;
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                *top++ = frame->slots[slot];
+                thread->stack_top = top;
                 break;
             }
             op_OP_GET2_LOCAL: case OP_GET2_LOCAL: {
                 uint8_t slot_a = READ_BYTE();
                 uint8_t slot_b = READ_BYTE();
-                *vm_current_thread(vm)->stack_top = frame->slots[slot_a];
-                vm_current_thread(vm)->stack_top++;
-                *vm_current_thread(vm)->stack_top = frame->slots[slot_b];
-                vm_current_thread(vm)->stack_top++;
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                *top++ = frame->slots[slot_a];
+                *top++ = frame->slots[slot_b];
+                thread->stack_top = top;
                 break;
             }
             op_OP_SET_LOCAL: case OP_SET_LOCAL: {
@@ -3402,8 +3683,10 @@ op_invalid:
             }
             op_OP_SET_LOCAL_POP: case OP_SET_LOCAL_POP: {
                 uint8_t slot = READ_BYTE();
-                frame->slots[slot] = vm_current_thread(vm)->stack_top[-1];
-                vm_current_thread(vm)->stack_top--;
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                frame->slots[slot] = top[-1];
+                thread->stack_top = top - 1;
                 break;
             }
             op_OP_ADD_SET_LOCAL: case OP_ADD_SET_LOCAL: {
@@ -3563,6 +3846,14 @@ op_invalid:
                 break;
             }
             op_OP_LOOP: case OP_LOOP: {
+                if (vm->native_jit_enabled) {
+                    int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
+                    toi_jit_notify_loop_backedge(vm, frame, opcode_offset, OP_LOOP);
+                    if (toi_jit_has_compiled_loops(vm) &&
+                        toi_jit_try_execute_loop(vm, frame, &ip, opcode_offset, OP_LOOP)) {
+                        break;
+                    }
+                }
                 vm_handle_op_loop(&ip);
                 break;
             }
@@ -3572,60 +3863,188 @@ op_invalid:
                 if (vm->call_prof_enabled) vm->call_prof_op_call_count++;
                 Chunk* chunk = &frame->closure->function->chunk;
                 int opcode_offset = (int)(ip - chunk->code) - 2;
+                int cacheable_closure_site = opcode_offset >= 0 &&
+                                             opcode_offset < chunk->capacity &&
+                                             chunk->call_ic_closures != NULL &&
+                                             chunk->call_ic_argc != NULL &&
+                                             chunk->call_ic2_closures != NULL &&
+                                             chunk->call_ic2_argc != NULL &&
+                                             chunk->call_ic3_closures != NULL &&
+                                             chunk->call_ic3_argc != NULL &&
+                                             chunk->call_ic4_closures != NULL &&
+                                             chunk->call_ic4_argc != NULL &&
+                                             chunk->call_ic5_closures != NULL &&
+                                             chunk->call_ic5_argc != NULL;
+                int cacheable_native_site = opcode_offset >= 0 &&
+                                            opcode_offset < chunk->capacity &&
+                                            chunk->call_ic_natives != NULL &&
+                                            chunk->call_ic_native_argc != NULL &&
+                                            chunk->call_ic2_natives != NULL &&
+                                            chunk->call_ic2_native_argc != NULL &&
+                                            chunk->call_ic3_natives != NULL &&
+                                            chunk->call_ic3_native_argc != NULL &&
+                                            chunk->call_ic4_natives != NULL &&
+                                            chunk->call_ic4_native_argc != NULL &&
+                                            chunk->call_ic5_natives != NULL &&
+                                            chunk->call_ic5_native_argc != NULL;
                 ObjThread* thread = vm_current_thread(vm);
                 Value callee = peek(vm, arg_count);
                 ObjClosure* target = NULL;
+                ObjNative* native_target = NULL;
                 int fast_direct = 0;
+                int fast_native = 0;
 
                 if (IS_CLOSURE(callee)) {
                     ObjClosure* closure = AS_CLOSURE(callee);
                     ObjFunction* function = closure->function;
+                    int cache_hit = 0;
+                    int direct_callable = !function->is_generator &&
+                                          !function->is_variadic &&
+                                          function->defaults_count == 0 &&
+                                          function->arity == arg_count;
+                    Value* args = thread->stack_top - arg_count;
 
-                    if (opcode_offset >= 0 &&
-                        opcode_offset < chunk->capacity &&
-                        chunk->call_ic_closures != NULL &&
-                        chunk->call_ic_argc != NULL &&
-                        chunk->call_ic_closures[opcode_offset] == closure &&
-                        chunk->call_ic_argc[opcode_offset] == arg_count) {
-                        if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
-                        target = closure;
-                        fast_direct = 1;
-                    } else if (!function->is_generator &&
-                               !function->is_variadic &&
-                               function->defaults_count == 0 &&
-                               function->param_types_count == 0 &&
-                               function->arity == arg_count) {
+                    if (cacheable_closure_site) {
+                        if ((chunk->call_ic_closures[opcode_offset] == closure &&
+                             chunk->call_ic_argc[opcode_offset] == arg_count) ||
+                            (chunk->call_ic2_closures[opcode_offset] == closure &&
+                             chunk->call_ic2_argc[opcode_offset] == arg_count) ||
+                            (chunk->call_ic3_closures[opcode_offset] == closure &&
+                             chunk->call_ic3_argc[opcode_offset] == arg_count) ||
+                            (chunk->call_ic4_closures[opcode_offset] == closure &&
+                             chunk->call_ic4_argc[opcode_offset] == arg_count) ||
+                            (chunk->call_ic5_closures[opcode_offset] == closure &&
+                             chunk->call_ic5_argc[opcode_offset] == arg_count)) {
+                            cache_hit = 1;
+                        }
+                    }
+
+                    if (cache_hit) {
+                        if (!direct_callable ||
+                            !call_args_match_param_types(function, args, arg_count)) {
+                            if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                        } else {
+                            if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
+                            target = closure;
+                            fast_direct = 1;
+                        }
+                    } else if (direct_callable &&
+                               call_args_match_param_types(function, args, arg_count)) {
                         if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
                         target = closure;
                         fast_direct = 1;
-                        if (opcode_offset >= 0 &&
-                            opcode_offset < chunk->capacity &&
-                            chunk->call_ic_closures != NULL &&
-                            chunk->call_ic_argc != NULL) {
+                        if (cacheable_closure_site) {
+                            if (chunk->call_ic_closures[opcode_offset] == NULL ||
+                                chunk->call_ic_closures[opcode_offset] == closure) {
+                                chunk->call_ic_closures[opcode_offset] = closure;
+                                chunk->call_ic_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else if (chunk->call_ic2_closures[opcode_offset] == NULL ||
+                                       chunk->call_ic2_closures[opcode_offset] == closure) {
+                                chunk->call_ic2_closures[opcode_offset] = closure;
+                                chunk->call_ic2_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else if (chunk->call_ic3_closures[opcode_offset] == NULL ||
+                                       chunk->call_ic3_closures[opcode_offset] == closure) {
+                                chunk->call_ic3_closures[opcode_offset] = closure;
+                                chunk->call_ic3_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else if (chunk->call_ic4_closures[opcode_offset] == NULL ||
+                                       chunk->call_ic4_closures[opcode_offset] == closure) {
+                                chunk->call_ic4_closures[opcode_offset] = closure;
+                                chunk->call_ic4_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else if (chunk->call_ic5_closures[opcode_offset] == NULL ||
+                                       chunk->call_ic5_closures[opcode_offset] == closure) {
+                                chunk->call_ic5_closures[opcode_offset] = closure;
+                                chunk->call_ic5_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else {
+                                // Keep the first four slots sticky and use slot5 as replacement.
+                                chunk->call_ic5_closures[opcode_offset] = closure;
+                                chunk->call_ic5_argc[opcode_offset] = (uint8_t)arg_count;
+                            }
+                        } else if (opcode_offset >= 0 &&
+                                   opcode_offset < chunk->capacity &&
+                                   chunk->call_ic_closures != NULL &&
+                                   chunk->call_ic_argc != NULL) {
                             chunk->call_ic_closures[opcode_offset] = closure;
                             chunk->call_ic_argc[opcode_offset] = (uint8_t)arg_count;
                         }
                     } else {
                         if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
                     }
+                } else if (IS_NATIVE(callee)) {
+                    ObjNative* native = AS_NATIVE_OBJ(callee);
+                    struct Obj* native_obj = AS_OBJ(callee);
+                    int cache_hit = 0;
+
+                    if (cacheable_native_site) {
+                        if ((chunk->call_ic_natives[opcode_offset] == native_obj &&
+                             chunk->call_ic_native_argc[opcode_offset] == arg_count) ||
+                            (chunk->call_ic2_natives[opcode_offset] == native_obj &&
+                             chunk->call_ic2_native_argc[opcode_offset] == arg_count) ||
+                            (chunk->call_ic3_natives[opcode_offset] == native_obj &&
+                             chunk->call_ic3_native_argc[opcode_offset] == arg_count) ||
+                            (chunk->call_ic4_natives[opcode_offset] == native_obj &&
+                             chunk->call_ic4_native_argc[opcode_offset] == arg_count) ||
+                            (chunk->call_ic5_natives[opcode_offset] == native_obj &&
+                             chunk->call_ic5_native_argc[opcode_offset] == arg_count)) {
+                            cache_hit = 1;
+                        }
+                    }
+
+                    if (cache_hit) {
+                        if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
+                        native_target = native;
+                        fast_native = 1;
+                    } else {
+                        if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                        native_target = native;
+                        fast_native = 1;
+                        if (cacheable_native_site) {
+                            if (chunk->call_ic_natives[opcode_offset] == NULL ||
+                                chunk->call_ic_natives[opcode_offset] == native_obj) {
+                                chunk->call_ic_natives[opcode_offset] = native_obj;
+                                chunk->call_ic_native_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else if (chunk->call_ic2_natives[opcode_offset] == NULL ||
+                                       chunk->call_ic2_natives[opcode_offset] == native_obj) {
+                                chunk->call_ic2_natives[opcode_offset] = native_obj;
+                                chunk->call_ic2_native_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else if (chunk->call_ic3_natives[opcode_offset] == NULL ||
+                                       chunk->call_ic3_natives[opcode_offset] == native_obj) {
+                                chunk->call_ic3_natives[opcode_offset] = native_obj;
+                                chunk->call_ic3_native_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else if (chunk->call_ic4_natives[opcode_offset] == NULL ||
+                                       chunk->call_ic4_natives[opcode_offset] == native_obj) {
+                                chunk->call_ic4_natives[opcode_offset] = native_obj;
+                                chunk->call_ic4_native_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else if (chunk->call_ic5_natives[opcode_offset] == NULL ||
+                                       chunk->call_ic5_natives[opcode_offset] == native_obj) {
+                                chunk->call_ic5_natives[opcode_offset] = native_obj;
+                                chunk->call_ic5_native_argc[opcode_offset] = (uint8_t)arg_count;
+                            } else {
+                                chunk->call_ic5_natives[opcode_offset] = native_obj;
+                                chunk->call_ic5_native_argc[opcode_offset] = (uint8_t)arg_count;
+                            }
+                        }
+                    }
                 }
 
                 if (fast_direct) {
                     if (vm->call_prof_enabled) vm->call_prof_call_direct_fast_count++;
                     frame->ip = ip;
-                    if (!enter_closure_frame(vm, target, arg_count)) goto runtime_error;
-                    thread = vm_current_thread(vm);
-                    frame = &thread->frames[thread->frame_count - 1];
-                    ip = frame->ip;
+                    if (vm->native_jit_enabled && toi_jit_try_execute(vm, target, arg_count)) {
+                        // JIT executed in-place; stay on current frame.
+                    } else {
+                        if (!enter_closure_frame(vm, target, arg_count)) goto runtime_error;
+                        thread = vm_current_thread(vm);
+                        frame = &thread->frames[thread->frame_count - 1];
+                        ip = frame->ip;
+                    }
+                } else if (fast_native) {
+                    Value* args = thread->stack_top - arg_count;
+                    thread->stack_top -= arg_count + 1; // pop args and callee
+                    if (!call_native_direct(vm, native_target, arg_count, args, &frame, &ip)) {
+                        goto runtime_error;
+                    }
                 } else {
                     if (vm->call_prof_enabled) vm->call_prof_call_fallback_count++;
-                    if (opcode_offset >= 0 &&
-                        opcode_offset < chunk->capacity &&
-                        chunk->call_ic_closures != NULL &&
-                        chunk->call_ic_argc != NULL) {
-                        chunk->call_ic_closures[opcode_offset] = NULL;
-                        chunk->call_ic_argc[opcode_offset] = 0;
-                    }
                     if (!invoke_call_with_arg_count(vm, arg_count, &frame, &ip)) {
                         goto runtime_error;
                     }
@@ -3747,18 +4166,45 @@ op_invalid:
 
                         if (resolved) {
                             ObjThread* thread = vm_current_thread(vm);
+                            int call_arg_count = arg_count;
                             if (!table_obj->is_module && value_is_self_callable(raw_method)) {
                                 // [receiver, arg1, ..., argN] -> [method, receiver, arg1, ..., argN]
                                 shift_args_right(thread, arg_count);
                                 thread->stack_top[-arg_count - 1] = receiver;
                                 thread->stack_top[-arg_count - 2] = raw_method;
-                                arg_count++;
+                                call_arg_count++;
                             } else {
                                 // [receiver, arg1, ..., argN] -> [method, arg1, ..., argN]
                                 thread->stack_top[-arg_count - 1] = raw_method;
                             }
 
-                            if (!invoke_call_with_arg_count(vm, arg_count, &frame, &ip)) {
+                            Value callee = thread->stack_top[-call_arg_count - 1];
+                            if (IS_CLOSURE(callee)) {
+                                ObjClosure* closure = AS_CLOSURE(callee);
+                                if (closure->function->is_generator) {
+                                    if (!create_generator_positional(vm, closure, call_arg_count)) {
+                                        goto runtime_error;
+                                    }
+                                } else {
+                                    frame->ip = ip;
+                                    int prev_frame_count = vm_current_thread(vm)->frame_count;
+                                    if (!call_closure_positional(vm, closure, call_arg_count)) {
+                                        goto runtime_error;
+                                    }
+                                    thread = vm_current_thread(vm);
+                                    if (thread->frame_count > prev_frame_count) {
+                                        thread = vm_current_thread(vm);
+                                        frame = &thread->frames[thread->frame_count - 1];
+                                        ip = frame->ip;
+                                    }
+                                }
+                            } else if (IS_NATIVE(callee)) {
+                                Value* args = thread->stack_top - call_arg_count;
+                                thread->stack_top -= call_arg_count + 1; // pop args and callee
+                                if (!call_native_direct(vm, AS_NATIVE_OBJ(callee), call_arg_count, args, &frame, &ip)) {
+                                    goto runtime_error;
+                                }
+                            } else if (!invoke_call_with_arg_count(vm, call_arg_count, &frame, &ip)) {
                                 goto runtime_error;
                             }
                             break;
@@ -3818,6 +4264,11 @@ op_invalid:
                             chunk->call_ic_argc[opcode_offset] = 0;
                         }
                         if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 0)) {
+                            if (vm->call_prof_enabled) vm->call_prof_call0_direct_fast_count++;
+                            if (vm->call_prof_enabled) vm->call_prof_op_call0_ns += vm_prof_now_ns() - start_ns;
+                            break;
+                        }
                         frame->ip = ip;
                         if (!enter_closure_frame(vm, closure, 0)) goto runtime_error;
                         thread = vm_current_thread(vm);
@@ -3962,6 +4413,11 @@ op_invalid:
                             chunk->call_ic_argc[opcode_offset] = 1;
                         }
                         if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 1)) {
+                            if (vm->call_prof_enabled) vm->call_prof_call1_direct_fast_count++;
+                            if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
+                            break;
+                        }
                         frame->ip = ip;
                         if (!enter_closure_frame(vm, closure, 1)) goto runtime_error;
                         thread = vm_current_thread(vm);
@@ -3985,6 +4441,11 @@ op_invalid:
                                 chunk->call_ic_argc[opcode_offset] = 1;
                             }
                             if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
+                            if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 1)) {
+                                if (vm->call_prof_enabled) vm->call_prof_call1_typed_fast_count++;
+                                if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
+                                break;
+                            }
                             frame->ip = ip;
                             if (!enter_closure_frame(vm, closure, 1)) goto runtime_error;
                             thread = vm_current_thread(vm);
@@ -4035,7 +4496,9 @@ op_invalid:
                         chunk->call_ic_argc[opcode_offset] = 0;
                     }
                     if (vm->call_prof_enabled) vm->call_prof_call1_native_count++;
-                    if (!call_value(vm, callee, 1, &frame, &ip)) {
+                    Value* args = thread->stack_top - 1;
+                    thread->stack_top -= 2; // pop arg and callee
+                    if (!call_native_direct(vm, AS_NATIVE_OBJ(callee), 1, args, &frame, &ip)) {
                         goto runtime_error;
                     }
                 } else if (!invoke_call1(vm, &frame, &ip)) {
@@ -4112,6 +4575,11 @@ op_invalid:
                 }
 
                 if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
+                if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 0)) {
+                    if (vm->call_prof_enabled) vm->call_prof_call0_direct_fast_count++;
+                    if (vm->call_prof_enabled) vm->call_prof_op_call0_ns += vm_prof_now_ns() - start_ns;
+                    break;
+                }
                 frame->ip = ip;
                 if (!enter_closure_frame(vm, cached, 0)) goto runtime_error;
                 thread = vm_current_thread(vm);
@@ -4159,6 +4627,11 @@ op_invalid:
                     function->param_types_count == 0 &&
                     function->arity == 1) {
                     if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
+                    if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 1)) {
+                        if (vm->call_prof_enabled) vm->call_prof_call1_direct_fast_count++;
+                        if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
+                        break;
+                    }
                     frame->ip = ip;
                     if (!enter_closure_frame(vm, cached, 1)) goto runtime_error;
                     thread = vm_current_thread(vm);
@@ -4179,6 +4652,11 @@ op_invalid:
                     Value arg0 = peek(vm, 0);
                     if (value_matches_numeric_hint_fast(arg0, function->param_types[0])) {
                         if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
+                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 1)) {
+                            if (vm->call_prof_enabled) vm->call_prof_call1_typed_fast_count++;
+                            if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
+                            break;
+                        }
                         frame->ip = ip;
                         if (!enter_closure_frame(vm, cached, 1)) goto runtime_error;
                         thread = vm_current_thread(vm);
@@ -4427,6 +4905,11 @@ op_invalid:
                             chunk->call2_ic_closures[opcode_offset] = closure;
                             chunk->call2_ic_kind[opcode_offset] = CALL2_IC_DIRECT;
                         }
+                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 2)) {
+                            if (vm->call_prof_enabled) vm->call_prof_call2_direct_fast_count++;
+                            if (vm->call_prof_enabled) vm->call_prof_op_call2_ns += vm_prof_now_ns() - start_ns;
+                            break;
+                        }
                         frame->ip = ip;
                         if (!enter_closure_frame(vm, closure, 2)) goto runtime_error;
                         thread = vm_current_thread(vm);
@@ -4437,11 +4920,7 @@ op_invalid:
                                !function->is_variadic &&
                                function->defaults_count == 0 &&
                                function->param_types_count == 2 &&
-                               function->arity == 2 &&
-                               (function->param_types[0] == TYPEHINT_INT ||
-                                function->param_types[0] == TYPEHINT_FLOAT) &&
-                               (function->param_types[1] == TYPEHINT_INT ||
-                                function->param_types[1] == TYPEHINT_FLOAT)) {
+                               function->arity == 2) {
                         if (opcode_offset >= 0 &&
                             chunk->call2_ic_closures != NULL &&
                             chunk->call2_ic_kind != NULL) {
@@ -4451,8 +4930,16 @@ op_invalid:
                         }
                         Value arg0 = peek(vm, 1);
                         Value arg1 = peek(vm, 0);
-                        if (value_matches_numeric_hint_fast(arg0, function->param_types[0]) &&
-                            value_matches_numeric_hint_fast(arg1, function->param_types[1])) {
+                        uint8_t type0 = function->param_types[0];
+                        uint8_t type1 = function->param_types[1];
+                        int arg0_ok = (type0 == TYPEHINT_ANY) || value_matches_type(arg0, type0);
+                        int arg1_ok = (type1 == TYPEHINT_ANY) || value_matches_type(arg1, type1);
+                        if (arg0_ok && arg1_ok) {
+                            if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 2)) {
+                                if (vm->call_prof_enabled) vm->call_prof_call2_typed_fast_count++;
+                                if (vm->call_prof_enabled) vm->call_prof_op_call2_ns += vm_prof_now_ns() - start_ns;
+                                break;
+                            }
                             frame->ip = ip;
                             if (!enter_closure_frame(vm, closure, 2)) goto runtime_error;
                             thread = vm_current_thread(vm);
@@ -4472,7 +4959,9 @@ op_invalid:
                         vm->call_prof_call2_fallback_count++;
                     }
                 } else if (IS_NATIVE(callee)) {
-                    if (!call_value(vm, callee, 2, &frame, &ip)) {
+                    Value* args = thread->stack_top - 2;
+                    thread->stack_top -= 3; // pop args and callee
+                    if (!call_native_direct(vm, AS_NATIVE_OBJ(callee), 2, args, &frame, &ip)) {
                         goto runtime_error;
                     }
                 } else if (!invoke_call2(vm, &frame, &ip)) {
@@ -4523,6 +5012,11 @@ op_invalid:
                     break;
                 }
                 if (kind == CALL2_IC_DIRECT) {
+                    if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 2)) {
+                        if (vm->call_prof_enabled) vm->call_prof_call2_direct_fast_count++;
+                        if (vm->call_prof_enabled) vm->call_prof_op_call2_ns += vm_prof_now_ns() - start_ns;
+                        break;
+                    }
                     frame->ip = ip;
                     if (!enter_closure_frame(vm, cached, 2)) goto runtime_error;
                     thread = vm_current_thread(vm);
@@ -4532,8 +5026,16 @@ op_invalid:
                 } else if (kind == CALL2_IC_TYPED2) {
                     Value arg0 = peek(vm, 1);
                     Value arg1 = peek(vm, 0);
-                    if (value_matches_numeric_hint_fast(arg0, function->param_types[0]) &&
-                        value_matches_numeric_hint_fast(arg1, function->param_types[1])) {
+                    uint8_t type0 = function->param_types[0];
+                    uint8_t type1 = function->param_types[1];
+                    int arg0_ok = (type0 == TYPEHINT_ANY) || value_matches_type(arg0, type0);
+                    int arg1_ok = (type1 == TYPEHINT_ANY) || value_matches_type(arg1, type1);
+                    if (arg0_ok && arg1_ok) {
+                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 2)) {
+                            if (vm->call_prof_enabled) vm->call_prof_call2_typed_fast_count++;
+                            if (vm->call_prof_enabled) vm->call_prof_op_call2_ns += vm_prof_now_ns() - start_ns;
+                            break;
+                        }
                         frame->ip = ip;
                         if (!enter_closure_frame(vm, cached, 2)) goto runtime_error;
                         thread = vm_current_thread(vm);
@@ -4679,6 +5181,14 @@ op_invalid:
                 break;
             }
             op_OP_QFOR_LOOP_NUM: case OP_QFOR_LOOP_NUM: {
+                if (vm->native_jit_enabled) {
+                    int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
+                    toi_jit_notify_loop_backedge(vm, frame, opcode_offset, OP_QFOR_LOOP_NUM);
+                    if (toi_jit_has_compiled_loops(vm) &&
+                        toi_jit_try_execute_loop(vm, frame, &ip, opcode_offset, OP_QFOR_LOOP_NUM)) {
+                        break;
+                    }
+                }
                 if (!vm_handle_op_qfor_loop_num(vm, frame, &ip)) goto runtime_error;
                 break;
             }
@@ -4966,10 +5476,13 @@ op_invalid:
                 break;
             }
             op_OP_QLESS_NUM: case OP_QLESS_NUM: {
-                if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-                    double b = AS_NUMBER(pop(vm));
-                    double a = AS_NUMBER(pop(vm));
-                    push(vm, BOOL_VAL(a < b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                if (IS_NUMBER(top[-1]) && IS_NUMBER(top[-2])) {
+                    double b = AS_NUMBER(top[-1]);
+                    double a = AS_NUMBER(top[-2]);
+                    top[-2] = BOOL_VAL(a < b);
+                    thread->stack_top = top - 1;
                 } else {
                     int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
                     frame->closure->function->chunk.code[opcode_offset] = OP_LESS;
@@ -4994,55 +5507,65 @@ op_invalid:
                 break;
             }
             op_OP_IMOD: case OP_IMOD: {
-                double bd = AS_NUMBER(pop(vm));
-                double ad = AS_NUMBER(pop(vm));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                double bd = AS_NUMBER(top[-1]);
+                double ad = AS_NUMBER(top[-2]);
                 if (ad > (double)INT64_MIN && ad < (double)INT64_MAX &&
                     bd > (double)INT64_MIN && bd < (double)INT64_MAX) {
                     int64_t ia = (int64_t)ad;
                     int64_t ib = (int64_t)bd;
                     if ((double)ia == ad && (double)ib == bd && ib != 0) {
-                        push(vm, NUMBER_VAL((double)(ia % ib)));
+                        top[-2] = NUMBER_VAL((double)(ia % ib));
+                        thread->stack_top = top - 1;
                         break;
                     }
                 }
-                push(vm, NUMBER_VAL(fmod(ad, bd)));
+                top[-2] = NUMBER_VAL(fmod(ad, bd));
+                thread->stack_top = top - 1;
                 break;
             }
             op_OP_FADD: case OP_FADD: {
-                double b = AS_NUMBER(pop(vm));
-                double a = AS_NUMBER(pop(vm));
-                push(vm, NUMBER_VAL(a + b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                top[-2] = NUMBER_VAL(AS_NUMBER(top[-2]) + AS_NUMBER(top[-1]));
+                thread->stack_top = top - 1;
                 break;
             }
             op_OP_FSUB: case OP_FSUB: {
-                double b = AS_NUMBER(pop(vm));
-                double a = AS_NUMBER(pop(vm));
-                push(vm, NUMBER_VAL(a - b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                top[-2] = NUMBER_VAL(AS_NUMBER(top[-2]) - AS_NUMBER(top[-1]));
+                thread->stack_top = top - 1;
                 break;
             }
             op_OP_FMUL: case OP_FMUL: {
-                double b = AS_NUMBER(pop(vm));
-                double a = AS_NUMBER(pop(vm));
-                push(vm, NUMBER_VAL(a * b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                top[-2] = NUMBER_VAL(AS_NUMBER(top[-2]) * AS_NUMBER(top[-1]));
+                thread->stack_top = top - 1;
                 break;
             }
             op_OP_FDIV: case OP_FDIV: {
-                double b = AS_NUMBER(pop(vm));
-                double a = AS_NUMBER(pop(vm));
-                push(vm, NUMBER_VAL(a / b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                top[-2] = NUMBER_VAL(AS_NUMBER(top[-2]) / AS_NUMBER(top[-1]));
+                thread->stack_top = top - 1;
                 break;
             }
             op_OP_FMOD: case OP_FMOD: {
-                double b = AS_NUMBER(pop(vm));
-                double a = AS_NUMBER(pop(vm));
-                push(vm, NUMBER_VAL(fmod(a, b)));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                top[-2] = NUMBER_VAL(fmod(AS_NUMBER(top[-2]), AS_NUMBER(top[-1])));
+                thread->stack_top = top - 1;
                 break;
             }
             op_OP_QFADD: case OP_QFADD: {
-                if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-                    double b = AS_NUMBER(pop(vm));
-                    double a = AS_NUMBER(pop(vm));
-                    push(vm, NUMBER_VAL(a + b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                if (IS_NUMBER(top[-1]) && IS_NUMBER(top[-2])) {
+                    top[-2] = NUMBER_VAL(AS_NUMBER(top[-2]) + AS_NUMBER(top[-1]));
+                    thread->stack_top = top - 1;
                 } else {
                     int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
                     frame->closure->function->chunk.code[opcode_offset] = OP_ADD;
@@ -5051,10 +5574,11 @@ op_invalid:
                 break;
             }
             op_OP_QFSUB: case OP_QFSUB: {
-                if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-                    double b = AS_NUMBER(pop(vm));
-                    double a = AS_NUMBER(pop(vm));
-                    push(vm, NUMBER_VAL(a - b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                if (IS_NUMBER(top[-1]) && IS_NUMBER(top[-2])) {
+                    top[-2] = NUMBER_VAL(AS_NUMBER(top[-2]) - AS_NUMBER(top[-1]));
+                    thread->stack_top = top - 1;
                 } else {
                     int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
                     frame->closure->function->chunk.code[opcode_offset] = OP_SUBTRACT;
@@ -5063,10 +5587,11 @@ op_invalid:
                 break;
             }
             op_OP_QFMUL: case OP_QFMUL: {
-                if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-                    double b = AS_NUMBER(pop(vm));
-                    double a = AS_NUMBER(pop(vm));
-                    push(vm, NUMBER_VAL(a * b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                if (IS_NUMBER(top[-1]) && IS_NUMBER(top[-2])) {
+                    top[-2] = NUMBER_VAL(AS_NUMBER(top[-2]) * AS_NUMBER(top[-1]));
+                    thread->stack_top = top - 1;
                 } else {
                     int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
                     frame->closure->function->chunk.code[opcode_offset] = OP_MULTIPLY;
@@ -5075,10 +5600,11 @@ op_invalid:
                 break;
             }
             op_OP_QFDIV: case OP_QFDIV: {
-                if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-                    double b = AS_NUMBER(pop(vm));
-                    double a = AS_NUMBER(pop(vm));
-                    push(vm, NUMBER_VAL(a / b));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                if (IS_NUMBER(top[-1]) && IS_NUMBER(top[-2])) {
+                    top[-2] = NUMBER_VAL(AS_NUMBER(top[-2]) / AS_NUMBER(top[-1]));
+                    thread->stack_top = top - 1;
                 } else {
                     int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
                     frame->closure->function->chunk.code[opcode_offset] = OP_DIVIDE;
@@ -5087,19 +5613,23 @@ op_invalid:
                 break;
             }
             op_OP_QFMOD: case OP_QFMOD: {
-                if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-                    double bd = AS_NUMBER(pop(vm));
-                    double ad = AS_NUMBER(pop(vm));
+                ObjThread* thread = vm_current_thread(vm);
+                Value* top = thread->stack_top;
+                if (IS_NUMBER(top[-1]) && IS_NUMBER(top[-2])) {
+                    double bd = AS_NUMBER(top[-1]);
+                    double ad = AS_NUMBER(top[-2]);
                     if (ad > (double)INT64_MIN && ad < (double)INT64_MAX &&
                         bd > (double)INT64_MIN && bd < (double)INT64_MAX) {
                         int64_t ia = (int64_t)ad;
                         int64_t ib = (int64_t)bd;
                         if ((double)ia == ad && (double)ib == bd && ib != 0) {
-                            push(vm, NUMBER_VAL((double)(ia % ib)));
+                            top[-2] = NUMBER_VAL((double)(ia % ib));
+                            thread->stack_top = top - 1;
                             break;
                         }
                     }
-                    push(vm, NUMBER_VAL(fmod(ad, bd)));
+                    top[-2] = NUMBER_VAL(fmod(ad, bd));
+                    thread->stack_top = top - 1;
                 } else {
                     int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
                     frame->closure->function->chunk.code[opcode_offset] = OP_MODULO;

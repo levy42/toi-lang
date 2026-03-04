@@ -42,7 +42,6 @@ typedef struct {
 } RegexCache;
 
 static RegexCache g_regex_cache;
-static ObjString* g_regex_module_name = NULL;
 static ObjString* g_key_start = NULL;
 static ObjString* g_key_end = NULL;
 static ObjString* g_key_match = NULL;
@@ -238,7 +237,7 @@ static void regex_free_match_buffer(regmatch_t* pm, regmatch_t* stack_buf) {
 
 static ObjTable* regex_lookup_metatable(VM* vm, const char* key, int key_len) {
     Value regex_module = NIL_VAL;
-    ObjString* module_name = g_regex_module_name != NULL ? g_regex_module_name : copy_string("regex", 5);
+    ObjString* module_name = copy_string("regex", 5);
     if (!table_get(&vm->modules, module_name, &regex_module) || !IS_TABLE(regex_module)) {
         if (!table_get(&vm->globals, module_name, &regex_module) || !IS_TABLE(regex_module)) {
             return NULL;
@@ -694,9 +693,6 @@ void register_regex(VM* vm) {
 
     ObjTable* regex_module = AS_TABLE(peek(vm, 0));
 
-    if (g_regex_module_name == NULL) {
-        g_regex_module_name = copy_string("regex", 5);
-    }
     if (g_key_start == NULL) g_key_start = copy_string("start", 5);
     if (g_key_end == NULL) g_key_end = copy_string("end", 3);
     if (g_key_match == NULL) g_key_match = copy_string("match", 5);

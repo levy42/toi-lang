@@ -246,11 +246,63 @@ fn open(base_path)
 
     desc = order_by[1] == "-"
     field = desc ? order_by[2..] : order_by
-    table.sort(rows, fn(a, b)
-      av = a[field]
-      bv = b[field]
-      return desc ? av > bv : av < bv
-    )
+
+    fn type_rank(value)
+      if value == nil
+        return 4
+      vt = type(value)
+      if vt == "number"
+        return 1
+      if vt == "string"
+        return 2
+      if vt == "boolean"
+        return 3
+      return 5
+
+    fn cmp_values(left, right)
+      lt = type(left)
+      rt = type(right)
+      if left == right
+        return 0
+
+      if lt == rt
+        if lt == "number" or lt == "string"
+          return left < right ? -1 : 1
+        if lt == "boolean"
+          return (left ? 1 : 0) < (right ? 1 : 0) ? -1 : 1
+        lstr = str(left)
+        rstr = str(right)
+        if lstr == rstr
+          return 0
+        return lstr < rstr ? -1 : 1
+
+      lrank = type_rank(left)
+      rrank = type_rank(right)
+      if lrank == rrank
+        lstr = str(left)
+        rstr = str(right)
+        if lstr == rstr
+          return 0
+        return lstr < rstr ? -1 : 1
+      return lrank < rrank ? -1 : 1
+
+    fn row_before(left, right)
+      cmp = cmp_values(left[field], right[field])
+      if cmp == 0
+        return false
+      return desc ? cmp > 0 : cmp < 0
+
+    -- Insertion sort avoids runtime comparator callback edge cases in table.sort.
+    i = 2
+    while i <= #rows
+      current = rows[i]
+      j = i - 1
+      while j >= 1 and row_before(current, rows[j])
+        rows[j + 1] = rows[j]
+        j = j - 1
+      rows[j + 1] = current
+      i = i + 1
+
     return rows
 
   fn apply_select(rows, select)

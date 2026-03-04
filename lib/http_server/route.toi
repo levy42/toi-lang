@@ -8,7 +8,7 @@ fn split_path_segments(path)
   if path == nil or path == ""
     return {}
 
-  parts = string.split(path, "/")
+  parts = path.split("/")
   out = {}
   for seg in parts
     if seg and seg != ""
@@ -18,9 +18,9 @@ fn split_path_segments(path)
 fn parse_param_segment(seg)
   if seg == nil
     return nil
-  n = string.len(seg)
+  n = #seg
   if n >= 3 and seg[1] == "<" and seg[n] == ">"
-    name = string.sub(seg, 2, -2)
+    name = seg.sub(2, -2)
     if name != ""
       return name
   return nil
@@ -29,7 +29,7 @@ fn coerce_param(raw, type_name)
   t = type_name
   if t == nil
     t = "any"
-  t = string.lower(str(t))
+  t = str(t).lower()
 
   match t
     case "any"
@@ -43,7 +43,7 @@ fn coerce_param(raw, type_name)
     case "float"
       return float(raw)
     case "bool"
-      s = string.lower(str(raw))
+      s = str(raw).lower()
       if s == "true" or s == "1"
         return true
       if s == "false" or s == "0"
@@ -72,7 +72,7 @@ fn build_handler_args(route, req, path_params)
 Route.compile = fn(method, path, handler)
   sig = inspect.signature(handler)
   return {
-    method = string.upper(method),
+    method = method.upper(),
     path = path,
     segments = split_path_segments(path),
     signature = sig,
@@ -98,7 +98,7 @@ Route.match = fn(route, req_path)
   return true, params
 
 Route.dispatch = fn(app, req)
-  method = string.upper(req.method or "GET")
+  method = (req.method or "GET").upper()
   path = req.path or "/"
 
   saw_path = false

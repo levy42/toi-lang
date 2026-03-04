@@ -1,0 +1,69 @@
+string = import string
+table = import table
+
+fn escape(value)
+  if value == nil
+    return ""
+  return string.escape_html(str(value))
+
+fn merge_attrs(base, extra)
+  out = {}
+  if type(base) == "table"
+    for k, v in base
+      out[k] = v
+  if type(extra) == "table"
+    for k, v in extra
+      out[k] = v
+  return out
+
+fn attrs(attrs_table)
+  if type(attrs_table) != "table"
+    return ""
+
+  parts = {}
+  for k, v in attrs_table
+    if v == nil or v == false
+      continue
+    key = str(k)
+    if v == true
+      parts <+ string.format(" %s", key)
+    else
+      parts <+ string.format(' %s=\"%s\"', key, escape(v))
+  return "".join(parts)
+
+fn tag(name, attrs_table = nil, children = nil)
+  inner = ""
+  if children != nil
+    inner = str(children)
+  return "<" + name + attrs(attrs_table) + ">" + inner + "</" + name + ">"
+
+fn void_tag(name, attrs_table = nil)
+  return "<" + name + attrs(attrs_table) + ">"
+
+fn text(value)
+  return escape(value)
+
+fn link(href, label, attrs_table = nil)
+  return tag("a", merge_attrs({href = href}, attrs_table), text(label))
+
+fn button(label, attrs_table = nil)
+  return tag("button", attrs_table, text(label))
+
+fn input(name, value = nil, attrs_table = nil)
+  return void_tag("input", merge_attrs({name = name, value = value}, attrs_table))
+
+fn textarea(name, value = "", attrs_table = nil)
+  return tag("textarea", merge_attrs({name = name}, attrs_table), text(value))
+
+return {
+  escape = escape,
+  attrs = attrs,
+  tag = tag,
+  void_tag = void_tag,
+  text = text,
+  link = link,
+  button = button,
+  input = input,
+  textarea = textarea,
+  merge_attrs = merge_attrs
+}

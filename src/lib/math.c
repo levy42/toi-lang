@@ -290,6 +290,7 @@ void register_math(VM* vm) {
     set_math_fast_kind(math_module, "fmod", NATIVE_FAST_MATH_FMOD);
     set_math_fast_kind(math_module, "deg", NATIVE_FAST_MATH_DEG);
     set_math_fast_kind(math_module, "rad", NATIVE_FAST_MATH_RAD);
+    set_math_fast_kind(math_module, "random", NATIVE_FAST_MATH_RANDOM);
 
     // Constants
     push(vm, OBJ_VAL(copy_string("pi", 2)));

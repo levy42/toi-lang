@@ -1,6 +1,6 @@
 # Toi
 
-Toi is a small, Lua-like scripting language with indentation-based blocks and a compact standard library.
+Toi is a small, Lua-like scripting language with indentation-based blocks and a compact standard library, mixes ideas from Lua and Python.
 
 ## Documentation
 
@@ -12,7 +12,7 @@ Full documentation is in `docs/`:
 
 ```bash
 make
-make release
+make release (or make release-perf for performance build)
 make clean
 make test
 make docs
@@ -25,17 +25,20 @@ make test-fmt
 ./toi                  # REPL
 ./toi path/to/file.toi # run script
 ./toi fmt file.toi     # print formatted code
-./toi fmt -w file.toi  # format in place
-./toi fmt --check file.toi  # exit 1 if formatting would change
+./toi fmt -w file.toi  # format in place - experimental, not fully implemented
+./toi fmt --check file.toi  # exit 1 if formatting would change, experimental, not fully implemented
 ```
 
 ## Syntax (quick reference)
 
-```lua
+```toi
 -- variables
 x = 10
+x2 = 100_000
 s = "hello"
-arr = 1, 2, 3
+s2 = 'hello'
+arr = 1, 2, 3 -- parentless shortcut
+arr2 = {1,2,3, }
 
 -- functions (default params, varargs)
 fn add(a, b = 10)
@@ -58,16 +61,16 @@ else
   print "negative"
 
 -- loops
-for i = 1, 5
+for i in 1..5
   print i
 
-for k, v in {a = 1, b = 2}
+for k, v in {10, 20, a = 1, b = 2} -- pairs, for array part - index - value
   print k, v
 
-for v in {10, 20, 30}        -- values-only
+for v in {10, 20, 30, a=10}        -- values-only
   print v
 
-for i#, v in {10, 20, 30}    -- index + value (array-style)
+for i#, v in {10, 20, 30}    -- index + value (like ipairs in Lua, only iterate over array part)
   print i, v
 
 -- tables
@@ -88,29 +91,29 @@ y = x > 0 ? "yes" : "no"
 try
   risky()
 except e
-  print e
+  if e.type == 'ValueError'
+    print e
 finally
   cleanup()
 
 throw "boom"
+throw {msg='boom', type='BoomError'}
 
 -- with (context managers)
 with io.open("tmp.txt", "w") as f
   f.write("hello")
 
 -- slice (inclusive end, step can be negative)
-mid = slice({10, 20, 30, 40, 50}, 2, 4)     -- {20, 30, 40}
-rev = slice({10, 20, 30, 40, 50}, 4, 2, -1) -- {40, 30, 20}
-mid2 = {10, 20, 30, 40, 50}[2..4:1]         -- {20, 30, 40}
+mid = {10, 20, 30, 40, 50}[2..4:1]         -- {20, 30, 40}
 first = {10, 20, 30, 40, 50}[..3]           -- {10, 20, 30}
 tail = {10, 20, 30, 40, 50}[3..]            -- {30, 40, 50}
-s = "hello"[2..4:1]                         -- "ell"
+s = "hello"[2..-1]                         -- "ell"
 
 -- table comprehension (array-style)
 tcomp = {x * x for x in {1, 2, 3}}         -- {1, 4, 9}
 
 -- table comprehension (map-style via two expressions)
-mcomp = {x = x * 10 for x in {1, 2, 3}}    -- { [1]=10, [2]=20, [3]=30 }
+mcomp = {str(x) = x * 10 for x in {1, 2, 3}}    -- { "1"=10, "2"=20, "3"=30 }
 ```
 
 ## Built-in modules (native)

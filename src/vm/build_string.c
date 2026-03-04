@@ -160,6 +160,71 @@ int vm_build_string(VM* vm, uint8_t part_count) {
         return 1;
     }
 
+    if (part_count == 3) {
+        Value v0 = peek(vm, 2);
+        Value v1 = peek(vm, 1);
+        Value v2 = peek(vm, 0);
+        if (IS_STRING(v0) && IS_STRING(v1) && IS_STRING(v2)) {
+            ObjString* s0 = AS_STRING(v0);
+            ObjString* s1 = AS_STRING(v1);
+            ObjString* s2 = AS_STRING(v2);
+            uint32_t slot = (uint32_t)((((uintptr_t)s0 >> 4) ^
+                                        ((uintptr_t)s1 >> 9) ^
+                                        ((uintptr_t)s2 >> 14)) & 4095u);
+            BuildString3CacheEntry* e = &vm->build_string3_cache[slot];
+            if (e->a == s0 && e->b == s1 && e->c == s2 && e->out != NULL) {
+                pop(vm);
+                pop(vm);
+                pop(vm);
+                push(vm, OBJ_VAL(e->out));
+                return 1;
+            }
+
+            int total_len = s0->length + s1->length + s2->length;
+            int ok = 0;
+            if (total_len <= 255) {
+                char buffer[256];
+                char* out = buffer;
+                memcpy(out, s0->chars, (size_t)s0->length);
+                out += s0->length;
+                memcpy(out, s1->chars, (size_t)s1->length);
+                out += s1->length;
+                memcpy(out, s2->chars, (size_t)s2->length);
+                out += s2->length;
+                buffer[total_len] = '\0';
+                pop(vm);
+                pop(vm);
+                pop(vm);
+                ok = push_built_string_interned_view(vm, buffer, total_len);
+            } else {
+                char* buffer = (char*)malloc((size_t)total_len + 1);
+                if (buffer == NULL) {
+                    vm_runtime_error(vm, "Out of memory while building string.");
+                    return 0;
+                }
+                char* out = buffer;
+                memcpy(out, s0->chars, (size_t)s0->length);
+                out += s0->length;
+                memcpy(out, s1->chars, (size_t)s1->length);
+                out += s1->length;
+                memcpy(out, s2->chars, (size_t)s2->length);
+                out += s2->length;
+                buffer[total_len] = '\0';
+                pop(vm);
+                pop(vm);
+                pop(vm);
+                ok = push_built_string_interned(vm, buffer, total_len);
+            }
+            if (!ok) return 0;
+            ObjString* built = AS_STRING(peek(vm, 0));
+            e->a = s0;
+            e->b = s1;
+            e->c = s2;
+            e->out = built;
+            return 1;
+        }
+    }
+
     int total_len = 0;
     int primitive_only = 1;
     for (int i = part_count - 1; i >= 0; i--) {

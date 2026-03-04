@@ -7,6 +7,7 @@
 struct ObjString;
 struct ObjTable;
 struct ObjClosure;
+struct Obj;
 
 typedef enum {
     OP_CONSTANT,
@@ -152,17 +153,53 @@ typedef struct {
     struct ObjTable** get_table_ic_tables;
     struct ObjString** get_table_ic_keys;
     int* get_table_ic_slots;
+    uint32_t* get_table_ic2_versions;
+    struct ObjTable** get_table_ic2_tables;
+    struct ObjString** get_table_ic2_keys;
+    int* get_table_ic2_slots;
+    uint32_t* get_table_ic3_versions;
+    struct ObjTable** get_table_ic3_tables;
+    struct ObjString** get_table_ic3_keys;
+    int* get_table_ic3_slots;
+    uint32_t* get_table_ic4_versions;
+    struct ObjTable** get_table_ic4_tables;
+    struct ObjString** get_table_ic4_keys;
+    int* get_table_ic4_slots;
+    uint32_t* get_table_site_accesses; // keyed by opcode byte offset
+    uint8_t* get_table_site_unique_keys; // 0..4, 5 means 5+
+    struct ObjString** get_table_site_keys; // keyed by opcode*4 + lane
     Value* get_table_ic_values;
     uint32_t* set_table_ic_versions; // keyed by opcode byte offset
     struct ObjTable** set_table_ic_tables;
     struct ObjString** set_table_ic_keys;
     int* set_table_ic_slots;
+    uint32_t* set_table_site_accesses; // keyed by opcode byte offset
+    uint8_t* set_table_site_unique_keys; // 0..4, 5 means 5+
+    struct ObjString** set_table_site_keys; // keyed by opcode*4 + lane
     uint32_t* delete_table_ic_versions; // keyed by opcode byte offset
     struct ObjTable** delete_table_ic_tables;
     struct ObjString** delete_table_ic_keys;
     int* delete_table_ic_slots;
     struct ObjClosure** call_ic_closures;
     uint8_t* call_ic_argc;
+    struct ObjClosure** call_ic2_closures;
+    uint8_t* call_ic2_argc;
+    struct ObjClosure** call_ic3_closures;
+    uint8_t* call_ic3_argc;
+    struct ObjClosure** call_ic4_closures;
+    uint8_t* call_ic4_argc;
+    struct ObjClosure** call_ic5_closures;
+    uint8_t* call_ic5_argc;
+    struct Obj** call_ic_natives;
+    uint8_t* call_ic_native_argc;
+    struct Obj** call_ic2_natives;
+    uint8_t* call_ic2_native_argc;
+    struct Obj** call_ic3_natives;
+    uint8_t* call_ic3_native_argc;
+    struct Obj** call_ic4_natives;
+    uint8_t* call_ic4_native_argc;
+    struct Obj** call_ic5_natives;
+    uint8_t* call_ic5_native_argc;
     struct ObjClosure** call2_ic_closures;
     uint8_t* call2_ic_kind;
     ValueArray constants;

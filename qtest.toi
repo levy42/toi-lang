@@ -1,7 +1,6 @@
-a = 11
-
-match a
-  case 9
-    print("a is 10")
-  case a > 10
-    print("a is not 10")
+try
+  throw {msg='sssss', type='ValueError'}
+except err
+  print(err)
+finally
+  print 'ffff'

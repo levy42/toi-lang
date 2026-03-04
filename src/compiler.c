@@ -254,6 +254,18 @@ static ObjFunction* end_compiler() {
         function->defaults_count == 0 &&
         function->arity == 2) {
         Chunk* chunk = &function->chunk;
+        if (chunk->count >= 3) {
+            uint8_t* code = chunk->code;
+            int trailing_ret = (chunk->count == 3) || (chunk->count == 4 && code[3] == OP_RETURN);
+            if (trailing_ret && code[0] == OP_GET_LOCAL && code[2] == OP_RETURN) {
+                if (code[1] == 1) {
+                    function->tiny_inline_kind = TINY_INLINE_RET0_2;
+                } else if (code[1] == 2) {
+                    function->tiny_inline_kind = TINY_INLINE_RET1_2;
+                }
+            }
+        }
+        if (function->tiny_inline_kind != TINY_INLINE_NONE) goto tiny_inline_done;
         if (chunk->count >= 6) {
             uint8_t* code = chunk->code;
             int trailing_ok = (chunk->count == 6) || (chunk->count == 7 && code[6] == OP_RETURN);
@@ -295,6 +307,7 @@ static ObjFunction* end_compiler() {
             }
         }
     }
+tiny_inline_done:
 #ifdef DEBUG_PRINT_CODE
     if (!parser.had_error) {
         disassemble_chunk(current_chunk(), function->name != NULL ? function->name->chars : "<script>");
@@ -2149,6 +2162,97 @@ static void table_comprehension(int can_assign) {
 
     if (is_range_expr && check(TOKEN_COMMA)) {
         error("Range expression cannot be used with multiple iterator expressions.");
+        return;
+    }
+    if (is_range_expr && expr_count == 1) {
+        // Fast path for `{expr for i in a..b [if cond]}`:
+        // lower to numeric for-loop opcodes so quickening/JIT can trigger.
+        add_local(name);
+        Token end_token = {TOKEN_IDENTIFIER, "(end)", 5, parser.previous.line};
+        add_local(end_token);
+        mark_initialized_count(2);
+        int var_slot = current->local_count - 2;
+        int end_slot = current->local_count - 1;
+        set_local_type(var_slot, TYPEHINT_FLOAT);
+        set_local_type(end_slot, TYPEHINT_FLOAT);
+
+        int loop_start = current_chunk()->count;
+
+        emit_byte(OP_FOR_PREP);
+        emit_byte((uint8_t)var_slot);
+        emit_byte((uint8_t)end_slot);
+        emit_byte(0);
+        emit_byte(0);
+        int exit_jump = current_chunk()->count - 2;
+
+        int has_if = 0;
+        int skip_jump = -1;
+        int end_jump = -1;
+        if (match(TOKEN_IF)) {
+            has_if = 1;
+            expression();
+            skip_jump = emit_jump(OP_JUMP_IF_FALSE);
+            emit_byte(OP_POP);
+        }
+
+        const char* expr_end = for_start;
+        const char* assign = find_comprehension_assign(expr_start, expr_end);
+        if (assign != NULL) {
+            emit_bytes(OP_GET_LOCAL, (uint8_t)list_slot);
+            compile_expression_from_string(expr_start, (size_t)(assign - expr_start));
+            compile_expression_from_string(assign + 1, (size_t)(expr_end - (assign + 1)));
+            emit_byte(OP_SET_TABLE);
+            emit_byte(OP_POP);
+        } else {
+            emit_bytes(OP_GET_LOCAL, (uint8_t)list_slot);
+            emit_bytes(OP_GET_LOCAL, (uint8_t)idx_slot);
+            compile_expression_from_string(expr_start, expr_len);
+            emit_byte(OP_SET_TABLE_NUM);
+            emit_byte(OP_POP);
+
+            emit_bytes(OP_GET_LOCAL, (uint8_t)idx_slot);
+            emit_constant(NUMBER_VAL(1));
+            emit_byte(OP_ADD);
+            emit_bytes(OP_SET_LOCAL, (uint8_t)idx_slot);
+            emit_byte(OP_POP);
+        }
+
+        if (has_if) {
+            end_jump = emit_jump(OP_JUMP);
+            patch_jump(skip_jump);
+            emit_byte(OP_POP);
+            patch_jump(end_jump);
+        }
+
+        consume(TOKEN_RIGHT_BRACE, "Expect '}' after table comprehension.");
+
+        emit_byte(OP_FOR_LOOP);
+        emit_byte((uint8_t)var_slot);
+        emit_byte((uint8_t)end_slot);
+        emit_byte(0);
+        emit_byte(0);
+        {
+            int loop_offset = current_chunk()->count - loop_start;
+            current_chunk()->code[current_chunk()->count - 2] = (uint8_t)((loop_offset >> 8) & 0xff);
+            current_chunk()->code[current_chunk()->count - 1] = (uint8_t)(loop_offset & 0xff);
+        }
+        {
+            int jump = current_chunk()->count - (exit_jump + 2);
+            current_chunk()->code[exit_jump] = (uint8_t)((jump >> 8) & 0xff);
+            current_chunk()->code[exit_jump + 1] = (uint8_t)(jump & 0xff);
+        }
+
+        emit_bytes(OP_GET_LOCAL, (uint8_t)list_slot);
+
+        ObjFunction* function = end_compiler();
+        current = enclosing;
+        emit_bytes(OP_CLOSURE, make_constant(OBJ_VAL(function)));
+        for (int i = 0; i < compiler.upvalue_count; i++) {
+            emit_byte(compiler.upvalues[i].is_local ? 1 : 0);
+            emit_byte(compiler.upvalues[i].index);
+        }
+        emit_call(0);
+        last_expr_ends_with_call = 1;
         return;
     }
     if (is_range_expr) {

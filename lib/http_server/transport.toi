@@ -22,7 +22,8 @@ fn safe_str(v)
     return "<unprintable>"
 
 fn set_nonblocking(sock)
-  sock.settimeout(sock, 0)
+  -- Idle read timeout for speculative/browser keep-alive sockets.
+  sock.settimeout(sock, 10)
 
 fn ensure_tls_on_client(server, client)
   if server == nil or not server.ssl
@@ -66,19 +67,19 @@ fn is_timeout_error(err)
     return false
   if err == "timeout"
     return true
-  lower_err = string.lower(str(err))
+  lower_err = str(err).lower()
   return lower_err.find("timeout") != nil
 
 fn is_closed_error(err)
   if err == nil
     return false
-  lower_err = string.lower(str(err))
+  lower_err = str(err).lower()
   return lower_err.find("closed") != nil or lower_err.find("reset") != nil
 
 fn is_wouldblock_error(err)
   if err == nil
     return false
-  lower_err = string.lower(str(err))
+  lower_err = str(err).lower()
   return lower_err.find("would block") != nil or lower_err.find("temporarily unavailable") != nil or lower_err.find("again") != nil
 
 fn safe_selector_wait(sel, timeout)
@@ -87,6 +88,43 @@ fn safe_selector_wait(sel, timeout)
     return {read = ready_read, write = ready_write}, nil
   except e
     return nil, safe_str(e)
+
+fn send_all(server, client, data)
+  if not istype(data, "string")
+    data = str(data)
+  if data == ""
+    return true
+
+  total = #data
+  sent_total = 0
+  retries = 0
+  while sent_total < total
+    chunk = data.sub(sent_total + 1)
+    sent, send_err = client.send(client, chunk)
+    if istype(sent, "number")
+      if sent <= 0
+        return false
+      sent_total = sent_total + sent
+      retries = 0
+      continue
+
+    if send_err and (is_timeout_error(send_err) or is_wouldblock_error(send_err))
+      retries = retries + 1
+      if retries > 2000
+        if DEBUG_ERRORS
+          print("[http_server] send timeout retries exceeded")
+        return false
+      if thread and thread.sleep
+        thread.sleep(0.001)
+      continue
+
+    if DEBUG_ERRORS
+      print("[http_server] send error: " + safe_str(send_err))
+    return false
+
+  if DEBUG_ERRORS
+    print("[http_server] sent bytes=" + str(total))
+  return true
 
 fn safe_accept(server_sock)
   try
@@ -112,35 +150,37 @@ fn accept_pending_connections(server, on_client)
     if client == nil
       return accepted
     accepted = accepted + 1
+    if DEBUG_ERRORS
+      print("[http_server] accepted connection from " + safe_str(ip))
     on_client(client)
 
 fn upsert_response_header(raw_response, key, value)
-  if type(raw_response) != "string"
+  if not istype(raw_response, "string")
     return raw_response
 
-  head_i = string.find(raw_response, "\r\n\r\n")
+  head_i = raw_response.find("\r\n\r\n")
   if head_i == nil
     return raw_response
 
   -- string.find returns the start index in this runtime, so compute the
   -- separator end explicitly instead of relying on a second return value.
   head_end = head_i + 3
-  head = string.sub(raw_response, 1, head_i - 1)
-  body = string.sub(raw_response, head_end + 1)
-  lines = string.split(head, "\r\n")
+  head = raw_response.sub(1, head_i - 1)
+  body = raw_response.sub(head_end + 1)
+  lines = head.split("\r\n")
   if #lines == 0
     return raw_response
 
   out = {}
   out <+ lines[1]
-  target = string.lower(key)
+  target = key.lower()
   replaced = false
   if #lines > 1
     for i in 2..#lines
       line = lines[i]
-      colon_i = string.find(line, ":")
+      colon_i = line.find(":")
       if colon_i and colon_i > 1
-        name = string.lower(string.trim(string.sub(line, 1, colon_i - 1)))
+        name = line.sub(1, colon_i - 1).trim().lower()
         if name == target
           if not replaced
             out <+ key + ": " + value
@@ -164,12 +204,12 @@ fn decorate_connection_headers(raw_response, keep_alive)
     return raw_response
 
 fn is_stream_response(res)
-  return type(res) == "table" and res.__stream and res.stream != nil
+  return istype(res, "table") and res.__stream and res.stream != nil
 
 fn send_chunked_stream(server, client, stream_res, keep_alive)
   status = stream_res.status or 200
   headers = stream_res.headers
-  if type(headers) != "table"
+  if not istype(headers, "table")
     headers = {}
   headers["Transfer-Encoding"] = "chunked"
   headers["Content-Length"] = nil
@@ -177,7 +217,8 @@ fn send_chunked_stream(server, client, stream_res, keep_alive)
 
   head = http.response(status, headers, "")
   head = decorate_connection_headers(head, keep_alive)
-  client.send(client, head)
+  if not send_all(server, client, head)
+    return false
 
   for chunk in stream_res.stream
     if should_force_close(server)
@@ -185,17 +226,17 @@ fn send_chunked_stream(server, client, stream_res, keep_alive)
     if chunk == nil
       continue
     data = chunk
-    if type(data) != "string"
+    if not istype(data, "string")
       data = str(data)
     if data != ""
       frame = string.format("%x\r\n%s\r\n", #data, data)
-      client.send(client, frame)
+      if not send_all(server, client, frame)
+        return false
 
-  client.send(client, "0\r\n\r\n")
-  return true
+  return send_all(server, client, "0\r\n\r\n")
 
 fn should_force_close(server)
-  if server == nil or type(server) != "table"
+  if server == nil or not istype(server, "table")
     return false
   if not server.stop_requested
     return false
@@ -207,44 +248,37 @@ fn should_force_close(server)
   return server.force_close
 
 fn keep_alive_request(req)
-  version = string.upper(req.version or "HTTP/1.1")
-  headers = req.headers
-  connection = ""
-  if type(headers) == "table" and type(headers["connection"]) == "string"
-    connection = string.lower(headers["connection"])
-
-  if version == "HTTP/1.0"
-    return connection.find("keep-alive") != nil
-  return connection.find("close") == nil
+  -- Temporary safety switch: disable keep-alive until persistent-connection
+  -- edge cases are fully fixed.
+  return false
 
 fn recv_next_chunk(server, client)
   while true
     if should_force_close(server)
       return nil, "closed", client
-    if client == nil or type(client) != "userdata"
+    if client == nil or not istype(client, "userdata")
       return nil, "closed", client
 
     data, err = client.recv(client, 4096)
-    if data and string.len(data) > 0
+    if data and #data > 0
       return data, nil, client
 
-    if data and string.len(data) == 0
+    if data and #data == 0
       return nil, "closed", client
 
     if err and (is_timeout_error(err) or is_wouldblock_error(err))
-      client = coroutine.yield("read")
-      continue
+      return nil, "timeout", client
 
     if err == nil
       return nil, "closed", client
     return nil, err, client
 
 fn handle_connection(server, client)
-  if type(server) != "table" and type(client) == "table"
+  if not istype(server, "table") and istype(client, "table")
     tmp = server
     server = client
     client = tmp
-  if type(server) != "table" or type(client) != "userdata"
+  if not istype(server, "table") or not istype(client, "userdata")
     return "done"
   server.active_connections = server.active_connections + 1
   buffer = ""
@@ -259,19 +293,21 @@ fn handle_connection(server, client)
     bad_request = false
 
     while req == nil and not bad_request
-      if string.len(buffer) > 0
+      if #buffer > 0
         parsed = http.parse(buffer)
         if parsed == false
           bad_request = true
           break
         if parsed != nil
           req = parsed
+          if DEBUG_ERRORS
+            print("[http_server] parsed request " + safe_str(req.method) + " " + safe_str(req.path))
           break
 
       chunk, err, next_client = recv_next_chunk(server, client)
       client = next_client or client
       if chunk == nil
-        if is_closed_error(err) or err == "closed"
+        if is_closed_error(err) or err == "closed" or is_timeout_error(err) or is_wouldblock_error(err)
           keep_running = false
         else
           keep_running = false
@@ -284,18 +320,20 @@ fn handle_connection(server, client)
     if bad_request
       server.request_count = server.request_count + 1
       try
-        client.send(client, decorate_connection_headers(http.response(400, nil, "Bad Request"), false))
+        send_all(server, client, decorate_connection_headers(http.response(400, nil, "Bad Request"), false))
       except e
         nil
       break
 
     consumed = req.consumed
-    if type(consumed) != "number" or consumed < 0
-      consumed = string.len(buffer)
-    if consumed < string.len(buffer)
-      buffer = string.sub(buffer, consumed + 1)
+    if not istype(consumed, "number") or consumed < 0
+      consumed = #buffer
+    if consumed < #buffer
+      buffer = buffer.sub(consumed + 1)
     else
       buffer = ""
+    if DEBUG_ERRORS
+      print("[http_server] consumed=" + str(consumed) + " remaining=" + str(#buffer))
 
     request_keep_alive = keep_alive_request(req)
     if not server.keep_alive
@@ -321,7 +359,10 @@ fn handle_connection(server, client)
           payload = decorate_connection_headers(normalized, request_keep_alive)
         except e
           payload = normalized
-        client.send(client, payload)
+        if not send_all(server, client, payload)
+          if DEBUG_ERRORS
+            print("[http_server] send_all failed for " + safe_str(req.method) + " " + safe_str(req.path))
+          break
     except e
       server.request_count = server.request_count + 1
       if DEBUG_ERRORS
@@ -331,23 +372,27 @@ fn handle_connection(server, client)
       payload = fallback_500
       try
         candidate = decorate_connection_headers(http.response(500, nil, "Internal Server Error"), false)
-        if type(candidate) == "string"
+        if istype(candidate, "string")
           payload = candidate
       except inner
         payload = fallback_500
       try
-        client.send(client, payload)
+        send_all(server, client, payload)
       except send_err
         nil
       break
 
     if not request_keep_alive
+      if DEBUG_ERRORS
+        print("[http_server] closing connection after response")
       break
 
   try
     client.close(client)
   except e
     nil
+  if DEBUG_ERRORS
+    print("[http_server] connection closed")
   if server.active_connections > 0
     server.active_connections = server.active_connections - 1
   return "done"

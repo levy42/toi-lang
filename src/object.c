@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "object.h"
+#include "table.h"
 #include "value.h"
 
 struct Obj* objects = NULL;
@@ -13,6 +14,9 @@ static uint64_t g_object_alloc_count[OBJ_TYPE_COUNT];
 static uint64_t g_object_free_count[OBJ_TYPE_COUNT];
 static uint64_t g_object_alloc_bytes[OBJ_TYPE_COUNT];
 static uint64_t g_object_free_bytes[OBJ_TYPE_COUNT];
+static Table g_interned_strings;
+static int g_interned_strings_init = 0;
+static void mark_table(Table* table);
 
 static const char* object_type_name(ObjType type) {
     switch (type) {
@@ -90,6 +94,19 @@ static uint32_t hash_string(const char* key, int length) {
         hash *= 16777619;
     }
     return hash;
+}
+
+void object_intern_init(void) {
+    (void)g_interned_strings;
+    g_interned_strings_init = 0;
+}
+
+void object_intern_free(void) {
+    g_interned_strings_init = 0;
+}
+
+void object_mark_interned_strings(void) {
+    (void)g_interned_strings_init;
 }
 
 static struct Obj* allocate_object(size_t size, ObjType type) {
@@ -304,15 +321,10 @@ ObjUserdata* new_userdata_with_hooks(void* data, UserdataFinalizer finalize, Use
 
 
 ObjBoundMethod* new_bound_method(Value receiver, struct Obj* method) {
-
     ObjBoundMethod* bound = (ObjBoundMethod*)allocate_object(sizeof(ObjBoundMethod), OBJ_BOUND_METHOD);
-
     bound->receiver = receiver;
-
     bound->method = method;
-
     return bound;
-
 }
 
 static void print_value_rec(Value value, int depth);
@@ -516,11 +528,52 @@ void mark_object(struct Obj* object) {
             if (function->chunk.get_table_ic_keys != NULL && function->chunk.get_table_ic_keys[i] != NULL) {
                 mark_object((struct Obj*)function->chunk.get_table_ic_keys[i]);
             }
+            if (function->chunk.get_table_site_keys != NULL) {
+                int base = i * 4;
+                for (int lane = 0; lane < 4; lane++) {
+                    ObjString* key = function->chunk.get_table_site_keys[base + lane];
+                    if (key != NULL) mark_object((struct Obj*)key);
+                }
+            }
             if (function->chunk.get_table_ic_values != NULL && !IS_NIL(function->chunk.get_table_ic_values[i])) {
                 mark_value(function->chunk.get_table_ic_values[i]);
             }
+            if (function->chunk.set_table_site_keys != NULL) {
+                int base = i * 4;
+                for (int lane = 0; lane < 4; lane++) {
+                    ObjString* key = function->chunk.set_table_site_keys[base + lane];
+                    if (key != NULL) mark_object((struct Obj*)key);
+                }
+            }
             if (function->chunk.call_ic_closures != NULL && function->chunk.call_ic_closures[i] != NULL) {
                 mark_object((struct Obj*)function->chunk.call_ic_closures[i]);
+            }
+            if (function->chunk.call_ic2_closures != NULL && function->chunk.call_ic2_closures[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic2_closures[i]);
+            }
+            if (function->chunk.call_ic3_closures != NULL && function->chunk.call_ic3_closures[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic3_closures[i]);
+            }
+            if (function->chunk.call_ic4_closures != NULL && function->chunk.call_ic4_closures[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic4_closures[i]);
+            }
+            if (function->chunk.call_ic5_closures != NULL && function->chunk.call_ic5_closures[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic5_closures[i]);
+            }
+            if (function->chunk.call_ic_natives != NULL && function->chunk.call_ic_natives[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic_natives[i]);
+            }
+            if (function->chunk.call_ic2_natives != NULL && function->chunk.call_ic2_natives[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic2_natives[i]);
+            }
+            if (function->chunk.call_ic3_natives != NULL && function->chunk.call_ic3_natives[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic3_natives[i]);
+            }
+            if (function->chunk.call_ic4_natives != NULL && function->chunk.call_ic4_natives[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic4_natives[i]);
+            }
+            if (function->chunk.call_ic5_natives != NULL && function->chunk.call_ic5_natives[i] != NULL) {
+                mark_object((struct Obj*)function->chunk.call_ic5_natives[i]);
             }
             if (function->chunk.call2_ic_closures != NULL && function->chunk.call2_ic_closures[i] != NULL) {
                 mark_object((struct Obj*)function->chunk.call2_ic_closures[i]);

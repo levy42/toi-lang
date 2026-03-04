@@ -54,6 +54,19 @@ local function bench_table()
   return total
 end
 
+local function bench_sort()
+  local values = {}
+  for i = 1, 120000 do
+    values[i] = (i * 1103515245 + 12345) % 1000003
+  end
+  table.sort(values)
+  local total = 0
+  for i = 1, 120000 do
+    total = total + values[i]
+  end
+  return total
+end
+
 local function bench_calls()
   local function add(a, b)
     return a + b
@@ -118,11 +131,79 @@ local function bench_app_pipeline()
   return total
 end
 
+local function bench_app_handlers()
+  local methods = {"GET", "GET", "GET", "POST", "GET", "PUT", "DELETE", "GET"}
+  local paths = {"/users", "/teams", "/users", "/events", "/health", "/teams", "/assets", "/users"}
+
+  local function h_users(route, status, body_size, user_id, team_id)
+    return route + status + body_size + (user_id % 7) + (team_id % 5)
+  end
+
+  local function h_teams(route, status, body_size, user_id, team_id)
+    return route + status + (body_size % 97) + (user_id % 11) + (team_id % 3)
+  end
+
+  local function h_events(route, status, body_size, user_id, team_id)
+    return route + status + body_size + (user_id % 13) + (team_id % 17)
+  end
+
+  local function h_health(route, status, body_size, user_id, team_id)
+    return route + status + (body_size % 17) + (user_id % 5) + (team_id % 2)
+  end
+
+  local function h_fallback(route, status, body_size, user_id, team_id)
+    return route + status + body_size + user_id + team_id
+  end
+
+  local handlers = {
+    ["GET /users"] = h_users,
+    ["GET /teams"] = h_teams,
+    ["POST /events"] = h_events,
+    ["GET /health"] = h_health,
+  }
+
+  local routes = {
+    ["GET /users"] = 1,
+    ["GET /teams"] = 3,
+    ["POST /events"] = 8,
+    ["GET /health"] = 7,
+  }
+
+  local total = 0
+  for i = 1, 300000 do
+    local method = methods[(i % 8) + 1]
+    local path = paths[(i % 8) + 1]
+    local key = method .. " " .. path
+    local route = routes[key] or 0
+
+    local auth = (i % 3) ~= 0
+    local body_size = (i * 37) % 2048
+    local user_id = i % 10000
+    local team_id = i % 100
+
+    local status = 200
+    if (not auth) and path ~= "/health" then
+      status = 401
+    elseif method == "POST" and body_size < 32 then
+      status = 422
+    elseif route == 0 then
+      status = 404
+    end
+
+    local handler = handlers[key] or h_fallback
+    total = total + handler(route, status, body_size, user_id, team_id)
+  end
+
+  return total
+end
+
 print("Lua perf:")
 bench("math", bench_math)
 bench("random", bench_random)
 bench("string concat", bench_string_concat)
 bench("string ops", bench_string_ops)
 bench("table", bench_table)
+bench("sort", bench_sort)
 bench("calls", bench_calls)
 bench("app pipeline", bench_app_pipeline)
+bench("app handlers", bench_app_handlers)

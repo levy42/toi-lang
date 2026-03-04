@@ -56,9 +56,27 @@ def bench_table():
         total += t[i]
     return total
 
+def bench_sort():
+    values = []
+    for i in range(1, 120_000 + 1):
+        values.append((i * 1103515245 + 12345) % 1_000_003)
+    values.sort()
+    total = 0
+    for v in values:
+        total += v
+    return total
+
+
+def bench_list_comprehension():
+    t = [i * 3 for i in range(1, 200_000 + 1)]
+    total = 0
+    for v in t:
+        total += v
+    return total
+
 
 def bench_calls():
-    def add(a, b):
+    def add(a: int, b: int):
         return a + b
 
     acc = 0
@@ -125,6 +143,64 @@ def bench_app_pipeline():
     return total
 
 
+def bench_app_handlers():
+    methods = ["GET", "GET", "GET", "POST", "GET", "PUT", "DELETE", "GET"]
+    paths = ["/users", "/teams", "/users", "/events", "/health", "/teams", "/assets", "/users"]
+
+    def h_users(route, status, body_size, user_id, team_id):
+        return route + status + body_size + (user_id % 7) + (team_id % 5)
+
+    def h_teams(route, status, body_size, user_id, team_id):
+        return route + status + (body_size % 97) + (user_id % 11) + (team_id % 3)
+
+    def h_events(route, status, body_size, user_id, team_id):
+        return route + status + body_size + (user_id % 13) + (team_id % 17)
+
+    def h_health(route, status, body_size, user_id, team_id):
+        return route + status + (body_size % 17) + (user_id % 5) + (team_id % 2)
+
+    def h_fallback(route, status, body_size, user_id, team_id):
+        return route + status + body_size + user_id + team_id
+
+    handlers = {
+        "GET /users": h_users,
+        "GET /teams": h_teams,
+        "POST /events": h_events,
+        "GET /health": h_health,
+    }
+    routes = {
+        "GET /users": 1,
+        "GET /teams": 3,
+        "POST /events": 8,
+        "GET /health": 7,
+    }
+
+    total = 0
+    for i in range(1, 300_000 + 1):
+        method = methods[i % 8]
+        path = paths[i % 8]
+        key = f"{method} {path}"
+        route = routes.get(key, 0)
+
+        auth = (i % 3) != 0
+        body_size = (i * 37) % 2048
+        user_id = i % 10_000
+        team_id = i % 100
+
+        status = 200
+        if (not auth) and path != "/health":
+            status = 401
+        elif method == "POST" and body_size < 32:
+            status = 422
+        elif route == 0:
+            status = 404
+
+        handler = handlers.get(key, h_fallback)
+        total += handler(route, status, body_size, user_id, team_id)
+
+    return total
+
+
 def bench_memory():
     gc.collect()
     tracemalloc.start()
@@ -149,9 +225,12 @@ def main():
     bench("string concat", bench_string_concat)
     bench("string ops", bench_string_ops)
     bench("table", bench_table)
+    bench("sort", bench_sort)
+    bench("list comprehension", bench_list_comprehension)
     bench("calls", bench_calls)
     bench("f-string", bench_fstring)
     bench("app pipeline", bench_app_pipeline)
+    bench("app handlers", bench_app_handlers)
     cur_delta, peak_delta, current, peak = bench("memory", bench_memory)
     print(f"memory current {current} bytes (delta {cur_delta})")
     print(f"memory peak {peak} bytes (delta {peak_delta})")

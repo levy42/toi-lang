@@ -50,12 +50,30 @@ fn bench_table()
     sum += t[i]
   return sum
 
+fn bench_sort()
+  values = {}
+  table.reserve(values, 120000)
+  for i in 1..120000
+    values[i] = (i * 1103515245 + 12345) % 1000003
+  table.sort(values)
+  total = 0
+  for i in 1..120000
+    total += values[i]
+  return total
+
+fn bench_list_comprehension()
+  t = {i * 3 for i in 1..200000}
+  sum = 0
+  for i in 1..200000
+    sum += t[i]
+  return sum
+
 fn bench_calls()
-  fn add(a: int, b: int)
-    return a + b
+  fn add(a: int, b: str)
+    return a
   acc = 0
   for i in 1..2000000
-    acc = add(acc, i)
+    acc = add(acc, "df")
   return acc
 
 fn bench_fstring()
@@ -116,6 +134,65 @@ fn bench_app_pipeline()
 
   return total
 
+fn bench_app_handlers()
+  methods = {"GET", "GET", "GET", "POST", "GET", "PUT", "DELETE", "GET"}
+  paths = {"/users", "/teams", "/users", "/events", "/health", "/teams", "/assets", "/users"}
+
+  fn h_users(route, status, body_size, user_id, team_id)
+    return route + status + body_size + (user_id % 7) + (team_id % 5)
+
+  fn h_teams(route, status, body_size, user_id, team_id)
+    return route + status + (body_size % 97) + (user_id % 11) + (team_id % 3)
+
+  fn h_events(route, status, body_size, user_id, team_id)
+    return route + status + body_size + (user_id % 13) + (team_id % 17)
+
+  fn h_health(route, status, body_size, user_id, team_id)
+    return route + status + (body_size % 17) + (user_id % 5) + (team_id % 2)
+
+  fn h_fallback(route, status, body_size, user_id, team_id)
+    return route + status + body_size + user_id + team_id
+
+  handlers = {}
+  handlers["GET /users"] = h_users
+  handlers["GET /teams"] = h_teams
+  handlers["POST /events"] = h_events
+  handlers["GET /health"] = h_health
+
+  routes = {}
+  routes["GET /users"] = 1
+  routes["GET /teams"] = 3
+  routes["POST /events"] = 8
+  routes["GET /health"] = 7
+
+  total = 0
+  for i in 1..300000
+    method = methods[(i % 8) + 1]
+    path = paths[(i % 8) + 1]
+    key = f"{method} {path}"
+    route = routes[key]
+    if not route
+      route = 0
+
+    auth = (i % 3) != 0
+    body_size = (i * 37) % 2048
+    user_id = i % 10000
+    team_id = i % 100
+
+    status = 200
+    if not auth and path != "/health"
+      status = 401
+    elif method == "POST" and body_size < 32
+      status = 422
+    elif route == 0
+      status = 404
+
+    handler = handlers[key]
+    if not handler
+      handler = h_fallback
+    total = total + handler(route, status, body_size, user_id, team_id)
+  return total
+
 fn bench_memory()
   gc
   base = mem()
@@ -132,8 +209,11 @@ bench("random", bench_random)
 bench("string concat", bench_string_concat)
 bench("string ops", bench_string_ops)
 bench("table", bench_table)
+bench("sort", bench_sort)
+bench("list comprehension", bench_list_comprehension)
 bench("calls", bench_calls)
 bench("f-string", bench_fstring)
 bench("app pipeline", bench_app_pipeline)
+bench("app handlers", bench_app_handlers)
 used = bench("memory", bench_memory)
 print string.format("memory %d bytes", used)

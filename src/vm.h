@@ -5,12 +5,20 @@
 #include "value.h"
 #include "table.h"
 
+typedef struct {
+    ObjString* a;
+    ObjString* b;
+    ObjString* c;
+    ObjString* out;
+} BuildString3CacheEntry;
+
 typedef struct VM {
    ObjThread* current_thread;
    ObjThread* gc_parked_threads;
    Table globals;
    Table modules;  // Cache of loaded modules (native and .toi)
    ObjString* build_string_cache[65536];
+   BuildString3CacheEntry build_string3_cache[4096];
     int use_thread_tls;
    int cli_argc;
    char** cli_argv;
@@ -48,6 +56,13 @@ typedef struct VM {
     uint32_t tier2_inline_hot_threshold;
     uint64_t tier2_promote_count;
     uint64_t tier2_exec_count;
+    int native_jit_enabled;
+    uint64_t native_jit_hot_candidates;
+    uint64_t native_jit_compile_attempts;
+    uint64_t native_jit_compiled_count;
+    uint64_t native_jit_exec_attempts;
+    uint64_t native_jit_exec_hits;
+    void* native_jit;
     int opcode_prof_enabled;
     uint64_t opcode_prof_count[256];
     uint64_t opcode_prof_ns[256];
@@ -127,6 +142,18 @@ typedef struct VM {
     ObjNative* call_prof_native_slow_keys[16];
     uint64_t call_prof_native_slow_call_counts[16];
     uint64_t call_prof_native_slow_ns_by_key[16];
+    int table_prof_enabled;
+    int table_site_prof_enabled;
+    uint64_t table_prof_get_ic_exact_hit_count;
+    uint64_t table_prof_get_ic_slot_hit_count;
+    uint64_t table_prof_get_ic_miss_count;
+    uint64_t table_prof_get_generic_lookup_count;
+    uint64_t table_prof_get_meta_index_count;
+    uint64_t table_prof_set_ic_exact_hit_count;
+    uint64_t table_prof_set_ic_slot_hit_count;
+    uint64_t table_prof_set_ic_miss_count;
+    uint64_t table_prof_set_generic_store_count;
+    uint64_t table_prof_set_meta_newindex_count;
 } VM;
 
 typedef enum {

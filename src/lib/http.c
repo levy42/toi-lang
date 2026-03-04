@@ -445,10 +445,35 @@ static int http_response(VM* vm, int arg_count, Value* args) {
 
     // Compute headers length.
     size_t headers_len = 0;
+    int has_content_length = 0;
+    int has_transfer_encoding = 0;
     if (headers) {
         for (int i = 0; i < headers->table.capacity; i++) {
             Entry* entry = &headers->table.entries[i];
             if (entry->key != NULL) {
+                int key_len = entry->key->length;
+                const char* key_chars = entry->key->chars;
+                if (key_len == 14) {
+                    int eq = 1;
+                    const char* want = "content-length";
+                    for (int j = 0; j < 14; j++) {
+                        if ((char)tolower((unsigned char)key_chars[j]) != want[j]) {
+                            eq = 0;
+                            break;
+                        }
+                    }
+                    if (eq) has_content_length = 1;
+                } else if (key_len == 17) {
+                    int eq = 1;
+                    const char* want = "transfer-encoding";
+                    for (int j = 0; j < 17; j++) {
+                        if ((char)tolower((unsigned char)key_chars[j]) != want[j]) {
+                            eq = 0;
+                            break;
+                        }
+                    }
+                    if (eq) has_transfer_encoding = 1;
+                }
                 if (IS_STRING(entry->value)) {
                     ObjString* val = AS_STRING(entry->value);
                     headers_len += (size_t)entry->key->length + 2 + (size_t)val->length + 2;
@@ -457,10 +482,12 @@ static int http_response(VM* vm, int arg_count, Value* args) {
         }
     }
 
-    // Add Content-Length if body present
+    // Add Content-Length unless caller already provided framing headers.
+    // Empty-body HTTP/1.1 responses need explicit framing for keep-alive.
     char content_length[64] = "";
     int content_length_len = 0;
-    if (body_len > 0) {
+    int can_add_content_length = !has_content_length && !has_transfer_encoding;
+    if (can_add_content_length) {
         content_length_len = snprintf(content_length, sizeof(content_length), "Content-Length: %d\r\n", body_len);
         if (content_length_len < 0) {
             RETURN_NIL;

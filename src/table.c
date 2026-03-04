@@ -54,6 +54,16 @@ static Entry* find_entry(Entry* entries, int capacity, ObjString* key) {
     }
 }
 
+static int objkey_equals(ObjString* a, ObjString* b) {
+    if (a == b) return 1;
+    if (a == NULL || b == NULL) return 0;
+    if (a->length != b->length) return 0;
+    uint32_t ah = objstring_hash(a);
+    uint32_t bh = objstring_hash(b);
+    if (ah != bh) return 0;
+    return memcmp(a->chars, b->chars, (size_t)a->length) == 0;
+}
+
 static void adjust_capacity(Table* table, int capacity) {
     Entry* entries = (Entry*)malloc(sizeof(Entry) * capacity);
     for (int i = 0; i < capacity; i++) {
@@ -130,7 +140,7 @@ int table_set_with_slot(Table* table, ObjString* key, Value value, int* slot_ind
 int table_set_at_slot(Table* table, int slot_index, ObjString* key, Value value) {
     if (slot_index < 0 || slot_index >= table->capacity) return 0;
     Entry* entry = &table->entries[slot_index];
-    if (entry->key != key) return 0;
+    if (!objkey_equals(entry->key, key)) return 0;
     entry->value = value;
     table->version++;
     return 1;
@@ -139,7 +149,7 @@ int table_set_at_slot(Table* table, int slot_index, ObjString* key, Value value)
 int table_set_at_slot_or_empty(Table* table, int slot_index, ObjString* key, Value value) {
     if (slot_index < 0 || slot_index >= table->capacity) return 0;
     Entry* entry = &table->entries[slot_index];
-    if (entry->key == key) {
+    if (objkey_equals(entry->key, key)) {
         entry->value = value;
         table->version++;
         return 1;

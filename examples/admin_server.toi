@@ -1,0 +1,153 @@
+http_server = import lib.http_server
+db_mod = import lib.db
+types = import lib.types
+admin_mod = import lib.admin
+http = import http
+uuid = import uuid
+
+DB_BASE = "examples/tmp_admin_showcase"
+
+User = types.Record {
+  id = types.String,
+  name = types.String,
+  email = types.String,
+  team = types.String,
+  age = types.Integer,
+  score = types.Number,
+  active = types.Boolean,
+  bio = types.String
+}
+User.__name = "users"
+User.__indexes = {
+  {field = "email", unique = true},
+  "team",
+  "active"
+}
+
+Task = types.Record {
+  id = types.String,
+  title = types.String,
+  status = types.String,
+  owner_email = types.String,
+  estimate_hours = types.Number,
+  billable = types.Boolean,
+  notes = types.String
+}
+Task.__name = "tasks"
+Task.__indexes = {
+  "status",
+  "owner_email",
+  "billable"
+}
+
+db = db_mod.open(DB_BASE)
+db.create_table(User)
+db.create_table(Task)
+
+fn seed_data()
+  if db.users.count() == 0
+    teams = {"platform", "product", "data"}
+    for i in 1..18
+      team = teams[((i - 1) % #teams) + 1]
+      active = (i % 5) != 0
+      row = {
+        id = uuid.uid(),
+        name = "User " + str(i),
+        email = "user" + str(i) + "@example.com",
+        team = team,
+        age = 20 + (i % 17),
+        score = 60 + (i * 2.25),
+        active = active,
+        bio = "Bio for user " + str(i)
+      }
+      db.users.put(row)
+
+  if db.tasks.count() == 0
+    statuses = {"open", "in-progress", "done"}
+    for i in 1..24
+      status = statuses[((i - 1) % #statuses) + 1]
+      owner_i = ((i - 1) % 18) + 1
+      row = {
+        id = uuid.uid(),
+        title = "Task " + str(i),
+        status = status,
+        owner_email = "user" + str(owner_i) + "@example.com",
+        estimate_hours = 1 + (i % 10) + 0.5,
+        billable = (i % 4) != 0,
+        notes = "Task notes " + str(i)
+      }
+      db.tasks.put(row)
+
+seed_data()
+
+app = http_server({host = "127.0.0.1", port = 8083})
+get = app.get
+
+@get("/")
+fn home()
+  body = [[
+Pua Admin Showcase
+
+Open:
+- /admin
+- /api/summary
+- /api/users/active
+
+Try:
+- /admin/users?q=user%201&sort=score&dir=desc
+- /admin/tasks?q=open&sort=status
+]]
+  return http.response(200, {["Content-Type"] = "text/plain; charset=utf-8"}, body)
+
+@get("/api/summary")
+fn api_summary()
+  return {
+    users = db.users.count(),
+    active_users = db.users.count(active = true),
+    tasks = db.tasks.count(),
+    open_tasks = db.tasks.count(status = "open")
+  }
+
+@get("/api/users/active")
+fn api_users_active()
+  rows = db.users.filter(active = true, order_by = "name", limit = 50)
+  return {count = #rows, rows = rows}
+
+admin = admin_mod.new(app, db, {
+  title = "Pua Admin Showcase",
+  mount_path = "/admin"
+})
+
+admin.register(User, {
+  label = "Users",
+  form_fields = {"name", "email", "team", "age", "score", "active", "bio"},
+  list_fields = {"id", "name", "email", "team", "age", "score", "active"},
+  search_fields = {"name", "email", "team", "bio"},
+  default_sort = "name",
+  per_page = 6,
+  field_types = {
+    age = "int",
+    score = "number",
+    active = "bool",
+    bio = "textarea"
+  }
+})
+
+admin.register(Task, {
+  label = "Tasks",
+  form_fields = {"title", "status", "owner_email", "estimate_hours", "billable", "notes"},
+  list_fields = {"id", "title", "status", "owner_email", "estimate_hours", "billable"},
+  search_fields = {"title", "status", "owner_email", "notes"},
+  default_sort = "title",
+  per_page = 8,
+  field_types = {
+    estimate_hours = "number",
+    billable = "bool",
+    notes = "textarea"
+  }
+})
+
+print "Pua Admin Showcase running on http://127.0.0.1:8083"
+print "Admin: http://127.0.0.1:8083/admin"
+print "Data files prefix: " + DB_BASE
+app.run()

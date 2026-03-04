@@ -58,19 +58,22 @@ Type.check = check_base
 
 fn run_check(type_def, value, path = nil, opts = nil)
   if path == nil path = "$"
-  if type(type_def) != "table"
-    fail(path, "Invalid type definition: expected table, got " + type(type_def))
-
-  checker = type_def.check
-  if checker == nil
-    fail(path, "Invalid type definition: missing check()")
+  checker = nil
+  type_kind = type(type_def)
+  if type_kind == "table"
+    checker = type_def.check
+    if checker == nil
+      fail(path, "Invalid type definition: missing check()")
+  elif type_kind == "function" or type_kind == "unknown"
+    checker = type_def
+  else
+    fail(path, "Invalid type definition: expected callable, got " + type_kind)
 
   prev_opts = _RUN_CHECK_OPTS
   if opts != nil
     _RUN_CHECK_OPTS = opts
   out = nil
   try
-    -- Bound methods in current runtime are unstable with a 3rd positional arg.
     out = checker(value, path)
   except e
     _RUN_CHECK_OPTS = prev_opts

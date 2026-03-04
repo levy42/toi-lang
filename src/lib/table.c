@@ -147,41 +147,51 @@ static int call_unary_lookup(VM* vm, Value fn, Value arg, Value* out) {
 
 static int call_binary_less(VM* vm, Value fn, Value a, Value b, int* out_less) {
     Value result = NIL_VAL;
+    ObjThread* thread = vm_current_thread(vm);
+    Value* saved_top = thread->stack_top;
+    int saved_frame_count = thread->frame_count;
+    int was_native_jit_enabled = vm->native_jit_enabled;
 
-    if (IS_CLOSURE(fn)) {
-        int saved_frame_count = vm_current_thread(vm)->frame_count;
-
-        push(vm, fn);
-        push(vm, a);
-        push(vm, b);
-
-        if (!call(vm, AS_CLOSURE(fn), 2)) {
-            return 0;
-        }
-
-        InterpretResult run_result = vm_run(vm, saved_frame_count);
-        if (run_result != INTERPRET_OK) {
-            return 0;
-        }
-
-        result = pop(vm);
-    } else if (IS_NATIVE(fn)) {
-        push(vm, fn);
-        push(vm, a);
-        push(vm, b);
-
-        Value* call_args = vm_current_thread(vm)->stack_top - 2;
-        vm_current_thread(vm)->stack_top -= 3;
-
-        if (!AS_NATIVE(fn)(vm, 2, call_args)) {
-            return 0;
-        }
-
-        result = pop(vm);
-    } else {
+    if (!IS_CLOSURE(fn) && !IS_NATIVE(fn)) {
         vm_runtime_error(vm, "table.sort: comparator must be a function.");
         return 0;
     }
+
+    // Comparator callbacks are called from native code; forcing interpreter
+    // execution here avoids unstable nested JIT call paths.
+    if (IS_CLOSURE(fn)) {
+        vm->native_jit_enabled = 0;
+    }
+
+    push(vm, fn);
+    push(vm, a);
+    push(vm, b);
+
+    CallFrame* frame = &thread->frames[thread->frame_count - 1];
+    uint8_t* ip = frame->ip;
+
+    if (!call_value(vm, fn, 2, &frame, &ip)) {
+        vm->native_jit_enabled = was_native_jit_enabled;
+        return 0;
+    }
+
+    // If a closure frame was entered, run until we return to the native caller.
+    if (thread->frame_count > saved_frame_count) {
+        InterpretResult run_result = vm_run(vm, saved_frame_count);
+        if (run_result != INTERPRET_OK) {
+            vm->native_jit_enabled = was_native_jit_enabled;
+            return 0;
+        }
+    }
+
+    if (thread->stack_top <= saved_top) {
+        vm->native_jit_enabled = was_native_jit_enabled;
+        vm_runtime_error(vm, "table.sort: comparator did not return a value.");
+        return 0;
+    }
+    result = saved_top[0];
+    thread->stack_top = saved_top;
+    vm->native_jit_enabled = was_native_jit_enabled;
 
     if (IS_BOOL(result)) {
         *out_less = AS_BOOL(result) ? 1 : 0;
@@ -191,9 +201,15 @@ static int call_binary_less(VM* vm, Value fn, Value a, Value b, int* out_less) {
         *out_less = AS_NUMBER(result) < 0 ? 1 : 0;
         return 1;
     }
+    if (IS_NIL(result)) {
+        *out_less = 0;
+        return 1;
+    }
 
-    vm_runtime_error(vm, "table.sort: comparator must return bool or number.");
-    return 0;
+    // Accept generic truthy/falsey comparator returns to avoid brittle
+    // runtime type coupling from user comparators.
+    *out_less = 1;
+    return 1;
 }
 
 // table.remove(t, pos) - removes element at pos and shifts down
