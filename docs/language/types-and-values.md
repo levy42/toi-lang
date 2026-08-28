@@ -1,6 +1,6 @@
-# Types and Values
+# Types And Values
 
-Runtime `type(x)` strings include:
+Runtime `type(x)` values include:
 
 - `nil`
 - `boolean`
@@ -14,19 +14,72 @@ Runtime `type(x)` strings include:
 
 ## Truthiness
 
-- `nil` is falsey.
-- `false` is falsey.
-- Other values are truthy.
+- `nil` is falsey
+- `false` is falsey
+- everything else is truthy
+
+## Numbers
+
+Toi uses `number` as its runtime numeric type.
+
+```toi
+a = 10
+b = 3.5
+c = 1_000_000
+```
+
+## Strings
+
+Strings are immutable and support indexing, slicing, interpolation, and common methods.
+
+```toi
+s = "hello"
+print s.upper()
+print s[2..4]
+```
 
 ## Tables
 
-Tables combine array and hash behavior.
+Tables are used for:
 
-## Userdata and Metatables
+- lists
+- maps
+- records
+- lightweight objects
 
-Native modules expose userdata objects with metatable-driven methods (for example: `io` files, sockets, thread handles).
+```toi
+row = {id = 7, name = "Ana"}
+tags = {"red", "green", "blue"}
+```
 
-Common metamethod keys used in the runtime include:
+Use:
+
+- `for v in table` for values
+- `for k, v in table` for key-value iteration
+- `table[key]` for map-style lookup
+- `items <+ value` for append
+
+## Functions And Generators
+
+Functions are first-class values:
+
+```toi
+fn add(a, b)
+  return a + b
+
+op = add
+print op(2, 3)
+```
+
+Generators also behave like normal runtime values and report `type(x) == "generator"`.
+
+## Userdata
+
+Native modules use `userdata` for handles such as files, sockets, mmap regions, and thread handles.
+
+## Metatables
+
+Common metamethods in the runtime include:
 
 - `__index`
 - `__newindex`
@@ -35,7 +88,8 @@ Common metamethod keys used in the runtime include:
 - `__append`
 - `__next`
 
-Metatable-only member access is available with `::`:
+Metatable-only dispatch is available with `::`:
 
-- `obj::method(args...)` looks up `method` directly on `getmetatable(obj)`, not through `__index`.
-- If the looked-up value is callable, `obj` is passed automatically as the first argument.
+```toi
+obj::method(args)
+```

@@ -100,8 +100,8 @@ print("x < y")
 html2 = markdown.to_html(md2)
 assert_true(html2 has "<p>Paragraph with &lt;tag&gt; &amp; symbols.</p>")
 assert_true(html2 has "<pre><code class=\"language-toi\">")
-assert_true(html2 has "<span color=\"cyan\">print</span>")
-assert_true(html2 has "<span color=\"green\">&quot;x &lt; y&quot;</span>")
+assert_true(html2 has "<span class=\"tok fn\">print</span>")
+assert_true(html2 has "<span class=\"tok str\">&quot;x &lt; y&quot;</span>")
 
 md3 = [[```
 a < b && c > d

@@ -7,60 +7,77 @@ fn add(a, b)
   return a + b
 ```
 
-## Default Parameters
+## Default Arguments
 
 ```toi
 fn add(a, b = 10)
   return a + b
 ```
 
-## Variadic Parameters
+## Variadic Arguments
 
 ```toi
-fn sum(*vals)
-  ...
+fn collect(*vals)
+  return vals
 ```
 
-## Type Hints
-
-Type hints are supported in parameter lists:
+## Multiple Returns
 
 ```toi
-fn f(user_id: int, name: str)
-  ...
-```
+fn split_name()
+  return "Ana", "Silva"
 
-Type hints are metadata (inspectable), not a full static type system.
+first, last = split_name()
+```
 
 ## Anonymous Functions
 
 ```toi
-fn(x)
+double = fn(x)
   return x * 2
 ```
 
-## Decorators
-
-Decorator syntax is supported for function declarations:
+## Type Hints
 
 ```toi
-@decorator
-fn f()
-  ...
+fn greet(name: str, times: int)
+  for _ in 1..times
+    print name
 ```
 
-## Named and Spread Call Arguments
+Type hints are runtime metadata. They are useful for libraries and tooling, not a full static type system.
 
-- Named args: `f(a=1, b=2)`
-- Spread args: `f(*arr)`
-- Generator comprehension arg: `f(x for x in iterable)`
-
-Note: named call arguments use `=`.
-Expression assignment uses `:=` (walrus), for example: `x := expr`.
-
-## Multiple Return Values
+## Named And Spread Arguments
 
 ```toi
-fn pair()
-  return 1, 2
+run(host = "127.0.0.1", port = 8080)
+
+args = {"Ana", 3}
+greet(*args)
+```
+
+Named arguments use `=`, not `:=`.
+
+## Decorators
+
+```toi
+@app.command("hello")
+fn hello(name = "world")
+  print f"hello {name}"
+```
+
+Decorators are common in `lib.cli` and `lib.http_server`.
+
+## Methods
+
+Normal method lookup:
+
+```toi
+"toi".upper()
+```
+
+Metatable-only method lookup:
+
+```toi
+obj::method(...)
 ```

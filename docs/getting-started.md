@@ -2,54 +2,39 @@
 
 ## Build
 
+Debug build:
+
 ```bash
 make
+```
+
+Optimized build:
+
+```bash
 make release
-make test
 ```
 
-## Build (WASM / WASI)
+Clean build artifacts:
 
 ```bash
-make wasm
-make wasm-release
+make clean
 ```
-
-Default `make wasm` uses `zig cc` (recommended).
-If `zig` is unavailable, the Makefile falls back to `clang-20`/`clang` when distro `wasi-libc`
-headers and libs are present (e.g. `/usr/include/wasm32-wasi`, `/usr/lib/wasm32-wasi`).
-Use `make wasm-release` for a smaller production-oriented `toi.wasm`.
-
-If you prefer `clang` + explicit WASI sysroot, pass both:
-
-```bash
-make wasm WASM_CC=clang WASM_SYSROOT=/path/to/wasi-sysroot
-```
-
-## Browser Playground (Static HTML)
-
-Build the wasm binary first:
-
-```bash
-make wasm
-```
-
-Open directly:
-
-```bash
-open web/playground.html
-```
-
-In the page, pick your local `toi.wasm` (built by `make wasm`) and run code from the textarea.
 
 ## Run
 
+Start the REPL:
+
 ```bash
 ./toi
-./toi path/to/script.toi
 ```
 
-## Format Source
+Run a script:
+
+```bash
+./toi hello.toi
+```
+
+## Format
 
 ```bash
 ./toi fmt file.toi
@@ -57,27 +42,45 @@ In the page, pick your local `toi.wasm` (built by `make wasm`) and run code from
 ./toi fmt --check file.toi
 ```
 
-## Hello World
-
-```toi
-print "hello, toi"
-```
-
-## Quick Example
-
-```toi
-math = import math
-
-fn hyp(a, b)
-  return math.sqrt(a * a + b * b)
-
-print hyp(3, 4)
-```
-
-## Testing Convention
-
-Project tests are executable `.toi` programs in `tests/`.
+## Test
 
 ```bash
 make test
+```
+
+Tests live in `tests/*.toi`. A minimal test looks like this:
+
+```toi
+from lib.test import assert_eq, assert_true
+
+assert_eq(1 + 1, 2)
+assert_true("toi".upper() == "TOI")
+```
+
+## First Script
+
+```toi
+import math
+
+fn main()
+  values = {3, 4, 5}
+  for n in values
+    print n, math.sqrt(n * n)
+
+main()
+```
+
+## Practical Conventions
+
+- Prefer `if value` over explicit comparisons to `true`, `false`, or `nil`.
+- Prefer `for v in table` or `for k, v in table` over manual index loops.
+- Use method-call style when available: `"hello".upper()`.
+- Use `items <+ value` to append to a table.
+- Use `match` when branching on a known value.
+
+## Optional Browser Playground
+
+```bash
+make wasm
+open web/playground.html
 ```

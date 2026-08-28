@@ -1,28 +1,41 @@
 # Language Syntax
 
-## Lexical Basics
+## Lexical Rules
 
 - Statements are line-oriented.
-- Blocks are indentation-based (`INDENT`/`DEDENT` tokens).
+- Blocks are indentation-based.
 - Comments start with `--`.
-- Strings support single quotes, double quotes, and multiline `[[...]]`.
-- Formatted strings: `f"...{expr}..."`, with optional format spec: `{expr|.2f}`.
+- Strings can use single quotes, double quotes, or multiline `[[...]]`.
+- Interpolated strings use `f"..."`.
 
 ## Literals
 
-- `nil`, `true`, `false`
-- Numbers (integer/float syntax)
-- Strings
-- Table literals: `{}`
-
-Examples:
-
 ```toi
 n = 42
-s = "hello"
-m = [[line 1
-line 2]]
-t = {1, 2, a = 3}
+big = 100_000
+ok = true
+none = nil
+name = "Toi"
+multi = [[hello
+world]]
+items = {1, 2, 3}
+user = {name = "Ana", admin = true}
+```
+
+## Variables And Assignment
+
+```toi
+x = 10
+a, b = 1, 2
+a, b = {10, 20}
+x += 1
+```
+
+Expression assignment uses `:=`:
+
+```toi
+if (line := input("> ")) != ""
+  print line
 ```
 
 ## Operators
@@ -35,58 +48,75 @@ Comparison:
 
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 
-Logical:
+Boolean:
 
 - `and`, `or`, `not`
 
-Other:
+Other common forms:
 
-- Ternary: `cond ? a : b`
-- Range: `a..b`
-- Contains: `in`, `not in`, `has` (`elem in container` == `container has elem`)
-- Length: `#value`
-- Append operator: `++`
-
-## Assignment
-
-- Basic: `x = expr`
-- Expression assignment (walrus): `x := expr`
-- Multi-target: `a, b = expr1, expr2`
-- Single-RHS unpack: `a, b = expr` (if `expr` is a table, values come from `expr[1]`, `expr[2]`, ...)
-- Compound: `+=`, `-=`, `*=`, `/=`, `%=`
-
-Walrus returns the assigned value, so it can be used inside larger expressions:
-
-```toi
-v = (x := 10)
-ok = (x := x + 1) > 10
-```
+- ternary: `cond ? yes : no`
+- range: `1..10`
+- length: `#value`
+- append: `items <+ value`
+- membership: `value in items`, `items has value`
 
 ## Tables
 
-Array-like + map-like hybrid:
+Tables are the main compound type. They can hold array-style and map-style data at the same time.
 
 ```toi
 t = {10, 20, name = "toi", [10] = "x"}
+
 print t[1]
 print t.name
 print t["name"]
 ```
 
-## Indexing and Slicing
-
-- String and table indexing are supported.
-- Negative indices are supported in some operations.
-- Slice helper: `slice(value, start, stop, step=1)`.
-- Slice syntax: `value[start..stop:step]`, plus short forms `[..stop]`, `[start..]`.
-- In slice bounds, negative indices count from the end (for example, `"hello"[..-1]` -> `"hell"`).
-
-## Strings and Interpolation
+## Strings
 
 ```toi
 name = "Toi"
-pi = 3.14159
-s = f"hello {name}, pi={pi|.2f}"
+version = 0.1
+msg = f"hello {name} {version|.1f}"
 ```
 
-`{expr|spec}` uses `string.format` semantics for `spec`.
+Interpolation uses normal expression syntax inside `{...}`. Formatting after `|` follows `string.format` conventions.
+
+## Indexing And Slicing
+
+```toi
+letters = "hello"
+nums = {10, 20, 30, 40, 50}
+
+first = letters[1]
+mid = nums[2..4]
+head = nums[..3]
+tail = nums[3..]
+drop_last = letters[..-1]
+```
+
+Negative slice bounds are offsets from the end.
+
+## Comprehensions
+
+```toi
+squares = {n * n for n in 1..5}
+index = {str(n) = n * 10 for n in 1..3}
+```
+
+## Method Calls
+
+Use method-call style when it reads naturally:
+
+```toi
+print "hello".upper()
+print ", ".join({"a", "b", "c"})
+```
+
+## Decorators
+
+```toi
+@app.command
+fn hello()
+  print "hello"
+```

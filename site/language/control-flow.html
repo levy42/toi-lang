@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Control Flow</title>
+    <link rel="stylesheet" href="../docs.css">
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+</head>
+<body>
+    <aside>
+    <a class="brand" href="../README.html">
+    <img class="brand-logo" src="../logo.svg" alt="Toi logo">
+    <span>Toi Docs</span>
+    </a>
+    <ul class="nav">
+    
+    
+    <li><a href="../README.html">Quick Start</a></li>
+    
+    
+    
+    <li><a href="../benchmarks.html">Benchmarks</a></li>
+    
+    
+    
+    <li><a href="../getting-started.html">Getting Started</a></li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group active" open>
+    <summary>Language</summary>
+    <ul class="subnav">
+    
+    <li class="active"><a href="../language/control-flow.html">Control Flow</a></li>
+    
+    <li><a href="../language/functions.html">Functions</a></li>
+    
+    <li><a href="../language/modules.html">Modules</a></li>
+    
+    <li><a href="../language/syntax.html">Language Syntax</a></li>
+    
+    <li><a href="../language/types-and-values.html">Types And Values</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group">
+    <summary>Standard Library</summary>
+    <ul class="subnav">
+    
+    <li><a href="../stdlib/README.html">Standard Library</a></li>
+    
+    <li><a href="../stdlib/core.html">Core</a></li>
+    
+    <li><a href="../stdlib/files-and-system.html">Files And System</a></li>
+    
+    <li><a href="../stdlib/networking-and-concurrency.html">Networking And Concurrency</a></li>
+    
+    <li><a href="../stdlib/text-and-data.html">Text And Data</a></li>
+    
+    <li><a href="../stdlib/toi-libraries.html">Toi Libraries</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    </ul>
+    </aside>
+    <main><h1 id="control flow">Control Flow</h1>
+<h2 id="conditionals">Conditionals</h2>
+<pre><code class="language-toi"><span class="tok key">if</span> score <span class="tok op">&gt;=</span> <span class="tok num">90</span>
+  <span class="tok key">print</span> <span class="tok str">&quot;A&quot;</span>
+<span class="tok key">elif</span> score <span class="tok op">&gt;=</span> <span class="tok num">80</span>
+  <span class="tok key">print</span> <span class="tok str">&quot;B&quot;</span>
+<span class="tok key">else</span>
+  <span class="tok key">print</span> <span class="tok str">&quot;C&quot;</span></code></pre>
+<p>Expression assignment fits naturally in conditions:</p>
+<pre><code class="language-toi"><span class="tok key">if</span> <span class="tok pun">(</span>line <span class="tok op">:=</span> <span class="tok fn">input</span><span class="tok pun">(</span><span class="tok str">&quot;&gt; &quot;</span><span class="tok pun">)</span><span class="tok pun">)</span> <span class="tok op">!=</span> <span class="tok str">&quot;&quot;</span>
+  <span class="tok key">print</span> line</code></pre>
+<h2 id="match">Match</h2>
+<p>Use <code>match</code> when branching on a single value:</p>
+<pre><code class="language-toi"><span class="tok key">match</span> method
+<span class="tok key">case</span> <span class="tok str">&quot;GET&quot;</span>
+  <span class="tok fn">handle_get</span><span class="tok pun">(</span><span class="tok pun">)</span>
+<span class="tok key">case</span> <span class="tok str">&quot;POST&quot;</span>
+  <span class="tok fn">handle_post</span><span class="tok pun">(</span><span class="tok pun">)</span>
+<span class="tok key">else</span>
+  <span class="tok fn">handle_other</span><span class="tok pun">(</span><span class="tok pun">)</span></code></pre>
+<h2 id="while">While</h2>
+<pre><code class="language-toi">i <span class="tok op">=</span> <span class="tok num">0</span>
+<span class="tok key">while</span> i <span class="tok op">&lt;</span> <span class="tok num">10</span>
+  <span class="tok key">print</span> i
+  i <span class="tok op">+=</span> <span class="tok num">1</span></code></pre>
+<h2 id="for">For</h2>
+<p>Toi favors iterator-style loops.</p>
+<pre><code class="language-toi"><span class="tok key">for</span> v <span class="tok key">in</span> values
+  <span class="tok key">print</span> v
+
+<span class="tok key">for</span> k<span class="tok pun">,</span> v <span class="tok key">in</span> row
+  <span class="tok key">print</span> k<span class="tok pun">,</span> v</code></pre>
+<p>Use <code>continue</code> and <code>break</code> when the loop reads better with guard clauses.</p>
+<h2 id="exceptions">Exceptions</h2>
+<pre><code class="language-toi"><span class="tok key">try</span>
+  <span class="tok fn">risky</span><span class="tok pun">(</span><span class="tok pun">)</span>
+<span class="tok key">except</span> e
+  <span class="tok key">print</span> e
+<span class="tok key">finally</span>
+  <span class="tok fn">cleanup</span><span class="tok pun">(</span><span class="tok pun">)</span></code></pre>
+<p>Raise errors with:</p>
+<pre><code class="language-toi"><span class="tok key">throw</span> <span class="tok str">&quot;boom&quot;</span>
+<span class="tok key">throw</span> <span class="tok pun">{</span><span class="tok name">type</span> <span class="tok op">=</span> <span class="tok str">&quot;ConfigError&quot;</span><span class="tok pun">,</span> msg <span class="tok op">=</span> <span class="tok str">&quot;missing host&quot;</span><span class="tok pun">}</span></code></pre>
+<h2 id="with">With</h2>
+<pre><code class="language-toi"><span class="tok key">with</span> io<span class="tok pun">.</span><span class="tok fn">open</span><span class="tok pun">(</span><span class="tok str">&quot;tmp.txt&quot;</span><span class="tok pun">,</span> <span class="tok str">&quot;w&quot;</span><span class="tok pun">)</span> <span class="tok key">as</span> f
+  f<span class="tok pun">.</span><span class="tok fn">write</span><span class="tok pun">(</span><span class="tok str">&quot;hello&quot;</span><span class="tok pun">)</span></code></pre>
+<h2 id="return and yield">Return And Yield</h2>
+<ul>
+<li><code>return</code> may return multiple values
+</li>
+<li><code>yield</code> is used in generator-style code
+</li>
+</ul></main>
+</body>
+</html>

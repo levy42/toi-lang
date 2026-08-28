@@ -85,26 +85,39 @@ pigment = import cli.pigment
 string = import string
 
 toi_out = pigment.highlight("if a == 1 -- ok\nprint(\"[x]\")", "toi")
-assert_true(toi_out has "<span color=\"blue\">if</span>")
-assert_true(toi_out has "<span color=\"magenta\">==</span>")
-assert_true(toi_out has "<span color=\"yellow\">1</span>")
-assert_true(toi_out has "<span color=\"green\">&quot;[x]&quot;</span>")
+assert_true(toi_out has "<span class=\"tok key\">if</span>")
+assert_true(toi_out has "<span class=\"tok op\">==</span>")
+assert_true(toi_out has "<span class=\"tok num\">1</span>")
+assert_true(toi_out has "<span class=\"tok fn\">print</span>")
+assert_true(toi_out has "<span class=\"tok pun\">(</span>")
+assert_true(toi_out has "<span class=\"tok str\">&quot;[x]&quot;</span>")
+
+decorator_out = pigment.highlight("@app.command(\"hi\")\nfn run(x)\n  return helper(x)", "toi")
+assert_true(decorator_out has "<span class=\"tok dec\">@app.command</span>")
+assert_true(decorator_out has "<span class=\"tok fn\">run</span>")
+assert_true(decorator_out has "<span class=\"tok fn\">helper</span>")
+
+punct_out = pigment.highlight("print({a = 1, b = 2})", "toi")
+assert_true(punct_out has "<span class=\"tok pun\">{</span>")
+assert_true(punct_out has "<span class=\"tok op\">=</span>")
+assert_true(punct_out has "<span class=\"tok pun\">,</span>")
+assert_true(punct_out has "<span class=\"tok pun\">}</span>")
 
 js_out = pigment.highlight("const x = 1; // hi", "js")
-assert_true(js_out has "<span color=\"blue\">const</span>")
-assert_true(js_out has "<span color=\"gray\">// hi</span>")
+assert_true(js_out has "<span class=\"tok key\">const</span>")
+assert_true(js_out has "<span class=\"tok com\">// hi</span>")
 
 css_out = pigment.highlight("/* hi */ .a { color: \"#fff\"; }", "css")
-assert_true(css_out has "<span color=\"gray\">/* hi */</span>")
-assert_true(css_out has "<span color=\"cyan\">color</span>")
-assert_true(css_out has "<span color=\"green\">&quot;#fff&quot;</span>")
+assert_true(css_out has "<span class=\"tok com\">/* hi */</span>")
+assert_true(css_out has "<span class=\"tok name\">color</span>")
+assert_true(css_out has "<span class=\"tok str\">&quot;#fff&quot;</span>")
 
 html_out = pigment.highlight("<div class=\"x\">ok</div><!--c-->", "html")
-assert_true(html_out has "<span color=\"magenta\">&lt;</span><span color=\"blue\">div</span>")
-assert_true(html_out has "<span color=\"cyan\">class</span>")
-assert_true(html_out has "<span color=\"gray\">&lt;!--c--&gt;</span>")
+assert_true(html_out has "<span class=\"tok op\">&lt;</span><span class=\"tok tag\">div</span>")
+assert_true(html_out has "<span class=\"tok attr\">class</span>")
+assert_true(html_out has "<span class=\"tok com\">&lt;!--c--&gt;</span>")
 
 fallback_out = pigment.highlight("fn run()", "unknown")
-assert_true(fallback_out has "<span color=\"blue\">fn</span>")
+assert_true(fallback_out has "<span class=\"tok key\">fn</span>")
 
 print "cli pigment ok"

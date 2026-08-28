@@ -1,16 +1,40 @@
 # Standard Library
 
-Native modules are loaded with `import`:
+The Toi standard library has two layers:
+
+- native modules implemented in C and imported directly, such as `math`, `json`, or `socket`
+- shipped Toi libraries under `lib.*`, such as `lib.types`, `lib.db`, or `lib.http_server`
+
+Import native modules like this:
 
 ```toi
-math = import math
+import math
+json = import json
 ```
 
-Available native modules:
+Import Toi libraries like this:
+
+```toi
+import lib.types
+db = import lib.db
+```
+
+## Module Groups
+
+- [Core](core.md): globals, numbers, strings, tables, time, URLs, UUIDs, and basic inspection
+- [Files And System](files-and-system.md): files, directories, OS helpers, mmap, signals, low-level output
+- [Text And Data](text-and-data.md): JSON, TOML, CSV, regex, templates, binary data, B-trees, compression
+- [Networking And Concurrency](networking-and-concurrency.md): sockets, HTTP helpers, polling, coroutines, threads, contexts
+- [Toi Libraries](toi-libraries.md): the higher-level libraries implemented in Toi itself
+
+## Native Module Index
 
 - `math`
 - `time`
+- `string`
+- `table`
 - `io`
+- `sys`
 - `os`
 - `stat`
 - `dir`
@@ -19,8 +43,6 @@ Available native modules:
 - `poll`
 - `coroutine`
 - `context`
-- `string`
-- `table`
 - `socket`
 - `thread`
 - `json`
@@ -28,6 +50,7 @@ Available native modules:
 - `csv`
 - `template`
 - `http`
+- `url`
 - `inspect`
 - `regex`
 - `fnmatch`
@@ -36,8 +59,4 @@ Available native modules:
 - `struct`
 - `btree`
 - `uuid`
-- `gzip` (optional; only when built with zlib)
-
-Global core functions are documented in `docs/stdlib/core.md`.
-
-Toi-implemented helper libraries are documented in `docs/stdlib/toi-libraries.md`.
+- `gzip` when built with zlib support

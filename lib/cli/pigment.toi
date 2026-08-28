@@ -2,13 +2,18 @@ regex = import regex
 string = import string
 table = import table
 
-COLORS = {
-  keyword = "blue",
-  operator = "magenta",
-  builtin = "cyan",
-  string = "green",
-  num = "yellow",
-  comment = "gray"
+TOKEN_CLASSES = {
+  keyword = "key",
+  operator = "op",
+  punctuation = "pun",
+  builtin = "name",
+  function = "fn",
+  decorator = "dec",
+  string = "str",
+  num = "num",
+  comment = "com",
+  tag = "tag",
+  attr = "attr",
 }
 
 fn _set(words)
@@ -16,34 +21,40 @@ fn _set(words)
 
 CFG = {
   toi = {
-    keywords = _set("if elif else for in while fn return break continue import from as try except raise match case with yield assert and or not has"),
-    builtins = _set("print str type len range input int float bool list dict table min max"),
+    keywords = _set("print if elif else for in while pass fn return break continue import from as try except finally throw match case with yield assert and or not has"),
+    builtins = _set("str type len range input int float bool list dict table min max"),
     literals = _set("true false nil"),
+    re_decorator = regex.compile("@[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*"),
     re_comment = regex.compile("--[^\n]*"),
     re_string = regex.compile("\"([^\"\\\\]|\\\\.)*\"|'([^'\\\\]|\\\\.)*'"),
     re_number = regex.compile("[0-9]+([._][0-9]+)*"),
     re_ident = regex.compile("[A-Za-z_][A-Za-z0-9_]*"),
-    re_op = regex.compile("==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|:=|//|\\*\\*|\\.\\.|<\\+|->|[=+*/%<>!.,:;?(){}\\[\\]-]")
+    re_op = regex.compile("==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|:=|//|\\*\\*|\\.\\.|<\\+|->|[=+*/%<>!?-]"),
+    re_punct = regex.compile("\\.|,|:|;|\\(|\\)|\\{|\\}|\\[|\\]")
   },
   js = {
     keywords = _set("if else for while return function class new let const var try catch throw import export await async in of"),
     builtins = _set("console Math JSON Date Array Object String Number Promise Map Set RegExp"),
     literals = _set("true false null undefined"),
+    re_decorator = regex.compile("@[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*"),
     re_comment = regex.compile("//[^\n]*"),
     re_string = regex.compile("\"([^\"\\\\]|\\\\.)*\"|'([^'\\\\]|\\\\.)*'|`([^`\\\\]|\\\\.)*`"),
     re_number = regex.compile("[0-9]+([._][0-9]+)*"),
     re_ident = regex.compile("[$A-Za-z_][$A-Za-z0-9_]*"),
-    re_op = regex.compile("===|!==|==|!=|<=|>=|=>|&&|\\|\\||\\+\\+|--|\\+=|-=|\\*=|/=|%=|[=+*/%<>!.,:;?(){}\\[\\]-]")
+    re_op = regex.compile("===|!==|==|!=|<=|>=|=>|&&|\\|\\||\\+\\+|--|\\+=|-=|\\*=|/=|%=|[=+*/%<>!&|?-]"),
+    re_punct = regex.compile("\\.|,|:|;|\\(|\\)|\\{|\\}|\\[|\\]")
   },
   css = {
     keywords = _set("@media @keyframes @supports @import from to important"),
     builtins = _set("color background display position width height margin padding border font-size font-family opacity"),
     literals = _set("auto none inherit initial unset"),
+    re_decorator = nil,
     re_comment = regex.compile("/\\*([^*]|\\*[^/])*\\*/"),
     re_string = regex.compile("\"([^\"\\\\]|\\\\.)*\"|'([^'\\\\]|\\\\.)*'"),
     re_number = regex.compile("[0-9]+([._][0-9]+)*"),
     re_ident = regex.compile("[@A-Za-z_-][@A-Za-z0-9_-]*"),
-    re_op = regex.compile("::|:=|[;,.#{}()\\[\\]<>+~*=|/:]")
+    re_op = regex.compile("::|:=|[<>+~*=|/#:]"),
+    re_punct = regex.compile(";|\\.|,|\\(|\\)|\\{|\\}|\\[|\\]")
   }
 }
 
@@ -56,37 +67,37 @@ RE_HTML_ATTR = regex.compile("[A-Za-z_][A-Za-z0-9_-]*[ \t\r\n]*=")
 fn _emit_raw(out, raw)
   out <+ string.escape_html(raw)
 
-fn _emit_span(out, color, raw)
-  out <+ f"<span color=\"{color}\">{string.escape_html(raw)}</span>"
+fn _emit_span(out, class_name, raw)
+  out <+ f"<span class=\"tok {class_name}\">{string.escape_html(raw)}</span>"
 
-fn _push_token(out, s, e, t, kind, color, pri)
+fn _push_token(out, s, e, t, kind, class_name, pri)
   out <+ {
     s = s,
     e = e,
     t = t,
     kind = kind,
-    color = color,
+    class_name = class_name,
     pri = pri
   }
 
-fn _token(out, match_obj, kind, color, pri)
-  _push_token(out, match_obj.start, match_obj.end, match_obj.match, kind, color, pri)
+fn _token(out, match_obj, kind, class_name, pri)
+  _push_token(out, match_obj.start, match_obj.end, match_obj.match, kind, class_name, pri)
 
-fn _collect(out, re, text, kind, color, pri)
+fn _collect(out, re, text, kind, class_name, pri)
   for m in re.finditer(text)
-    _token(out, m, kind, color, pri)
+    _token(out, m, kind, class_name, pri)
 
 fn _collect_html_tokens(out, text)
-  _collect(out, RE_HTML_COMMENT, text, "comment", COLORS.comment, 1)
-  _collect(out, RE_HTML_STRING, text, "string", COLORS.string, 2)
+  _collect(out, RE_HTML_COMMENT, text, "comment", TOKEN_CLASSES.comment, 1)
+  _collect(out, RE_HTML_STRING, text, "string", TOKEN_CLASSES.string, 2)
 
   for m in RE_HTML_TAG.finditer(text)
     raw = m.match
     prefix_len = 1
     if #raw >= 2 and raw[2] == "/"
       prefix_len = 2
-    _push_token(out, m.start, m.start + prefix_len - 1, string.sub(text, m.start, m.start + prefix_len - 1), "op", COLORS.operator, 3)
-    _push_token(out, m.start + prefix_len, m.end, string.sub(text, m.start + prefix_len, m.end), "tag", COLORS.keyword, 4)
+    _push_token(out, m.start, m.start + prefix_len - 1, string.sub(text, m.start, m.start + prefix_len - 1), "op", TOKEN_CLASSES.operator, 3)
+    _push_token(out, m.start + prefix_len, m.end, string.sub(text, m.start + prefix_len, m.end), "tag", TOKEN_CLASSES.tag, 4)
 
   for m in RE_HTML_ATTR.finditer(text)
     raw = m.match
@@ -98,9 +109,9 @@ fn _collect_html_tokens(out, text)
       else
         break
     if key_len > 0
-      _push_token(out, m.start, m.start + key_len - 1, string.sub(text, m.start, m.start + key_len - 1), "attr", COLORS.builtin, 5)
+      _push_token(out, m.start, m.start + key_len - 1, string.sub(text, m.start, m.start + key_len - 1), "attr", TOKEN_CLASSES.attr, 5)
 
-  _collect(out, RE_HTML_OP, text, "op", COLORS.operator, 6)
+  _collect(out, RE_HTML_OP, text, "op", TOKEN_CLASSES.operator, 6)
 
 fn _sort_tokens(tokens)
   table.sort(tokens, fn(a, b)
@@ -113,13 +124,21 @@ fn _sort_tokens(tokens)
     return a.pri < b.pri
   )
 
+fn _next_non_space_char(text, idx)
+  while idx <= #text
+    ch = text[idx]
+    if ch != " " and ch != "\t" and ch != "\r" and ch != "\n"
+      return ch
+    idx += 1
+  return nil
+
 fn _render(text, accepted)
   out = {}
   pos = 1
   for tok in accepted
     if pos < tok.s
       _emit_raw(out, string.sub(text, pos, tok.s - 1))
-    _emit_span(out, tok.color, tok.t)
+    _emit_span(out, tok.class_name, tok.t)
     pos = tok.e + 1
   if pos <= #text
     _emit_raw(out, string.sub(text, pos))
@@ -131,25 +150,30 @@ fn _paint_code(text, kind)
     cfg = CFG.toi
 
   candidates = {}
-  _collect(candidates, cfg.re_comment, text, "comment", COLORS.comment, 1)
-  _collect(candidates, cfg.re_string, text, "string", COLORS.string, 2)
-  _collect(candidates, cfg.re_number, text, "number", COLORS.num, 3)
+  if cfg.re_decorator
+    _collect(candidates, cfg.re_decorator, text, "decorator", TOKEN_CLASSES.decorator, 1)
+  _collect(candidates, cfg.re_comment, text, "comment", TOKEN_CLASSES.comment, 1)
+  _collect(candidates, cfg.re_string, text, "string", TOKEN_CLASSES.string, 2)
+  _collect(candidates, cfg.re_number, text, "number", TOKEN_CLASSES.num, 3)
   _collect(candidates, cfg.re_ident, text, "ident", nil, 4)
-  _collect(candidates, cfg.re_op, text, "op", COLORS.operator, 5)
+  _collect(candidates, cfg.re_op, text, "op", TOKEN_CLASSES.operator, 5)
+  _collect(candidates, cfg.re_punct, text, "punct", TOKEN_CLASSES.punctuation, 6)
   _sort_tokens(candidates)
 
   accepted = {}
   last_end = 0
   for tok in candidates
     if tok.s > last_end
-      color = tok.color
+      class_name = tok.class_name
       if tok.kind == "ident"
         if cfg.keywords[tok.t] == true or cfg.literals[tok.t] == true
-          color = COLORS.keyword
+          class_name = TOKEN_CLASSES.keyword
+        elif _next_non_space_char(text, tok.e + 1) == "("
+          class_name = TOKEN_CLASSES.function
         elif cfg.builtins[tok.t] == true
-          color = COLORS.builtin
-      if color != nil
-        accepted <+ {s = tok.s, e = tok.e, t = tok.t, color = color}
+          class_name = TOKEN_CLASSES.builtin
+      if class_name != nil
+        accepted <+ {s = tok.s, e = tok.e, t = tok.t, class_name = class_name}
       last_end = tok.e
 
   return _render(text, accepted)
@@ -163,7 +187,7 @@ fn _highlight_html(text)
   last_end = 0
   for tok in candidates
     if tok.s > last_end
-      accepted <+ {s = tok.s, e = tok.e, t = tok.t, color = tok.color}
+      accepted <+ {s = tok.s, e = tok.e, t = tok.t, class_name = tok.class_name}
       last_end = tok.e
 
   return _render(text, accepted)

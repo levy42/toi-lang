@@ -1,52 +1,116 @@
-# Core Built-ins
+# Core
 
-These are global functions available without importing a module.
+This page covers the most frequently used built-ins and native modules for everyday language work.
 
-## Conversion and Type
+## Global Built-ins
 
-- `type(value) -> string`
-- Generator-backed coroutines report as `"generator"` (other coroutines remain `"thread"`).
-- `istype(value, type_name, ...) -> boolean` (true if `type(value)` matches any provided type string; aliases: `bool` -> `boolean`, `int`/`float` -> `number`)
-- `bool(value) -> boolean`
-- `int(value) -> number` (integer conversion)
-- `float(value) -> number`
-- `str(value) -> string` (alias to `string` module call behavior)
+Available without importing a module:
 
-## Input/Output and Errors
-
-- `print ...`
-- `input(prompt=nil) -> string|nil`
-- `error(message, type="Error") -> throws`
-- `error(table_exception) -> throws` (rethrows/propagates the given table unchanged)
+- `print(...)`
+- `input(prompt=nil)`
+- `type(value)`
+- `istype(value, ...)`
+- `bool(value)`, `int(value)`, `float(value)`, `str(value)`
+- `range(...)`
+- `slice(value, start, stop, step=1)`
+- `min(...)`, `max(...)`, `sum(...)`, `divmod(a, b)`
+- `next(...)`, `inext(...)`, `gen_next(...)`
+- `setmetatable(table, mt)`, `getmetatable(value)`
+- `error(...)`
 - `exit(code=0)`
+- `mem()`
 
-## Iteration Helpers
+## `math`
 
-- `next(state, key) -> next_key, value`
-- `inext(table, index) -> next_index, value`
-- `gen_next(thread, control) -> key, value` (generator helper)
+For numeric code:
 
-## Range and Slice
+- trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`
+- rounding: `floor`, `ceil`, `abs`, `modf`
+- powers and logs: `sqrt`, `exp`, `log`, `pow`, `fmod`
+- angle conversion: `deg`, `rad`
+- random: `random`, `seed`
+- aggregates: `min`, `max`, `sum`
 
-- `range(stop)`
-- `range(start, stop)`
-- `range(start, stop, step)`
-- `range_iter(state, control)`
-- `slice(table_or_string, start, stop, step=1)`
+```toi
+import math
+print math.sqrt(25)
+```
 
-## Numeric Helpers
+## `time`
 
-- `min(...)`
-- `max(...)`
-- `sum(...)`
-- `sum(table)`
-- `divmod(a, b) -> {quotient, remainder}`
+Use `time` for clocks and elapsed-time measurement:
 
-## Metatable Helpers
+- `time.seconds()`
+- `time.nanos()`
+- `time.clock()`
 
-- `setmetatable(table, mt|nil) -> table`
-- `getmetatable(table) -> table|nil`
+`time.clock()` is the most common timer for small benchmark scripts.
 
-## Runtime
+## `string`
 
-- `mem() -> number` (bytes allocated)
+Common string helpers:
+
+- case conversion: `upper`, `lower`
+- cleanup: `trim`
+- search and split: `find`, `split`
+- construction: `join`, `format`, `rep`
+- indexing helpers: `sub`, `byte`, `char`
+
+Method style is usually the nicest form:
+
+```toi
+print "hello".upper()
+print ", ".join({"a", "b"})
+```
+
+## `table`
+
+Core collection helpers:
+
+- `push`
+- `insert`
+- `remove`
+- `reserve`
+- `clone`
+- `concat`
+- `sort`
+- `keys`
+- `values`
+- `find_index`
+
+```toi
+import table
+
+items = {3, 1, 2}
+table.sort(items)
+```
+
+## `inspect`
+
+`inspect.signature(fn)` is useful for tooling and debugging function shapes.
+
+## `url`
+
+URL helpers:
+
+- `url.parse(...)`
+- `url.encode(...)`
+- `url.decode(...)`
+
+## `uuid`
+
+Use `uuid` when you need generated identifiers.
+
+## Core Data Structures
+
+### `btree`
+
+Persistent B-tree storage for ordered key/value workloads.
+
+### `binary`
+
+Binary encode/decode helpers.
+
+### `struct`
+
+Structured binary packing and unpacking via format strings.

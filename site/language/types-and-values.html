@@ -1,0 +1,171 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Types And Values</title>
+    <link rel="stylesheet" href="../docs.css">
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+</head>
+<body>
+    <aside>
+    <a class="brand" href="../README.html">
+    <img class="brand-logo" src="../logo.svg" alt="Toi logo">
+    <span>Toi Docs</span>
+    </a>
+    <ul class="nav">
+    
+    
+    <li><a href="../README.html">Quick Start</a></li>
+    
+    
+    
+    <li><a href="../benchmarks.html">Benchmarks</a></li>
+    
+    
+    
+    <li><a href="../getting-started.html">Getting Started</a></li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group active" open>
+    <summary>Language</summary>
+    <ul class="subnav">
+    
+    <li><a href="../language/control-flow.html">Control Flow</a></li>
+    
+    <li><a href="../language/functions.html">Functions</a></li>
+    
+    <li><a href="../language/modules.html">Modules</a></li>
+    
+    <li><a href="../language/syntax.html">Language Syntax</a></li>
+    
+    <li class="active"><a href="../language/types-and-values.html">Types And Values</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group">
+    <summary>Standard Library</summary>
+    <ul class="subnav">
+    
+    <li><a href="../stdlib/README.html">Standard Library</a></li>
+    
+    <li><a href="../stdlib/core.html">Core</a></li>
+    
+    <li><a href="../stdlib/files-and-system.html">Files And System</a></li>
+    
+    <li><a href="../stdlib/networking-and-concurrency.html">Networking And Concurrency</a></li>
+    
+    <li><a href="../stdlib/text-and-data.html">Text And Data</a></li>
+    
+    <li><a href="../stdlib/toi-libraries.html">Toi Libraries</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    </ul>
+    </aside>
+    <main><h1 id="types and values">Types And Values</h1>
+<p>Runtime <code>type(x)</code> values include:</p>
+<ul>
+<li><code>nil</code>
+</li>
+<li><code>boolean</code>
+</li>
+<li><code>number</code>
+</li>
+<li><code>string</code>
+</li>
+<li><code>table</code>
+</li>
+<li><code>function</code>
+</li>
+<li><code>generator</code>
+</li>
+<li><code>thread</code>
+</li>
+<li><code>userdata</code>
+</li>
+</ul>
+<h2 id="truthiness">Truthiness</h2>
+<ul>
+<li><code>nil</code> is falsey
+</li>
+<li><code>false</code> is falsey
+</li>
+<li>everything else is truthy
+</li>
+</ul>
+<h2 id="numbers">Numbers</h2>
+<p>Toi uses <code>number</code> as its runtime numeric type.</p>
+<pre><code class="language-toi">a <span class="tok op">=</span> <span class="tok num">10</span>
+b <span class="tok op">=</span> <span class="tok num">3.5</span>
+c <span class="tok op">=</span> <span class="tok num">1_000_000</span></code></pre>
+<h2 id="strings">Strings</h2>
+<p>Strings are immutable and support indexing, slicing, interpolation, and common methods.</p>
+<pre><code class="language-toi">s <span class="tok op">=</span> <span class="tok str">&quot;hello&quot;</span>
+<span class="tok key">print</span> s<span class="tok pun">.</span><span class="tok fn">upper</span><span class="tok pun">(</span><span class="tok pun">)</span>
+<span class="tok key">print</span> s<span class="tok pun">[</span><span class="tok num">2</span><span class="tok op">..</span><span class="tok num">4</span><span class="tok pun">]</span></code></pre>
+<h2 id="tables">Tables</h2>
+<p>Tables are used for:</p>
+<ul>
+<li>lists
+</li>
+<li>maps
+</li>
+<li>records
+</li>
+<li>lightweight objects
+</li>
+</ul>
+<pre><code class="language-toi">row <span class="tok op">=</span> <span class="tok pun">{</span>id <span class="tok op">=</span> <span class="tok num">7</span><span class="tok pun">,</span> name <span class="tok op">=</span> <span class="tok str">&quot;Ana&quot;</span><span class="tok pun">}</span>
+tags <span class="tok op">=</span> <span class="tok pun">{</span><span class="tok str">&quot;red&quot;</span><span class="tok pun">,</span> <span class="tok str">&quot;green&quot;</span><span class="tok pun">,</span> <span class="tok str">&quot;blue&quot;</span><span class="tok pun">}</span></code></pre>
+<p>Use:</p>
+<ul>
+<li><code>for v in table</code> for values
+</li>
+<li><code>for k, v in table</code> for key-value iteration
+</li>
+<li><code>table[key]</code> for map-style lookup
+</li>
+<li><code>items &lt;+ value</code> for append
+</li>
+</ul>
+<h2 id="functions and generators">Functions And Generators</h2>
+<p>Functions are first-class values:</p>
+<pre><code class="language-toi"><span class="tok key">fn</span> <span class="tok fn">add</span><span class="tok pun">(</span>a<span class="tok pun">,</span> b<span class="tok pun">)</span>
+  <span class="tok key">return</span> a <span class="tok op">+</span> b
+
+op <span class="tok op">=</span> add
+<span class="tok key">print</span> <span class="tok fn">op</span><span class="tok pun">(</span><span class="tok num">2</span><span class="tok pun">,</span> <span class="tok num">3</span><span class="tok pun">)</span></code></pre>
+<p>Generators also behave like normal runtime values and report <code>type(x) == &quot;generator&quot;</code>.</p>
+<h2 id="userdata">Userdata</h2>
+<p>Native modules use <code>userdata</code> for handles such as files, sockets, mmap regions, and thread handles.</p>
+<h2 id="metatables">Metatables</h2>
+<p>Common metamethods in the runtime include:</p>
+<ul>
+<li><code>__index</code>
+</li>
+<li><code>__newindex</code>
+</li>
+<li><code>__str</code>
+</li>
+<li><code>__call</code>
+</li>
+<li><code>__append</code>
+</li>
+<li><code>__next</code>
+</li>
+</ul>
+<p>Metatable-only dispatch is available with <code>::</code>:</p>
+<pre><code class="language-toi">obj<span class="tok pun">:</span><span class="tok pun">:</span><span class="tok fn">method</span><span class="tok pun">(</span>args<span class="tok pun">)</span></code></pre></main>
+</body>
+</html>

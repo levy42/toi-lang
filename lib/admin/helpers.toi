@@ -1,0 +1,252 @@
+import string
+import table
+import url
+import json
+import http
+import types
+
+fn normalize_mount_path(path)
+  if not istype(path,"string") or not path
+    return "/admin"
+
+  out = path
+  if out[1] != "/"
+    out = "/" + out
+  while #out > 1 and out[-1] == "/"
+    out = out[..-2]
+  return out
+
+fn copy_list(values)
+  out = {}
+  if istype(values, "table")
+    out += values
+  return out
+
+fn title_case(s)
+  if not s
+    return "Model"
+  return " ".join(s.split("_"))
+
+fn get_header(req, name)
+  key = name.lower()
+  return req.headers[key] or req.headers[name]
+
+fn parse_int(raw, fallback, min_value = nil, max_value = nil)
+  n = fallback
+  try
+    if raw != nil
+      n = int(raw)
+  except e
+    n = fallback
+
+  if min_value != nil and n < min_value
+    return min_value
+  if max_value != nil and n > max_value
+    return max_value
+  return n
+
+fn parse_key_value(raw)
+  out = {}
+  if type(raw) != "string" or raw == ""
+    return out
+
+  for piece in raw.split("&")
+    if piece == ""
+      continue
+
+    eq_i = piece.find("=")
+    key_raw = piece
+    val_raw = ""
+    if eq_i != nil
+      key_raw = piece.sub(1, eq_i - 1)
+      val_raw = piece.sub(eq_i + 1)
+
+    fixed_key = " ".join(key_raw.split("+"))
+    fixed_val = " ".join(val_raw.split("+"))
+    key = url.decode(fixed_key)
+    val = url.decode(fixed_val)
+    out[key] = val
+
+  return out
+
+fn request_query(req)
+  raw = req.query
+  if raw == nil and type(req.path) == "string"
+    q_i = req.path.find("?")
+    if q_i != nil
+      raw = req.path.sub(q_i + 1)
+  if type(raw) != "string"
+    return {}
+  if #raw > 0 and raw[1] == "?"
+    raw = raw[2..]
+  return parse_key_value(raw)
+
+fn request_data(req)
+  content_type = str(get_header(req, "content-type") or "").lower()
+  body = req.body or ""
+
+  if content_type.find("application/json") != nil
+    decoded = nil
+    try
+      decoded = json.decode(body)
+    except e
+      decoded = {}
+    if type(decoded) == "table"
+      return decoded
+    return {}
+
+  return parse_key_value(body)
+
+fn encode_query(params)
+  parts = {}
+  if type(params) != "table"
+    return ""
+
+  for k, v in params
+    if v == nil
+      continue
+    s = str(v)
+    if s == ""
+      continue
+    parts <+ string.format("%s=%s", url.encode(str(k)), url.encode(s))
+
+  if #parts == 0
+    return ""
+  return string.format("?%s", "&".join(parts))
+
+fn html_response(body, status = 200, headers = nil)
+  hdrs = { ["Content-Type"] = "text/html; charset=utf-8" }
+  if type(headers) == "table"
+    for k, v in headers
+      hdrs[k] = v
+  return http.response(status, hdrs, body)
+
+fn redirect_response(path)
+  return http.response(302, {
+    ["Location"] = path,
+    ["Content-Type"] = "text/plain; charset=utf-8"
+  }, "redirect")
+
+fn display_value(value)
+  if value == nil
+    return ""
+  if type(value) == "boolean"
+    return value ? "true" : "false"
+  return str(value)
+
+fn allowed_field(fields, name)
+  for field in fields
+    if field == name
+      return true
+  return false
+
+fn base_type(type_def)
+  current = type_def
+  i = 0
+  while type(current) == "table" and current.inner != nil and i < 6
+    current = current.inner
+    i = i + 1
+  return current
+
+fn infer_field_kind(schema, field, opts = nil)
+  if type(opts) == "table" and type(opts[field]) == "string"
+    return opts[field]
+
+  type_def = nil
+  if type(schema) == "table" and type(schema.schema) == "table"
+    type_def = schema.schema[field]
+  type_def = base_type(type_def)
+
+  if type_def == types.Boolean or type_def == types.Bool
+    return "bool"
+  if type_def == types.Integer or type_def == types.Int
+    return "int"
+  if type_def == types.Number
+    return "number"
+  return "text"
+
+fn coerce_field_value(meta, field, raw_value)
+  kind = infer_field_kind(meta.schema, field, meta.field_types)
+  if kind == "bool"
+    if raw_value == nil
+      return false
+    s = str(raw_value).lower()
+    return s == "true" or s == "1" or s == "on" or s == "yes"
+
+  type_def = nil
+  if type(meta.schema) == "table" and type(meta.schema.schema) == "table"
+    type_def = meta.schema.schema[field]
+
+  if type_def == nil
+    return raw_value
+  return types.validate(type_def, raw_value, {coerce = true})
+
+fn build_form_values(meta, payload, current_row = nil)
+  out = {}
+  for field in meta.form_fields
+    if payload[field] != nil
+      out[field] = payload[field]
+    elif type(current_row) == "table"
+      out[field] = current_row[field]
+    else
+      out[field] = nil
+  return out
+
+fn form_to_row(meta, payload, current_row = nil)
+  row = {}
+  if type(current_row) == "table"
+    row = table.clone(current_row)
+
+  for field in meta.form_fields
+    row[field] = coerce_field_value(meta, field, payload[field])
+
+  return row
+
+fn build_default_fields(schema)
+  out = {}
+  if type(schema) == "table" and type(schema.schema) == "table"
+    for field, _ in schema.schema
+      if field != "id"
+        out <+ field
+  i = 2
+  while i <= #out
+    current = out[i]
+    j = i - 1
+    while j >= 1 and str(current) < str(out[j])
+      out[j + 1] = out[j]
+      j = j - 1
+    out[j + 1] = current
+    i = i + 1
+  return out
+
+fn create_list_fields(form_fields, provided = nil)
+  if type(provided) == "table" and #provided > 0
+    return copy_list(provided)
+
+  fields = {"id"}
+  for name in form_fields
+    fields <+ name
+  return fields
+
+return {
+  normalize_mount_path = normalize_mount_path,
+  copy_list = copy_list,
+  title_case = title_case,
+  get_header = get_header,
+  parse_int = parse_int,
+  parse_key_value = parse_key_value,
+  request_query = request_query,
+  request_data = request_data,
+  encode_query = encode_query,
+  html_response = html_response,
+  redirect_response = redirect_response,
+  display_value = display_value,
+  allowed_field = allowed_field,
+  base_type = base_type,
+  infer_field_kind = infer_field_kind,
+  coerce_field_value = coerce_field_value,
+  build_form_values = build_form_values,
+  form_to_row = form_to_row,
+  build_default_fields = build_default_fields,
+  create_list_fields = create_list_fields
+}

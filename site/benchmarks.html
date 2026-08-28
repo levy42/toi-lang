@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Benchmarks</title>
+    <link rel="stylesheet" href="../docs.css">
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+</head>
+<body>
+    <aside>
+    <a class="brand" href="../README.html">
+    <img class="brand-logo" src="../logo.svg" alt="Toi logo">
+    <span>Toi Docs</span>
+    </a>
+    <ul class="nav">
+    
+    
+    <li><a href="../README.html">Quick Start</a></li>
+    
+    
+    
+    <li class="active"><a href="../benchmarks.html">Benchmarks</a></li>
+    
+    
+    
+    <li><a href="../getting-started.html">Getting Started</a></li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group">
+    <summary>Language</summary>
+    <ul class="subnav">
+    
+    <li><a href="../language/control-flow.html">Control Flow</a></li>
+    
+    <li><a href="../language/functions.html">Functions</a></li>
+    
+    <li><a href="../language/modules.html">Modules</a></li>
+    
+    <li><a href="../language/syntax.html">Language Syntax</a></li>
+    
+    <li><a href="../language/types-and-values.html">Types And Values</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group">
+    <summary>Standard Library</summary>
+    <ul class="subnav">
+    
+    <li><a href="../stdlib/README.html">Standard Library</a></li>
+    
+    <li><a href="../stdlib/core.html">Core</a></li>
+    
+    <li><a href="../stdlib/files-and-system.html">Files And System</a></li>
+    
+    <li><a href="../stdlib/networking-and-concurrency.html">Networking And Concurrency</a></li>
+    
+    <li><a href="../stdlib/text-and-data.html">Text And Data</a></li>
+    
+    <li><a href="../stdlib/toi-libraries.html">Toi Libraries</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    </ul>
+    </aside>
+    <main><h1 id="benchmarks">Benchmarks</h1>
+<p>This page covers the benchmark material that is useful to language users: what exists in the repository, how to run it, and how to read the numbers.</p>
+<h2 id="benchmark files">Benchmark Files</h2>
+<p>The repository includes Toi and comparison benchmarks under <code>benchmarks/</code>:</p>
+<ul>
+<li><code>benchmarks/perf.toi</code>
+</li>
+<li><code>benchmarks/string_ops_compare.toi</code>
+</li>
+<li><code>benchmarks/json_regex_bench.toi</code>
+</li>
+<li><code>benchmarks/gzip_bench.toi</code>
+</li>
+</ul>
+<p>There are also companion Python and Lua scripts for side-by-side comparisons.</p>
+<h2 id="recommended commands">Recommended Commands</h2>
+<p>Build an optimized interpreter first:</p>
+<pre><code class="language-bash">make release</code></pre>
+<p>Then run the benchmark programs directly:</p>
+<pre><code class="language-bash"><span class="tok pun">.</span><span class="tok op">/</span>toi benchmarks<span class="tok op">/</span>perf<span class="tok pun">.</span>toi
+<span class="tok pun">.</span><span class="tok op">/</span>toi benchmarks<span class="tok op">/</span>string_ops_compare<span class="tok pun">.</span>toi
+<span class="tok pun">.</span><span class="tok op">/</span>toi benchmarks<span class="tok op">/</span>json_regex_bench<span class="tok pun">.</span>toi
+<span class="tok pun">.</span><span class="tok op">/</span>toi benchmarks<span class="tok op">/</span>gzip_bench<span class="tok pun">.</span>toi
+N<span class="tok op">=</span><span class="tok num">100000</span> <span class="tok pun">.</span><span class="tok op">/</span>toi tests<span class="tok op">/</span>peft<span class="tok op">/</span>btree_perf<span class="tok pun">.</span>toi</code></pre>
+<h2 id="reference numbers">Reference Numbers</h2>
+<p>Sample numbers already captured in this repository include:</p>
+<ul>
+<li><code>template perf</code>: compile <code>0.026113s</code>, render <code>0.011995s</code>, render-with-compile <code>0.001019s</code>
+</li>
+<li><code>json perf</code>: encode <code>0.029274s</code>, decode <code>0.043280s</code>, payload <code>203</code> bytes
+</li>
+<li><code>btree perf</code> with <code>n=100000</code>: insert <code>22495 op/s</code>, lookup <code>58515 op/s</code>, delete <code>32111 op/s</code>
+</li>
+</ul>
+<p>Local audit notes also recorded:</p>
+<ul>
+<li>repeated regex via module-level <code>regex.search(...)</code> / <code>regex.replace(...)</code> is much slower than using <code>compiled = regex.compile(pattern)</code>
+</li>
+<li>B-tree lookup throughput is strong relative to insert and delete
+</li>
+<li>string transforms are decent, but tight-loop string work still pays visible allocation cost
+</li>
+</ul>
+<p>These numbers are references, not guarantees. They depend on build mode, CPU and storage, system load, and optional libraries.</p>
+<h2 id="what to benchmark">What To Benchmark</h2>
+<p>For application work, benchmark the operations that dominate your runtime:</p>
+<ul>
+<li>repeated regex usage
+</li>
+<li>JSON encode/decode
+</li>
+<li>string-heavy templating
+</li>
+<li>database or B-tree access patterns
+</li>
+<li>socket and TLS traffic
+</li>
+</ul>
+<p>Microbenchmarks are useful, but application-shaped benchmarks are usually more honest.</p>
+<h2 id="performance tips">Performance Tips</h2>
+<h3 id="compile regexes you reuse">Compile regexes you reuse</h3>
+<pre><code class="language-toi">regex <span class="tok op">=</span> <span class="tok key">import</span> regex
+
+compiled <span class="tok op">=</span> regex<span class="tok pun">.</span><span class="tok fn">compile</span><span class="tok pun">(</span><span class="tok str">&quot;^[A-Z][a-z]+$&quot;</span><span class="tok pun">)</span>
+ok <span class="tok op">=</span> compiled<span class="tok pun">.</span><span class="tok key">match</span><span class="tok pun">(</span><span class="tok str">&quot;Ana&quot;</span><span class="tok pun">)</span></code></pre>
+<p>If you call the module-level search helpers in a tight loop, pattern compilation can dominate runtime.</p>
+<h3 id="reuse prepared data">Reuse prepared data</h3>
+<ul>
+<li>cache templates instead of recompiling them repeatedly
+</li>
+<li>reuse parsed configuration data when possible
+</li>
+<li>move repeated setup outside hot loops
+</li>
+</ul>
+<h3 id="measure debug and release separately">Measure debug and release separately</h3>
+<p><code>make</code> is for development. For realistic throughput numbers, use <code>make release</code>.</p></main>
+</body>
+</html>

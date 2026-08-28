@@ -411,7 +411,8 @@ static int parse_tag(Parser* p) {
 
 // Main parse loop
 static int parse_template(Parser* p) {
-    // Function header - named function so we can return it
+    // Import helpers once so generated templates do not depend on ambient globals.
+    buf_append_str(&p->code, "local table = import table\n");
     buf_append_str(&p->code, "fn __tmpl(__ctx)\n");
     emit_line(p, "local __out = {}");
 

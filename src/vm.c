@@ -1728,6 +1728,7 @@ static void maybe_promote_function_tiers(VM* vm, ObjFunction* function) {
                     (unsigned)function->tiny_inline_kind);
         }
     }
+
 }
 
 static inline void maybe_promote_inline_tiers(VM* vm, ObjFunction* function) {
@@ -1769,6 +1770,12 @@ static inline void maybe_promote_inline_tiers(VM* vm, ObjFunction* function) {
                     (unsigned)function->tiny_inline_kind);
         }
     }
+}
+
+static inline int jit_linked_exec_eligible(VM* vm, ObjClosure* closure) {
+    if (vm == NULL || !vm->native_jit_enabled || closure == NULL) return 0;
+    ObjFunction* fn = closure->function;
+    return fn != NULL && fn->exec_tier == FUNCTION_TIER2_JIT;
 }
 
 static inline int enter_closure_frame(VM* vm, ObjClosure* closure, int arg_count) {
@@ -1865,7 +1872,7 @@ static int try_execute_tier2_template(VM* vm, ObjClosure* closure, int arg_count
             if (!value_matches_type(args[i], type)) return 0;
         }
     }
-    if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, arg_count)) {
+    if (vm->native_jit_enabled && toi_jit_try_execute_linked(vm, closure, arg_count)) {
         vm->tier2_exec_count++;
         return 1;
     }
@@ -1937,7 +1944,7 @@ static int call_closure_positional(VM* vm, ObjClosure* closure, int arg_count) {
         function->defaults_count == 0 &&
         function->param_types_count == 0 &&
         arg_count == function->arity) {
-        if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, arg_count)) {
+        if (vm->native_jit_enabled && toi_jit_try_execute_linked(vm, closure, arg_count)) {
             return 1;
         }
         return enter_closure_frame(vm, closure, arg_count);
@@ -4029,7 +4036,9 @@ op_invalid:
                 if (fast_direct) {
                     if (vm->call_prof_enabled) vm->call_prof_call_direct_fast_count++;
                     frame->ip = ip;
-                    if (vm->native_jit_enabled && toi_jit_try_execute(vm, target, arg_count)) {
+                    if (jit_linked_exec_eligible(vm, target) &&
+                        toi_jit_try_execute_linked_at_site(
+                            vm, frame->closure->function, opcode_offset, target, arg_count)) {
                         // JIT executed in-place; stay on current frame.
                     } else {
                         if (!enter_closure_frame(vm, target, arg_count)) goto runtime_error;
@@ -4259,12 +4268,13 @@ op_invalid:
                         if (opcode_offset >= 0 &&
                             chunk->call_ic_closures != NULL &&
                             chunk->call_ic_argc != NULL) {
-                            chunk->code[opcode_offset] = OP_QCALL0;
                             chunk->call_ic_closures[opcode_offset] = closure;
                             chunk->call_ic_argc[opcode_offset] = 0;
                         }
                         if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
-                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 0)) {
+                        if (jit_linked_exec_eligible(vm, closure) &&
+                            toi_jit_try_execute_linked_at_site(
+                                vm, frame->closure->function, opcode_offset, closure, 0)) {
                             if (vm->call_prof_enabled) vm->call_prof_call0_direct_fast_count++;
                             if (vm->call_prof_enabled) vm->call_prof_op_call0_ns += vm_prof_now_ns() - start_ns;
                             break;
@@ -4408,12 +4418,13 @@ op_invalid:
                         if (opcode_offset >= 0 &&
                             chunk->call_ic_closures != NULL &&
                             chunk->call_ic_argc != NULL) {
-                            chunk->code[opcode_offset] = OP_QCALL1;
                             chunk->call_ic_closures[opcode_offset] = closure;
                             chunk->call_ic_argc[opcode_offset] = 1;
                         }
                         if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
-                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 1)) {
+                        if (jit_linked_exec_eligible(vm, closure) &&
+                            toi_jit_try_execute_linked_at_site(
+                                vm, frame->closure->function, opcode_offset, closure, 1)) {
                             if (vm->call_prof_enabled) vm->call_prof_call1_direct_fast_count++;
                             if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
                             break;
@@ -4436,12 +4447,13 @@ op_invalid:
                             if (opcode_offset >= 0 &&
                                 chunk->call_ic_closures != NULL &&
                                 chunk->call_ic_argc != NULL) {
-                                chunk->code[opcode_offset] = OP_QCALL1;
                                 chunk->call_ic_closures[opcode_offset] = closure;
                                 chunk->call_ic_argc[opcode_offset] = 1;
                             }
                             if (vm->call_prof_enabled) vm->call_prof_call_ic_miss_count++;
-                            if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 1)) {
+                            if (jit_linked_exec_eligible(vm, closure) &&
+                                toi_jit_try_execute_linked_at_site(
+                                    vm, frame->closure->function, opcode_offset, closure, 1)) {
                                 if (vm->call_prof_enabled) vm->call_prof_call1_typed_fast_count++;
                                 if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
                                 break;
@@ -4575,7 +4587,9 @@ op_invalid:
                 }
 
                 if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
-                if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 0)) {
+                if (jit_linked_exec_eligible(vm, cached) &&
+                    toi_jit_try_execute_linked_at_site(
+                        vm, frame->closure->function, opcode_offset, cached, 0)) {
                     if (vm->call_prof_enabled) vm->call_prof_call0_direct_fast_count++;
                     if (vm->call_prof_enabled) vm->call_prof_op_call0_ns += vm_prof_now_ns() - start_ns;
                     break;
@@ -4627,7 +4641,9 @@ op_invalid:
                     function->param_types_count == 0 &&
                     function->arity == 1) {
                     if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
-                    if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 1)) {
+                    if (jit_linked_exec_eligible(vm, cached) &&
+                        toi_jit_try_execute_linked_at_site(
+                            vm, frame->closure->function, opcode_offset, cached, 1)) {
                         if (vm->call_prof_enabled) vm->call_prof_call1_direct_fast_count++;
                         if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
                         break;
@@ -4652,7 +4668,9 @@ op_invalid:
                     Value arg0 = peek(vm, 0);
                     if (value_matches_numeric_hint_fast(arg0, function->param_types[0])) {
                         if (vm->call_prof_enabled) vm->call_prof_call_ic_hit_count++;
-                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 1)) {
+                        if (jit_linked_exec_eligible(vm, cached) &&
+                            toi_jit_try_execute_linked_at_site(
+                                vm, frame->closure->function, opcode_offset, cached, 1)) {
                             if (vm->call_prof_enabled) vm->call_prof_call1_typed_fast_count++;
                             if (vm->call_prof_enabled) vm->call_prof_op_call1_ns += vm_prof_now_ns() - start_ns;
                             break;
@@ -4905,7 +4923,9 @@ op_invalid:
                             chunk->call2_ic_closures[opcode_offset] = closure;
                             chunk->call2_ic_kind[opcode_offset] = CALL2_IC_DIRECT;
                         }
-                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 2)) {
+                        if (jit_linked_exec_eligible(vm, closure) &&
+                            toi_jit_try_execute_linked_at_site(
+                                vm, frame->closure->function, opcode_offset, closure, 2)) {
                             if (vm->call_prof_enabled) vm->call_prof_call2_direct_fast_count++;
                             if (vm->call_prof_enabled) vm->call_prof_op_call2_ns += vm_prof_now_ns() - start_ns;
                             break;
@@ -4935,7 +4955,9 @@ op_invalid:
                         int arg0_ok = (type0 == TYPEHINT_ANY) || value_matches_type(arg0, type0);
                         int arg1_ok = (type1 == TYPEHINT_ANY) || value_matches_type(arg1, type1);
                         if (arg0_ok && arg1_ok) {
-                            if (vm->native_jit_enabled && toi_jit_try_execute(vm, closure, 2)) {
+                            if (jit_linked_exec_eligible(vm, closure) &&
+                                toi_jit_try_execute_linked_at_site(
+                                    vm, frame->closure->function, opcode_offset, closure, 2)) {
                                 if (vm->call_prof_enabled) vm->call_prof_call2_typed_fast_count++;
                                 if (vm->call_prof_enabled) vm->call_prof_op_call2_ns += vm_prof_now_ns() - start_ns;
                                 break;
@@ -5012,7 +5034,9 @@ op_invalid:
                     break;
                 }
                 if (kind == CALL2_IC_DIRECT) {
-                    if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 2)) {
+                    if (jit_linked_exec_eligible(vm, cached) &&
+                        toi_jit_try_execute_linked_at_site(
+                            vm, frame->closure->function, opcode_offset, cached, 2)) {
                         if (vm->call_prof_enabled) vm->call_prof_call2_direct_fast_count++;
                         if (vm->call_prof_enabled) vm->call_prof_op_call2_ns += vm_prof_now_ns() - start_ns;
                         break;
@@ -5031,7 +5055,9 @@ op_invalid:
                     int arg0_ok = (type0 == TYPEHINT_ANY) || value_matches_type(arg0, type0);
                     int arg1_ok = (type1 == TYPEHINT_ANY) || value_matches_type(arg1, type1);
                     if (arg0_ok && arg1_ok) {
-                        if (vm->native_jit_enabled && toi_jit_try_execute(vm, cached, 2)) {
+                        if (jit_linked_exec_eligible(vm, cached) &&
+                            toi_jit_try_execute_linked_at_site(
+                                vm, frame->closure->function, opcode_offset, cached, 2)) {
                             if (vm->call_prof_enabled) vm->call_prof_call2_typed_fast_count++;
                             if (vm->call_prof_enabled) vm->call_prof_op_call2_ns += vm_prof_now_ns() - start_ns;
                             break;
@@ -5173,6 +5199,14 @@ op_invalid:
                 break;
             }
             op_OP_FOR_LOOP: case OP_FOR_LOOP: {
+                if (vm->native_jit_enabled) {
+                    int opcode_offset = (int)(ip - frame->closure->function->chunk.code) - 1;
+                    toi_jit_notify_loop_backedge(vm, frame, opcode_offset, OP_FOR_LOOP);
+                    if (toi_jit_has_compiled_loops(vm) &&
+                        toi_jit_try_execute_loop(vm, frame, &ip, opcode_offset, OP_FOR_LOOP)) {
+                        break;
+                    }
+                }
                 if (!vm_handle_op_for_loop(vm, frame, &ip)) goto runtime_error;
                 break;
             }

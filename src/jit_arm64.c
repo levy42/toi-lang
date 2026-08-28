@@ -17,6 +17,8 @@
 
 #include "jit_arm64.h"
 #include "jit.h"
+#include "jit_internal.h"
+#include "jit_ir.h"
 #include "jit_native_trace.h"
 #include "chunk.h"
 #include "vm.h"
@@ -28,6 +30,259 @@
 #endif
 
 #define TOI_JIT_TRACE_STACK_CAP 256
+#define TOI_JIT_NATIVE_CALLSITE_PIC_CAP 1024
+#define TOI_JIT_NATIVE_CALLEE_ENTRY_CAP 2048
+#define TOI_JIT_NATIVE_PROGRAM_ENTRY_CAP 1024
+#define TOI_JIT_NATIVE_INVOKE_IC_CAP 2048
+#define TOI_JIT_NATIVE_CALL_POLY_PIC_CAP 1024
+
+typedef int (*JitNativeCalleeEntryFn)(VM* vm, ObjClosure* callee, const Value* args, Value* out);
+typedef enum {
+    JIT_NATIVE_CALLEE_RUNNER_DIRECT = 0,
+    JIT_NATIVE_CALLEE_RUNNER_PROGRAM_ENTRY = 1,
+} JitNativeCalleeRunnerKind;
+
+typedef struct {
+    ObjClosure* caller;
+    ObjClosure* callee;
+    void* program_ptr;
+    JitNativeCalleeEntryFn entry_fn;
+    uint32_t opcode_offset;
+    uint8_t argc;
+    uint8_t valid;
+} JitNativeCallsitePicEntry;
+
+typedef struct {
+    void* program_ptr;
+    JitNativeCalleeEntryFn entry_fn;
+    void* code_mem;
+    size_t code_size;
+    uint8_t argc;
+    uint8_t runner_kind;
+    uint8_t chain_direct_only;
+    uint8_t valid;
+} JitNativeCalleeEntry;
+
+typedef struct {
+    void* program_ptr;
+    ToiJitNativeTraceFn fn;
+    void* code_mem;
+    size_t code_size;
+    uint8_t argc;
+    uint8_t ret_slot;
+    uint8_t var_slot;
+    uint8_t end_slot;
+    uint8_t slot_count;
+    uint8_t valid;
+    uint8_t failed;
+    uint8_t runtime_disabled;
+    uint16_t exec_attempts;
+    uint16_t exec_hits;
+} JitNativeProgramEntry;
+
+typedef struct {
+    ObjTable* table;
+    ObjString* method;
+    ObjClosure* callee;
+    uint32_t shape_version;
+    uint8_t argc;
+    uint8_t valid;
+} JitNativeInvokeIcEntry;
+
+typedef struct {
+    ObjClosure* caller;
+    uint32_t opcode_offset;
+    uint8_t argc;
+    uint8_t valid;
+    ObjClosure* callee0;
+    JitNativeCalleeEntryFn entry0;
+    void* program0;
+    ObjClosure* callee1;
+    JitNativeCalleeEntryFn entry1;
+    void* program1;
+} JitNativeCallPolyPicEntry;
+
+static JitNativeCallsitePicEntry jit_native_callsite_pic[TOI_JIT_NATIVE_CALLSITE_PIC_CAP];
+static JitNativeCalleeEntry jit_native_callee_entries[TOI_JIT_NATIVE_CALLEE_ENTRY_CAP];
+static JitNativeProgramEntry jit_native_program_entries[TOI_JIT_NATIVE_PROGRAM_ENTRY_CAP];
+static JitNativeInvokeIcEntry jit_native_invoke_ic[TOI_JIT_NATIVE_INVOKE_IC_CAP];
+static JitNativeCallPolyPicEntry jit_native_call_poly_pic[TOI_JIT_NATIVE_CALL_POLY_PIC_CAP];
+static uint64_t jit_native_chain_attempts = 0;
+static uint64_t jit_native_chain_hits = 0;
+static uint64_t jit_native_chain_misses = 0;
+
+static uint32_t jit_native_callsite_pic_hash(
+    ObjClosure* caller,
+    uint32_t opcode_offset,
+    ObjClosure* callee,
+    int argc) {
+    uintptr_t a = (uintptr_t)caller;
+    uintptr_t b = (uintptr_t)callee;
+    uint32_t h = (uint32_t)(a >> 4) ^ (uint32_t)(a >> 17) ^ (uint32_t)(b >> 7) ^ (uint32_t)(b >> 21);
+    h ^= opcode_offset * 2654435761u;
+    h ^= (uint32_t)argc * 2246822519u;
+    return h & (TOI_JIT_NATIVE_CALLSITE_PIC_CAP - 1u);
+}
+
+static uint32_t jit_native_call_poly_pic_hash(
+    ObjClosure* caller,
+    uint32_t opcode_offset,
+    int argc) {
+    uintptr_t a = (uintptr_t)caller;
+    uint32_t h = (uint32_t)(a >> 4) ^ (uint32_t)(a >> 17);
+    h ^= opcode_offset * 2654435761u;
+    h ^= (uint32_t)argc * 2246822519u;
+    return h & (TOI_JIT_NATIVE_CALL_POLY_PIC_CAP - 1u);
+}
+
+static uint32_t jit_native_callee_entry_hash(
+    void* program_ptr,
+    int argc) {
+    uintptr_t b = (uintptr_t)program_ptr;
+    uint32_t h = (uint32_t)(b >> 6) ^ (uint32_t)(b >> 19);
+    h ^= (uint32_t)argc * 2246822519u;
+    return h & (TOI_JIT_NATIVE_CALLEE_ENTRY_CAP - 1u);
+}
+
+static int jit_native_callee_entry_eligible(ObjClosure* callee, int argc);
+static int jit_native_program_entry_enabled(void);
+static int jit_native_program_entry_prefer_for_callee(void* program_ptr, ObjClosure* callee, int argc);
+static int jit_native_call_closure_dispatch(
+    VM* vm,
+    ObjClosure* closure,
+    const Value* args,
+    int argc,
+    void* program_ptr,
+    Value* out_value);
+static int jit_native_call_closure_callsite_dispatch(
+    VM* vm,
+    ObjClosure* caller_closure,
+    uint32_t opcode_offset,
+    ObjClosure* callee_closure,
+    const Value* args,
+    int argc,
+    void* program_ptr,
+    Value* out_value);
+
+static void jit_native_plan_callee_entry(
+    ObjClosure* callee,
+    void* program_ptr,
+    int argc,
+    JitNativeCalleeRunnerKind* out_runner_kind,
+    uint8_t* out_chain_direct_only) {
+    JitNativeCalleeRunnerKind runner_kind = JIT_NATIVE_CALLEE_RUNNER_DIRECT;
+    uint8_t chain_direct_only = 0;
+    if (callee != NULL && program_ptr != NULL &&
+        jit_native_callee_entry_eligible(callee, argc)) {
+        int chain_safe = toi_jit_program_chain_safe(program_ptr) ? 1 : 0;
+        if (chain_safe) {
+            chain_direct_only = 1;
+            if (jit_native_program_entry_enabled() &&
+                jit_native_program_entry_prefer_for_callee(program_ptr, callee, argc)) {
+                runner_kind = JIT_NATIVE_CALLEE_RUNNER_PROGRAM_ENTRY;
+                chain_direct_only = 0;
+            }
+        }
+    }
+    if (out_runner_kind != NULL) *out_runner_kind = runner_kind;
+    if (out_chain_direct_only != NULL) *out_chain_direct_only = chain_direct_only;
+}
+
+static uint32_t jit_native_program_entry_hash(void* program_ptr, int argc) {
+    uintptr_t p = (uintptr_t)program_ptr;
+    uint32_t h = (uint32_t)(p >> 6) ^ (uint32_t)(p >> 19);
+    h ^= (uint32_t)argc * 3266489917u;
+    return h & (TOI_JIT_NATIVE_PROGRAM_ENTRY_CAP - 1u);
+}
+
+static uint32_t jit_native_invoke_ic_hash(ObjTable* table, ObjString* method, int argc) {
+    uintptr_t t = (uintptr_t)table;
+    uintptr_t m = (uintptr_t)method;
+    uint32_t h = (uint32_t)(t >> 6) ^ (uint32_t)(t >> 19) ^ (uint32_t)(m >> 5) ^ (uint32_t)(m >> 17);
+    h ^= (uint32_t)argc * 2246822519u;
+    return h & (TOI_JIT_NATIVE_INVOKE_IC_CAP - 1u);
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
+static int jit_native_program_entry_enabled(void) {
+    const char* v = getenv("TOI_JIT_NATIVE_PROGRAM_ENTRY");
+    return v != NULL && v[0] != '\0' && strcmp(v, "0") != 0;
+}
+
+static int jit_native_program_entry_debug(void) {
+    const char* v = getenv("TOI_JIT_DEBUG_PROGRAM_ENTRY");
+    return v != NULL && v[0] != '\0' && strcmp(v, "0") != 0;
+}
+
+static int jit_native_call_poly_enabled(void) {
+    const char* v = getenv("TOI_JIT_NATIVE_CALL_POLY");
+    return v != NULL && v[0] != '\0' && strcmp(v, "0") != 0;
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
+static int jit_native_program_entry_prefer_for_callee(void* program_ptr, ObjClosure* callee, int argc) {
+    if (program_ptr == NULL || argc < 0) return 0;
+    if (!toi_jit_program_chain_safe(program_ptr)) return 0;
+    const JitProgram* p = (const JitProgram*)program_ptr;
+    if (p == NULL || p->ops == NULL) return 0;
+    if (p->op_count <= 0 || p->op_count > 128) return 0;
+    if (p->max_slot < argc - 1 || p->max_slot > 32) return 0;
+    if (callee == NULL || callee->function == NULL) return 0;
+    // Entry-native lowering is profitable on hot call-dense bodies.
+    // Keep string/table-heavy kernels on direct program dispatch until
+    // dedicated lowerings are measurably faster.
+    if (callee->function->hot_count < 128u) return 0;
+    int call_sites = 0;
+    int slow_heavy_ops = 0;
+    for (int i = 0; i < p->op_count; i++) {
+        JitOpCode op = p->ops[i].op;
+        if (op == JOP_CALL || op == JOP_QCALL2 || op == JOP_INVOKE) {
+            call_sites++;
+            continue;
+        }
+        if (op == JOP_APPEND ||
+            op == JOP_GET_TABLE ||
+            op == JOP_GET_TABLE_NUM ||
+            op == JOP_SET_TABLE ||
+            op == JOP_SET_TABLE_NUM ||
+            op == JOP_BUILD_STRING2 ||
+            op == JOP_BUILD_STRING3 ||
+            op == JOP_BUILD_STRING4 ||
+            op == JOP_BUILD_STRING5) {
+            slow_heavy_ops++;
+            if (slow_heavy_ops > 0) return 0;
+        }
+    }
+    if (call_sites == 0) return 0;
+    if (p->op_count > 48 && call_sites < 2) return 0;
+    return 1;
+}
+
+static int toi_jit_arm64_compile_native_trace_direct_core(
+    const ToiJitNativeTraceInstr* instrs,
+    int instr_count,
+    const ToiJitNativeGuard* guards,
+    int guard_count,
+    uint8_t var_slot,
+    uint8_t end_slot,
+    void** out_fn,
+    void** out_code_mem,
+    size_t* out_code_size);
+
+static int jit_native_callee_entry_eligible(ObjClosure* callee, int argc) {
+    if (callee == NULL || argc < 0) return 0;
+    ObjFunction* function = callee->function;
+    if (function == NULL) return 0;
+    if (function->is_variadic || function->is_generator) return 0;
+    if (function->defaults_count != 0) return 0;
+    if (function->arity != argc) return 0;
+    if (function->param_types_count > 0 && function->param_types != NULL) return 0;
+    return 1;
+}
 
 static int jit_value_falsey(Value v) {
     return IS_NIL(v) || (IS_BOOL(v) && !AS_BOOL(v));
@@ -691,7 +946,8 @@ static uint32_t a64_add_shifted(uint8_t rd, uint8_t rn, uint8_t rm, uint8_t lsl_
 }
 
 static uint8_t a64_alloc_temp(uint16_t* used_mask) {
-    for (uint8_t i = 0; i < 16; i++) {
+    // Reserve x30(LR)/x31(SP); use a scratch window in x16..x29.
+    for (uint8_t i = 0; i < 14; i++) {
         uint16_t bit = (uint16_t)(1u << i);
         if ((*used_mask & bit) == 0) {
             *used_mask |= bit;
@@ -702,7 +958,7 @@ static uint8_t a64_alloc_temp(uint16_t* used_mask) {
 }
 
 static void a64_free_temp(uint16_t* used_mask, uint8_t reg) {
-    if (reg < 16 || reg > 31) return;
+    if (reg < 16 || reg > 29) return;
     uint8_t idx = (uint8_t)(reg - 16);
     *used_mask &= (uint16_t)~(1u << idx);
 }
@@ -1591,82 +1847,6 @@ static int jit_native_get_table_ic_try_all_lanes_arm(
     return 0;
 }
 
-static int jit_native_get_table_ic_try_keyptr_lane_arm(
-    ObjTable* t,
-    ObjString* key,
-    uint32_t shape_version,
-    ObjTable** tables,
-    ObjString** keys,
-    int* slots,
-    uint32_t* versions,
-    int site,
-    Value* out_value) {
-    if (tables == NULL || keys == NULL || slots == NULL || versions == NULL) return 0;
-    if (keys[site] != key) return 0;
-    if (tables[site] != t || versions[site] != shape_version) return 0;
-    int slot = slots[site];
-    if (slot == -2) {
-        *out_value = NIL_VAL;
-        return 1;
-    }
-    if (slot < 0 || slot >= t->table.capacity) return 0;
-    Entry* entry = &t->table.entries[slot];
-    if (entry->key != key) return 0;
-    *out_value = entry->value;
-    return 1;
-}
-
-static int jit_native_get_table_ic_try_all_keyptr_lanes_arm(
-    Chunk* chunk,
-    int site,
-    ObjTable* t,
-    ObjString* key,
-    Value* out_value) {
-    if (chunk == NULL || site < 0 || site >= chunk->capacity) return 0;
-    uint32_t shape = t->table.shape_version;
-    if (jit_native_get_table_ic_try_keyptr_lane_arm(
-            t, key, shape,
-            chunk->get_table_ic_tables,
-            chunk->get_table_ic_keys,
-            chunk->get_table_ic_slots,
-            chunk->get_table_ic_versions,
-            site,
-            out_value)) {
-        return 1;
-    }
-    if (jit_native_get_table_ic_try_keyptr_lane_arm(
-            t, key, shape,
-            chunk->get_table_ic2_tables,
-            chunk->get_table_ic2_keys,
-            chunk->get_table_ic2_slots,
-            chunk->get_table_ic2_versions,
-            site,
-            out_value)) {
-        return 1;
-    }
-    if (jit_native_get_table_ic_try_keyptr_lane_arm(
-            t, key, shape,
-            chunk->get_table_ic3_tables,
-            chunk->get_table_ic3_keys,
-            chunk->get_table_ic3_slots,
-            chunk->get_table_ic3_versions,
-            site,
-            out_value)) {
-        return 1;
-    }
-    if (jit_native_get_table_ic_try_keyptr_lane_arm(
-            t, key, shape,
-            chunk->get_table_ic4_tables,
-            chunk->get_table_ic4_keys,
-            chunk->get_table_ic4_slots,
-            chunk->get_table_ic4_versions,
-            site,
-            out_value)) {
-        return 1;
-    }
-    return 0;
-}
-
 static void jit_native_get_table_ic_write_lane_arm(
     ObjTable** tables,
     ObjString** keys,
@@ -1764,136 +1944,6 @@ static void jit_native_update_get_table_ic_arm(
         key,
         slot,
         version);
-}
-
-static int jit_native_get_table_strkey_value_ptr_as_value_ic(
-    ObjClosure* closure,
-    const Value* table_value_ptr,
-    const Value* key_value_ptr,
-    int site,
-    Value* out_value) {
-    if (closure == NULL || table_value_ptr == NULL || key_value_ptr == NULL || out_value == NULL) return 0;
-    Value table_v = *table_value_ptr;
-    Value key_v = *key_value_ptr;
-    if (!IS_TABLE(table_v) || !IS_STRING(key_v)) return 0;
-    ObjTable* t = AS_TABLE(table_v);
-    if (t == NULL || !t->no_metatable_fast) return 0;
-    ObjString* key = AS_STRING(key_v);
-
-    ObjFunction* fn = closure->function;
-    if (fn == NULL) return 0;
-    Chunk* chunk = &fn->chunk;
-    Value result = NIL_VAL;
-
-    if (site >= 0 && site < chunk->capacity &&
-        chunk->get_table_ic_tables != NULL && chunk->get_table_ic_keys != NULL &&
-        chunk->get_table_ic_slots != NULL && chunk->get_table_ic_versions != NULL &&
-        chunk->get_table_ic2_tables != NULL && chunk->get_table_ic2_keys != NULL &&
-        chunk->get_table_ic2_slots != NULL && chunk->get_table_ic2_versions != NULL &&
-        chunk->get_table_ic3_tables != NULL && chunk->get_table_ic3_keys != NULL &&
-        chunk->get_table_ic3_slots != NULL && chunk->get_table_ic3_versions != NULL &&
-        chunk->get_table_ic4_tables != NULL && chunk->get_table_ic4_keys != NULL &&
-        chunk->get_table_ic4_slots != NULL && chunk->get_table_ic4_versions != NULL) {
-        if (jit_native_get_table_ic_try_all_keyptr_lanes_arm(chunk, site, t, key, &result) ||
-            jit_native_get_table_ic_try_all_lanes_arm(chunk, site, t, key, &result)) {
-            *out_value = result;
-            return 1;
-        }
-    }
-
-    int slot = -1;
-    if (table_get_with_slot(&t->table, key, &result, &slot)) {
-        if (site >= 0 && site < chunk->capacity) {
-            jit_native_update_get_table_ic_arm(chunk, site, t, key, slot);
-        }
-    } else {
-        result = NIL_VAL;
-        if (site >= 0 && site < chunk->capacity) {
-            jit_native_update_get_table_ic_arm(chunk, site, t, key, -2);
-        }
-    }
-
-    *out_value = result;
-    return 1;
-}
-
-static int jit_native_get_table_strkey_value_ptr_as_number_ic(
-    ObjClosure* closure,
-    const Value* table_value_ptr,
-    const Value* key_value_ptr,
-    int site,
-    double* out_number) {
-    if (closure == NULL || table_value_ptr == NULL || key_value_ptr == NULL || out_number == NULL) return 0;
-    Value table_v = *table_value_ptr;
-    Value key_v = *key_value_ptr;
-    if (!IS_TABLE(table_v) || !IS_STRING(key_v)) return 0;
-    ObjTable* t = AS_TABLE(table_v);
-    if (t == NULL || !t->no_metatable_fast) return 0;
-    ObjString* key = AS_STRING(key_v);
-
-    ObjFunction* fn = closure->function;
-    if (fn == NULL) return 0;
-    Chunk* chunk = &fn->chunk;
-
-    if (site >= 0 && site < chunk->capacity &&
-        chunk->get_table_ic_tables != NULL && chunk->get_table_ic_keys != NULL &&
-        chunk->get_table_ic_slots != NULL && chunk->get_table_ic_versions != NULL &&
-        chunk->get_table_ic2_tables != NULL && chunk->get_table_ic2_keys != NULL &&
-        chunk->get_table_ic2_slots != NULL && chunk->get_table_ic2_versions != NULL &&
-        chunk->get_table_ic3_tables != NULL && chunk->get_table_ic3_keys != NULL &&
-        chunk->get_table_ic3_slots != NULL && chunk->get_table_ic3_versions != NULL &&
-        chunk->get_table_ic4_tables != NULL && chunk->get_table_ic4_keys != NULL &&
-        chunk->get_table_ic4_slots != NULL && chunk->get_table_ic4_versions != NULL) {
-        uint32_t shape = t->table.shape_version;
-        ObjTable** tables_arr[4] = {
-            chunk->get_table_ic_tables, chunk->get_table_ic2_tables,
-            chunk->get_table_ic3_tables, chunk->get_table_ic4_tables
-        };
-        ObjString** keys_arr[4] = {
-            chunk->get_table_ic_keys, chunk->get_table_ic2_keys,
-            chunk->get_table_ic3_keys, chunk->get_table_ic4_keys
-        };
-        int* slots_arr[4] = {
-            chunk->get_table_ic_slots, chunk->get_table_ic2_slots,
-            chunk->get_table_ic3_slots, chunk->get_table_ic4_slots
-        };
-        uint32_t* versions_arr[4] = {
-            chunk->get_table_ic_versions, chunk->get_table_ic2_versions,
-            chunk->get_table_ic3_versions, chunk->get_table_ic4_versions
-        };
-
-        for (int lane = 0; lane < 4; lane++) {
-            if (keys_arr[lane][site] != key) continue;
-            if (tables_arr[lane][site] != t || versions_arr[lane][site] != shape) continue;
-            int slot = slots_arr[lane][site];
-            if (slot == -2) return 0;
-            if (slot < 0 || slot >= t->table.capacity) continue;
-            Entry* entry = &t->table.entries[slot];
-            if (entry->key != key) continue;
-            if (!IS_NUMBER(entry->value)) return 0;
-            *out_number = AS_NUMBER(entry->value);
-            return 1;
-        }
-    }
-
-    Value result = NIL_VAL;
-    int slot = -1;
-    if (!table_get_with_slot(&t->table, key, &result, &slot)) {
-        if (site >= 0 && site < chunk->capacity) {
-            jit_native_update_get_table_ic_arm(chunk, site, t, key, -2);
-        }
-        return 0;
-    }
-    if (site >= 0 && site < chunk->capacity) {
-        ObjString* cache_key = key;
-        if (slot >= 0 && slot < t->table.capacity && t->table.entries[slot].key != NULL) {
-            cache_key = t->table.entries[slot].key;
-        }
-        jit_native_update_get_table_ic_arm(chunk, site, t, cache_key, slot);
-    }
-    if (!IS_NUMBER(result)) return 0;
-    *out_number = AS_NUMBER(result);
-    return 1;
 }
 
 static int jit_native_build3_get_table_slot_ic(
@@ -2297,8 +2347,802 @@ static int jit_native_append_from_values(
     return jit_value_append_fast(*table_value, *append_value, out_value);
 }
 
+typedef struct {
+    int patch_insn;
+    uint16_t target_op;
+} JitNativeLowerPatch;
+
+#define JIT_NATIVE_TARGET_EXIT 0xFFFFu
+
+static int jit_native_emit_instr(
+    ToiJitNativeTraceInstr* out_instrs,
+    int* io_count,
+    uint8_t op,
+    uint8_t a,
+    uint8_t b,
+    uint16_t target,
+    uint32_t deopt_offset,
+    uint64_t aux_data,
+    Value constant) {
+    if (out_instrs == NULL || io_count == NULL) return 0;
+    int idx = *io_count;
+    if (idx < 0 || idx >= 256) return 0;
+    ToiJitNativeTraceInstr* in = &out_instrs[idx];
+    in->op = op;
+    in->a = a;
+    in->b = b;
+    in->target = target;
+    in->deopt_offset = deopt_offset;
+    in->aux_data = aux_data;
+    in->constant = constant;
+    *io_count = idx + 1;
+    return 1;
+}
+
+static int jit_native_lower_chain_safe_program(
+    const JitProgram* program,
+    int argc,
+    ToiJitNativeTraceInstr* out_instrs,
+    int* out_instr_count,
+    uint8_t* out_ret_slot,
+    uint8_t* out_var_slot,
+    uint8_t* out_end_slot,
+    uint8_t* out_slot_count) {
+    if (program == NULL || program->ops == NULL || program->op_count <= 0 ||
+        out_instrs == NULL || out_instr_count == NULL ||
+        out_ret_slot == NULL || out_var_slot == NULL ||
+        out_end_slot == NULL || out_slot_count == NULL) {
+        return 0;
+    }
+    if (argc < 0) return 0;
+    if (program->max_slot < argc - 1) return 0;
+    if (program->max_slot > 252) return 0;
+    // Keep lowering bounded by instruction buffer capacity; do not impose a tiny
+    // program-length gate here because it blocks real hot handlers.
+    if (program->op_count > 1024) return 0;
+    uint8_t ret_slot = (uint8_t)(program->max_slot + 1);
+    uint8_t var_slot = (uint8_t)(program->max_slot + 2);
+    uint8_t end_slot = (uint8_t)(program->max_slot + 3);
+    uint8_t slot_count = (uint8_t)(program->max_slot + 4);
+
+    int op_to_insn[1024];
+    for (int i = 0; i < program->op_count; i++) op_to_insn[i] = -1;
+
+    JitNativeLowerPatch patches[256];
+    int patch_count = 0;
+    int insn_count = 0;
+
+    for (int i = 0; i < program->op_count; i++) {
+        const JitOp* op = &program->ops[i];
+        op_to_insn[i] = insn_count;
+        switch (op->op) {
+            case JOP_CONSTANT:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_CONST, 0, 0, 0, op->byte_offset, 0, op->constant)) return 0;
+                break;
+            case JOP_NIL:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_NIL, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_TRUE:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_TRUE, 0, 0, 0, op->byte_offset, 0, BOOL_VAL(1))) return 0;
+                break;
+            case JOP_FALSE:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_FALSE, 0, 0, 0, op->byte_offset, 0, BOOL_VAL(0))) return 0;
+                break;
+            case JOP_POP:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_POP, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_GET_LOCAL:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_LOCAL, op->a, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_GET2_LOCAL:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_LOCAL, op->a, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_LOCAL, op->b, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_GET_UPVALUE:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_UPVALUE, op->a, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_SET_LOCAL:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_STORE_LOCAL, op->a, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_SET_LOCAL_POP:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_STORE_LOCAL, op->a, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_POP, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_INC_LOCAL:
+            case JOP_SUB_LOCAL_CONST:
+            case JOP_MUL_LOCAL_CONST:
+            case JOP_DIV_LOCAL_CONST:
+            case JOP_MOD_LOCAL_CONST: {
+                uint8_t bin_op = TOI_JIT_NATIVE_OP_BIN_ADD;
+                if (op->op == JOP_SUB_LOCAL_CONST) bin_op = TOI_JIT_NATIVE_OP_BIN_SUB;
+                else if (op->op == JOP_MUL_LOCAL_CONST) bin_op = TOI_JIT_NATIVE_OP_BIN_MUL;
+                else if (op->op == JOP_DIV_LOCAL_CONST) bin_op = TOI_JIT_NATIVE_OP_BIN_DIV;
+                else if (op->op == JOP_MOD_LOCAL_CONST) bin_op = TOI_JIT_NATIVE_OP_BIN_MOD;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_LOCAL, op->a, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_CONST, 0, 0, 0, op->byte_offset, 0, op->constant)) return 0;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, bin_op, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_STORE_LOCAL, op->a, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            }
+            case JOP_ADD_CONST:
+            case JOP_SUB_CONST:
+            case JOP_MUL_CONST:
+            case JOP_DIV_CONST:
+            case JOP_MOD_CONST: {
+                uint8_t bin_op = TOI_JIT_NATIVE_OP_BIN_ADD;
+                if (op->op == JOP_SUB_CONST) bin_op = TOI_JIT_NATIVE_OP_BIN_SUB;
+                else if (op->op == JOP_MUL_CONST) bin_op = TOI_JIT_NATIVE_OP_BIN_MUL;
+                else if (op->op == JOP_DIV_CONST) bin_op = TOI_JIT_NATIVE_OP_BIN_DIV;
+                else if (op->op == JOP_MOD_CONST) bin_op = TOI_JIT_NATIVE_OP_BIN_MOD;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_CONST, 0, 0, 0, op->byte_offset, 0, op->constant)) return 0;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, bin_op, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            }
+            case JOP_NEGATE:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_PUSH_CONST, 0, 0, 0, op->byte_offset, 0, NUMBER_VAL(-1.0))) return 0;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BIN_MUL, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_ADD:
+            case JOP_ADD_INPLACE:
+            case JOP_IADD:
+            case JOP_FADD:
+            case JOP_QFADD:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BIN_ADD, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_SUBTRACT:
+            case JOP_ISUB:
+            case JOP_FSUB:
+            case JOP_QFSUB:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BIN_SUB, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_MULTIPLY:
+            case JOP_IMUL:
+            case JOP_FMUL:
+            case JOP_QFMUL:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BIN_MUL, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_DIVIDE:
+            case JOP_IDIV:
+            case JOP_FDIV:
+            case JOP_QFDIV:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BIN_DIV, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_MODULO:
+            case JOP_IMOD:
+            case JOP_FMOD:
+            case JOP_QFMOD:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BIN_MOD, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_NOT:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_NOT, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_EQUAL:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_CMP_EQ, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_QGREATER_NUM:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_CMP_GT, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_QLESS_NUM:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_CMP_LT, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_APPEND:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_APPEND, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_GET_TABLE:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_GET_TABLE, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_GET_TABLE_NUM:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_GET_TABLE_NUM, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_SET_TABLE:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_SET_TABLE, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_SET_TABLE_NUM:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_SET_TABLE_NUM, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_CALL:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_CALL, op->a, 0, 0, op->byte_offset, op->target, op->constant)) return 0;
+                break;
+            case JOP_QCALL2:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_CALL, 2, 0, 0, op->byte_offset, op->target, op->constant)) return 0;
+                break;
+            case JOP_INVOKE:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_INVOKE, op->a, 0, 0, op->byte_offset, op->target, op->constant)) return 0;
+                break;
+            case JOP_BUILD_STRING2:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BUILD_STRING2, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_BUILD_STRING3:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BUILD_STRING3, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_BUILD_STRING4:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BUILD_STRING4, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_BUILD_STRING5:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_BUILD_STRING5, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_JUMP:
+            case JOP_JUMP_IF_FALSE:
+            case JOP_JUMP_IF_TRUE: {
+                uint8_t nop = TOI_JIT_NATIVE_OP_JUMP;
+                if (op->op == JOP_JUMP_IF_FALSE) nop = TOI_JIT_NATIVE_OP_JUMP_IF_FALSE;
+                else if (op->op == JOP_JUMP_IF_TRUE) nop = TOI_JIT_NATIVE_OP_JUMP_IF_TRUE;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, nop, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                if (patch_count >= 256) return 0;
+                patches[patch_count++] = (JitNativeLowerPatch){insn_count - 1, op->target};
+                break;
+            }
+            case JOP_ADJUST_STACK:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_ADJUST_STACK, op->a, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                break;
+            case JOP_RETURN:
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_STORE_LOCAL, ret_slot, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                if (!jit_native_emit_instr(out_instrs, &insn_count, TOI_JIT_NATIVE_OP_JUMP, 0, 0, 0, op->byte_offset, 0, NIL_VAL)) return 0;
+                if (patch_count >= 256) return 0;
+                patches[patch_count++] = (JitNativeLowerPatch){insn_count - 1, JIT_NATIVE_TARGET_EXIT};
+                break;
+            case JOP_TINY_INLINE:
+            case JOP_LENGTH:
+            case JOP_SLICE:
+            case JOP_QFOR_PREP_NUM:
+            case JOP_QFOR_LOOP_NUM:
+                return 0;
+            default:
+                return 0;
+        }
+    }
+
+    if (insn_count <= 0 || insn_count >= 256) return 0;
+    int exit_target = insn_count;
+    for (int i = 0; i < patch_count; i++) {
+        int target_insn = -1;
+        uint16_t target_op = patches[i].target_op;
+        if (target_op == JIT_NATIVE_TARGET_EXIT) {
+            target_insn = exit_target;
+        } else if ((int)target_op >= 0 && (int)target_op < program->op_count) {
+            target_insn = op_to_insn[target_op];
+        }
+        if (target_insn < 0 || target_insn > exit_target) return 0;
+        out_instrs[patches[i].patch_insn].target = (uint16_t)target_insn;
+    }
+
+    *out_instr_count = insn_count;
+    *out_ret_slot = ret_slot;
+    *out_var_slot = var_slot;
+    *out_end_slot = end_slot;
+    *out_slot_count = slot_count;
+    return 1;
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
+static int jit_native_get_or_compile_program_entry(
+    void* program_ptr,
+    int argc,
+    ToiJitNativeTraceFn* out_fn,
+    uint8_t* out_ret_slot,
+    uint8_t* out_var_slot,
+    uint8_t* out_end_slot,
+    uint8_t* out_slot_count,
+    JitNativeProgramEntry** out_entry) {
+    if (out_fn == NULL || out_ret_slot == NULL || out_var_slot == NULL ||
+        out_end_slot == NULL || out_slot_count == NULL) {
+        return 0;
+    }
+    *out_fn = NULL;
+    if (out_entry != NULL) *out_entry = NULL;
+    if (program_ptr == NULL || argc < 0 || argc > 255) return 0;
+    uint32_t h = jit_native_program_entry_hash(program_ptr, argc);
+    JitNativeProgramEntry* e = &jit_native_program_entries[h];
+    if (e->valid &&
+        e->program_ptr == program_ptr &&
+        (int)e->argc == argc &&
+        e->fn != NULL) {
+        *out_fn = e->fn;
+        *out_ret_slot = e->ret_slot;
+        *out_var_slot = e->var_slot;
+        *out_end_slot = e->end_slot;
+        *out_slot_count = e->slot_count;
+        if (out_entry != NULL) *out_entry = e;
+        if (jit_native_program_entry_debug()) {
+            static int dbg_hits = 20;
+            if (dbg_hits-- > 0) {
+                fprintf(stderr, "[jit-program-entry-hit] prog=%p argc=%d slot_count=%u\n",
+                        program_ptr, argc, (unsigned)e->slot_count);
+            }
+        }
+        return 1;
+    }
+    if (e->failed &&
+        e->program_ptr == program_ptr &&
+        (int)e->argc == argc) {
+        return 0;
+    }
+
+    const JitProgram* program = (const JitProgram*)program_ptr;
+    const char* prog_fn_name =
+        (program != NULL && program->function != NULL && program->function->name != NULL)
+            ? program->function->name->chars
+            : "<script>";
+    ToiJitNativeTraceInstr instrs[256];
+    int instr_count = 0;
+    uint8_t ret_slot = 0;
+    uint8_t var_slot = 0;
+    uint8_t end_slot = 0;
+    uint8_t slot_count = 0;
+    if (!jit_native_lower_chain_safe_program(
+            program,
+            argc,
+            instrs,
+            &instr_count,
+            &ret_slot,
+            &var_slot,
+            &end_slot,
+            &slot_count)) {
+        e->failed = 1;
+        e->valid = 0;
+        e->program_ptr = program_ptr;
+        e->argc = (uint8_t)argc;
+        if (jit_native_program_entry_debug()) {
+            static int dbg_fail_lower = 20;
+            if (dbg_fail_lower-- > 0) {
+                int op_count = (program != NULL) ? program->op_count : -1;
+                fprintf(stderr,
+                        "[jit-program-entry-lower-fail] fn=%s prog=%p argc=%d ops=%d\n",
+                        prog_fn_name,
+                        program_ptr,
+                        argc,
+                        op_count);
+            }
+        }
+        return 0;
+    }
+
+    void* fn_mem = NULL;
+    void* code_mem = NULL;
+    size_t code_size = 0;
+    if (!toi_jit_arm64_compile_native_trace_direct_core(
+            instrs,
+            instr_count,
+            NULL,
+            0,
+            var_slot,
+            end_slot,
+            &fn_mem,
+            &code_mem,
+            &code_size)) {
+        e->failed = 1;
+        e->valid = 0;
+        e->program_ptr = program_ptr;
+        e->argc = (uint8_t)argc;
+        if (jit_native_program_entry_debug()) {
+            static int dbg_fail_compile = 20;
+            if (dbg_fail_compile-- > 0) {
+                fprintf(stderr, "[jit-program-entry-compile-fail] prog=%p argc=%d instrs=%d\n",
+                        program_ptr, argc, instr_count);
+            }
+        }
+        return 0;
+    }
+
+    if (e->valid && e->code_mem != NULL && e->code_size > 0) {
+        munmap(e->code_mem, e->code_size);
+    }
+    e->program_ptr = program_ptr;
+    e->fn = (ToiJitNativeTraceFn)fn_mem;
+    e->code_mem = code_mem;
+    e->code_size = code_size;
+    e->argc = (uint8_t)argc;
+    e->ret_slot = ret_slot;
+    e->var_slot = var_slot;
+    e->end_slot = end_slot;
+    e->slot_count = slot_count;
+    e->valid = 1;
+    e->failed = 0;
+    e->runtime_disabled = 0;
+    e->exec_attempts = 0;
+    e->exec_hits = 0;
+    if (jit_native_program_entry_debug()) {
+        static int dbg_compile_ok = 20;
+        if (dbg_compile_ok-- > 0) {
+            fprintf(stderr, "[jit-program-entry-compile-ok] prog=%p argc=%d instrs=%d slot_count=%u\n",
+                    program_ptr, argc, instr_count, (unsigned)slot_count);
+            fprintf(stderr, "[jit-program-entry-compile-fn] fn=%s\n", prog_fn_name);
+        }
+    }
+
+    *out_fn = e->fn;
+    *out_ret_slot = ret_slot;
+    *out_var_slot = var_slot;
+    *out_end_slot = end_slot;
+    *out_slot_count = slot_count;
+    if (out_entry != NULL) *out_entry = e;
+    return 1;
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
+static int jit_native_execute_program_entry_cached(
+    VM* vm,
+    ObjClosure* callee,
+    void* entry_ptr,
+    int argc,
+    const Value* args,
+    Value* out) {
+    if (vm == NULL || callee == NULL || entry_ptr == NULL || args == NULL || out == NULL) return 0;
+    int dbg = jit_native_program_entry_debug();
+    static int dbg_budget = 40;
+    JitNativeProgramEntry* e = (JitNativeProgramEntry*)entry_ptr;
+    ToiJitState* st = (ToiJitState*)vm->native_jit;
+
+    if (!e->runtime_disabled &&
+        e->valid &&
+        e->fn != NULL &&
+        e->slot_count > 0 &&
+        (int)e->argc == argc) {
+        if (e->exec_attempts < 0xffffu) e->exec_attempts++;
+        int slot_count = (int)e->slot_count;
+        Value locals[slot_count];
+        for (int i = 0; i < slot_count; i++) locals[i] = NIL_VAL;
+        if (slot_count > 0) {
+            locals[0] = OBJ_VAL(callee);
+        }
+        for (int i = 0; i < argc && (i + 1) < slot_count; i++) {
+            locals[i + 1] = args[i];
+        }
+        // One-shot execution for direct-core loop ABI: var starts at -1, end at 0.
+        // The entry loop increments first, then runs body exactly once.
+        locals[e->var_slot] = NUMBER_VAL(-1.0);
+        locals[e->end_slot] = NUMBER_VAL(0.0);
+
+        ToiJitNativeExecState state;
+        memset(&state, 0, sizeof(state));
+        if (st != NULL) st->native_trace_active_depth++;
+        int rr = e->fn(vm, callee, locals, slot_count, &state);
+        if (st != NULL && st->native_trace_active_depth > 0) st->native_trace_active_depth--;
+        if (rr == (int)TOI_JIT_NATIVE_EXEC_EXIT) {
+            if (e->exec_hits < 0xffffu) e->exec_hits++;
+            *out = locals[e->ret_slot];
+            return 1;
+        }
+        e->runtime_disabled = 1;
+    }
+
+    if (toi_jit_execute_program_direct_with_args(vm, callee, e->program_ptr, argc, (Value*)args, out)) return 1;
+    if (dbg && dbg_budget > 0) {
+        dbg_budget--;
+        const char* fn_name =
+            (callee->function != NULL && callee->function->name != NULL)
+                ? callee->function->name->chars
+                : "<script>";
+        fprintf(stderr,
+                "[jit-program-entry-fail] fn=%s argc=%d prog=%p\n",
+                fn_name,
+                argc,
+                e->program_ptr);
+    }
+    return 0;
+}
+
+static JitNativeCalleeEntryFn jit_native_compile_callee_entry(
+    void* runner_fn_ptr,
+    uintptr_t runner_arg,
+    int argc,
+    void** out_code_mem,
+    size_t* out_code_size) {
+    if (out_code_mem != NULL) *out_code_mem = NULL;
+    if (out_code_size != NULL) *out_code_size = 0;
+    if (runner_fn_ptr == NULL || argc < 0 || argc > 255) return NULL;
+
+    Arm64CodeBuf buf;
+    memset(&buf, 0, sizeof(buf));
+
+    if (!a64_emit(&buf, a64_sub_imm(31, 31, 16))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(30, 31, 0))) goto emit_fail;
+
+    // abi: x0=vm, x1=callee closure, x2=args, x3=out
+    if (!a64_emit(&buf, a64_mov_x(5, 3))) goto emit_fail; // x5 = out
+    if (!a64_emit(&buf, a64_mov_x(4, 2))) goto emit_fail; // x4 = args
+    if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)argc)) goto emit_fail; // x3 = argc
+    if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)runner_arg)) goto emit_fail; // x2 = program or entry
+    if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)runner_fn_ptr)) goto emit_fail;
+    if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+
+    if (!a64_emit(&buf, a64_ldr_x_imm(30, 31, 0))) goto emit_fail;
+    if (!a64_emit(&buf, a64_add_imm(31, 31, 16))) goto emit_fail;
+    if (!a64_emit(&buf, 0xD65F03C0u)) goto emit_fail;
+
+    size_t code_size = (size_t)buf.count * sizeof(uint32_t);
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) page_size = 4096;
+    size_t map_size = ((code_size + (size_t)page_size - 1u) / (size_t)page_size) * (size_t)page_size;
+
+    int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_JIT
+    mmap_flags |= MAP_JIT;
+#endif
+    void* mem = mmap(NULL, map_size, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
+    if (mem == MAP_FAILED) goto emit_fail;
+    memcpy(mem, buf.words, code_size);
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin___clear_cache((char*)mem, (char*)mem + code_size);
+#endif
+    if (mprotect(mem, map_size, PROT_READ | PROT_EXEC) != 0) {
+        munmap(mem, map_size);
+        goto emit_fail;
+    }
+    free(buf.words);
+    if (out_code_mem != NULL) *out_code_mem = mem;
+    if (out_code_size != NULL) *out_code_size = map_size;
+    return (JitNativeCalleeEntryFn)mem;
+
+emit_fail:
+    free(buf.words);
+    return NULL;
+}
+
+static JitNativeCalleeEntryFn jit_native_compile_callee_entry_program_entry_direct(
+    ToiJitNativeTraceFn entry_fn,
+    int argc,
+    uint8_t ret_slot,
+    uint8_t var_slot,
+    uint8_t end_slot,
+    uint8_t slot_count,
+    void** out_code_mem,
+    size_t* out_code_size) {
+    if (out_code_mem != NULL) *out_code_mem = NULL;
+    if (out_code_size != NULL) *out_code_size = 0;
+    if (entry_fn == NULL || argc < 0 || argc > 255) return NULL;
+    if ((int)slot_count <= 0 || (int)slot_count > 255) return NULL;
+    if ((int)ret_slot >= (int)slot_count ||
+        (int)var_slot >= (int)slot_count ||
+        (int)end_slot >= (int)slot_count) {
+        return NULL;
+    }
+
+    Arm64CodeBuf buf;
+    memset(&buf, 0, sizeof(buf));
+
+    const uint16_t off_lr = 0;
+    const uint16_t off_vm = 8;
+    const uint16_t off_callee = 16;
+    const uint16_t off_args = 24;
+    const uint16_t off_out = 32;
+    const uint16_t locals_off = 64;
+    uint16_t locals_bytes = (uint16_t)((uint16_t)slot_count * 16u);
+    uint16_t frame_size = (uint16_t)(locals_off + locals_bytes);
+    frame_size = (uint16_t)((frame_size + 15u) & ~15u);
+    if (frame_size == 0) frame_size = 16;
+    if (frame_size > 4095u) return NULL;
+
+    // Prologue and argument spills.
+    if (!a64_emit(&buf, a64_sub_imm(31, 31, frame_size))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(30, 31, off_lr))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(0, 31, off_vm))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(1, 31, off_callee))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(2, 31, off_args))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(3, 31, off_out))) goto emit_fail;
+    if (!a64_emit_mov_imm64(&buf, 10, 0u)) goto emit_fail; // reused zero payload
+
+    // Chain attempt counter (native).
+    if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_chain_attempts)) goto emit_fail;
+    if (!a64_emit(&buf, a64_ldr_x_imm(11, 9, 0))) goto emit_fail;
+    if (!a64_emit(&buf, a64_add_imm(11, 11, 1))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(11, 9, 0))) goto emit_fail;
+
+    // Zero-init locals to NIL.
+    for (int i = 0; i < (int)slot_count; i++) {
+        uint16_t base = (uint16_t)(locals_off + (uint16_t)i * 16u);
+        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)VAL_NIL)) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(9, 31, base))) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(10, 31, (uint16_t)(base + 8u)))) goto emit_fail;
+    }
+
+    // locals[0] = callee (Value OBJ).
+    {
+        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)VAL_OBJ)) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(9, 31, locals_off))) goto emit_fail;
+        if (!a64_emit(&buf, a64_ldr_x_imm(9, 31, off_callee))) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(9, 31, (uint16_t)(locals_off + 8u)))) goto emit_fail;
+    }
+
+    // Copy args -> locals[1..argc].
+    {
+        int max_copy = argc;
+        if (max_copy > (int)slot_count - 1) max_copy = (int)slot_count - 1;
+        if (!a64_emit(&buf, a64_ldr_x_imm(12, 31, off_args))) goto emit_fail; // x12 = args*
+        for (int i = 0; i < max_copy; i++) {
+            uint16_t src = (uint16_t)((uint16_t)i * 16u);
+            uint16_t dst = (uint16_t)(locals_off + (uint16_t)(i + 1) * 16u);
+            if (!a64_emit(&buf, a64_ldr_x_imm(9, 12, src))) goto emit_fail;
+            if (!a64_emit(&buf, a64_str_x_imm(9, 31, dst))) goto emit_fail;
+            if (!a64_emit(&buf, a64_ldr_x_imm(9, 12, (uint16_t)(src + 8u)))) goto emit_fail;
+            if (!a64_emit(&buf, a64_str_x_imm(9, 31, (uint16_t)(dst + 8u)))) goto emit_fail;
+        }
+    }
+
+    // One-shot loop ABI setup: var=-1, end=0 as NUMBER values.
+    {
+        uint16_t var_base = (uint16_t)(locals_off + (uint16_t)var_slot * 16u);
+        uint16_t end_base = (uint16_t)(locals_off + (uint16_t)end_slot * 16u);
+        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)VAL_NUMBER)) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(9, 31, var_base))) goto emit_fail;
+        if (!a64_emit_mov_imm64(&buf, 9, 0xBFF0000000000000ULL)) goto emit_fail; // -1.0
+        if (!a64_emit(&buf, a64_str_x_imm(9, 31, (uint16_t)(var_base + 8u)))) goto emit_fail;
+        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)VAL_NUMBER)) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(9, 31, end_base))) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(10, 31, (uint16_t)(end_base + 8u)))) goto emit_fail; // +0.0
+    }
+
+    // Call compiled native program entry directly.
+    if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, off_vm))) goto emit_fail;       // vm
+    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, off_callee))) goto emit_fail;   // callee
+    if (!a64_emit(&buf, a64_add_imm(2, 31, locals_off))) goto emit_fail;     // locals
+    if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)slot_count)) goto emit_fail;  // slot_count
+    if (!a64_emit_mov_imm64(&buf, 4, 0u)) goto emit_fail;                     // out_state = NULL
+    if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)entry_fn)) goto emit_fail;
+    if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+    if (!a64_emit(&buf, a64_cmp_w_imm(0, TOI_JIT_NATIVE_EXEC_EXIT))) goto emit_fail;
+    int b_not_exit = buf.count;
+    if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne fail
+
+    // Success: out = locals[ret_slot], return 1.
+    {
+        uint16_t ret_base = (uint16_t)(locals_off + (uint16_t)ret_slot * 16u);
+        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_chain_hits)) goto emit_fail;
+        if (!a64_emit(&buf, a64_ldr_x_imm(11, 9, 0))) goto emit_fail;
+        if (!a64_emit(&buf, a64_add_imm(11, 11, 1))) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(11, 9, 0))) goto emit_fail;
+        if (!a64_emit(&buf, a64_ldr_x_imm(12, 31, off_out))) goto emit_fail;
+        if (!a64_emit(&buf, a64_ldr_x_imm(9, 31, ret_base))) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(9, 12, 0))) goto emit_fail;
+        if (!a64_emit(&buf, a64_ldr_x_imm(9, 31, (uint16_t)(ret_base + 8u)))) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(9, 12, 8))) goto emit_fail;
+        if (!a64_emit_mov_imm64(&buf, 0, 1u)) goto emit_fail;
+        if (!a64_emit(&buf, a64_ldr_x_imm(30, 31, off_lr))) goto emit_fail;
+        if (!a64_emit(&buf, a64_add_imm(31, 31, frame_size))) goto emit_fail;
+        if (!a64_emit(&buf, 0xD65F03C0u)) goto emit_fail;
+    }
+
+    int fail_label = buf.count;
+    if (!a64_patch_b_cond(&buf, b_not_exit, fail_label, 0x1u)) goto emit_fail; // ne
+    if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_chain_misses)) goto emit_fail;
+    if (!a64_emit(&buf, a64_ldr_x_imm(11, 9, 0))) goto emit_fail;
+    if (!a64_emit(&buf, a64_add_imm(11, 11, 1))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(11, 9, 0))) goto emit_fail;
+    if (!a64_emit_mov_imm64(&buf, 0, 0u)) goto emit_fail;
+    if (!a64_emit(&buf, a64_ldr_x_imm(30, 31, off_lr))) goto emit_fail;
+    if (!a64_emit(&buf, a64_add_imm(31, 31, frame_size))) goto emit_fail;
+    if (!a64_emit(&buf, 0xD65F03C0u)) goto emit_fail;
+
+    size_t code_size = (size_t)buf.count * sizeof(uint32_t);
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) page_size = 4096;
+    size_t map_size = ((code_size + (size_t)page_size - 1u) / (size_t)page_size) * (size_t)page_size;
+
+    int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_JIT
+    mmap_flags |= MAP_JIT;
+#endif
+    void* mem = mmap(NULL, map_size, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
+    if (mem == MAP_FAILED) goto emit_fail;
+    memcpy(mem, buf.words, code_size);
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin___clear_cache((char*)mem, (char*)mem + code_size);
+#endif
+    if (mprotect(mem, map_size, PROT_READ | PROT_EXEC) != 0) {
+        munmap(mem, map_size);
+        goto emit_fail;
+    }
+    free(buf.words);
+    if (out_code_mem != NULL) *out_code_mem = mem;
+    if (out_code_size != NULL) *out_code_size = map_size;
+    return (JitNativeCalleeEntryFn)mem;
+
+emit_fail:
+    free(buf.words);
+    return NULL;
+}
+
+static JitNativeCalleeEntryFn jit_native_get_or_create_callee_entry(
+    ObjClosure* callee,
+    void* program_ptr,
+    int argc) {
+    if (callee == NULL || program_ptr == NULL || argc < 0 || argc > 255) return NULL;
+    if (!jit_native_callee_entry_eligible(callee, argc)) return NULL;
+    uint32_t h = jit_native_callee_entry_hash(program_ptr, argc);
+    JitNativeCalleeEntry* e = &jit_native_callee_entries[h];
+    if (e->valid &&
+        e->program_ptr == program_ptr &&
+        (int)e->argc == argc &&
+        e->entry_fn != NULL) {
+        return e->entry_fn;
+    }
+
+    JitNativeCalleeRunnerKind runner_kind = JIT_NATIVE_CALLEE_RUNNER_DIRECT;
+    uint8_t chain_direct_only = 0;
+    jit_native_plan_callee_entry(
+        callee,
+        program_ptr,
+        argc,
+        &runner_kind,
+        &chain_direct_only);
+
+    void* callee_runner = (void*)&toi_jit_execute_program_direct_with_args;
+    uintptr_t runner_arg = (uintptr_t)program_ptr;
+    if (runner_kind == JIT_NATIVE_CALLEE_RUNNER_PROGRAM_ENTRY) {
+        ToiJitNativeTraceFn entry_fn = NULL;
+        uint8_t ret_slot = 0;
+        uint8_t var_slot = 0;
+        uint8_t end_slot = 0;
+        uint8_t slot_count = 0;
+        JitNativeProgramEntry* entry = NULL;
+        if (jit_native_get_or_compile_program_entry(
+                program_ptr,
+                argc,
+                &entry_fn,
+                &ret_slot,
+                &var_slot,
+                &end_slot,
+                &slot_count,
+                &entry) &&
+            entry_fn != NULL &&
+            entry != NULL) {
+            callee_runner = (void*)&jit_native_execute_program_entry_cached;
+            runner_arg = (uintptr_t)entry;
+            chain_direct_only = 0;
+        } else {
+            runner_kind = JIT_NATIVE_CALLEE_RUNNER_DIRECT;
+            chain_direct_only = toi_jit_program_chain_safe(program_ptr) ? 1 : 0;
+        }
+    } else {
+        runner_kind = JIT_NATIVE_CALLEE_RUNNER_DIRECT;
+    }
+
+    void* code_mem = NULL;
+    size_t code_size = 0;
+    JitNativeCalleeEntryFn fn = NULL;
+    if (runner_kind == JIT_NATIVE_CALLEE_RUNNER_PROGRAM_ENTRY) {
+        JitNativeProgramEntry* pe = (JitNativeProgramEntry*)(uintptr_t)runner_arg;
+        if (pe != NULL && pe->fn != NULL) {
+            fn = jit_native_compile_callee_entry_program_entry_direct(
+                pe->fn,
+                argc,
+                pe->ret_slot,
+                pe->var_slot,
+                pe->end_slot,
+                pe->slot_count,
+                &code_mem,
+                &code_size);
+        }
+        if (fn == NULL) {
+            fn = jit_native_compile_callee_entry(callee_runner, runner_arg, argc, &code_mem, &code_size);
+        }
+    } else {
+        fn = jit_native_compile_callee_entry(callee_runner, runner_arg, argc, &code_mem, &code_size);
+    }
+    if (fn == NULL) return NULL;
+
+    if (e->valid && e->code_mem != NULL && e->code_size > 0) {
+        munmap(e->code_mem, e->code_size);
+    }
+    e->valid = 1;
+    e->program_ptr = program_ptr;
+    e->entry_fn = fn;
+    e->code_mem = code_mem;
+    e->code_size = code_size;
+    e->argc = (uint8_t)argc;
+    e->runner_kind = (uint8_t)runner_kind;
+    e->chain_direct_only = chain_direct_only;
+    return fn;
+}
+
 static int jit_native_call_dispatch(
     VM* vm,
+    ObjClosure* caller_closure,
+    uint32_t opcode_offset,
     const Value* callee_ptr,
     const Value* args,
     int argc,
@@ -2311,12 +3155,76 @@ static int jit_native_call_dispatch(
     if (IS_CLOSURE(callee)) {
         ObjClosure* target = AS_CLOSURE(callee);
         if ((!has_hint || AS_OBJ(callee) == target_hint) &&
-            toi_jit_try_execute_compiled_with_args(vm, target, argc, (Value*)args, out_value)) {
-            return 1;
+            caller_closure != NULL && argc >= 0 && argc <= 255 &&
+            jit_native_call_poly_enabled()) {
+            uint32_t hp = jit_native_call_poly_pic_hash(caller_closure, opcode_offset, argc);
+            JitNativeCallPolyPicEntry* pe = &jit_native_call_poly_pic[hp];
+            if (pe->valid &&
+                pe->caller == caller_closure &&
+                pe->opcode_offset == opcode_offset &&
+                (int)pe->argc == argc) {
+                if (pe->callee0 == target && pe->entry0 != NULL) {
+                    if (pe->entry0(vm, target, args, out_value)) return 1;
+                }
+                if (pe->callee1 == target && pe->entry1 != NULL) {
+                    if (pe->entry1(vm, target, args, out_value)) return 1;
+                }
+            }
+            void* program_ptr = NULL;
+            if (toi_jit_get_compiled_program_ptr_at_callsite(
+                    vm,
+                    caller_closure,
+                    opcode_offset,
+                    target,
+                    &program_ptr) &&
+                program_ptr != NULL) {
+                JitNativeCalleeEntryFn fn = jit_native_get_or_create_callee_entry(target, program_ptr, argc);
+                if (fn != NULL && fn(vm, target, args, out_value)) {
+                    if (!pe->valid ||
+                        pe->caller != caller_closure ||
+                        pe->opcode_offset != opcode_offset ||
+                        (int)pe->argc != argc) {
+                        pe->valid = 1;
+                        pe->caller = caller_closure;
+                        pe->opcode_offset = opcode_offset;
+                        pe->argc = (uint8_t)argc;
+                        pe->callee0 = target;
+                        pe->entry0 = fn;
+                        pe->program0 = program_ptr;
+                        pe->callee1 = NULL;
+                        pe->entry1 = NULL;
+                        pe->program1 = NULL;
+                    } else if (pe->callee0 == NULL || pe->callee0 == target) {
+                        pe->callee0 = target;
+                        pe->entry0 = fn;
+                        pe->program0 = program_ptr;
+                    } else {
+                        pe->callee1 = target;
+                        pe->entry1 = fn;
+                        pe->program1 = program_ptr;
+                    }
+                    return 1;
+                }
+            }
         }
-        if ((!has_hint || AS_OBJ(callee) == target_hint) &&
-            toi_jit_try_execute_with_args(vm, target, argc, (Value*)args, out_value)) {
-            return 1;
+        if (!has_hint || AS_OBJ(callee) == target_hint) {
+            if (caller_closure != NULL) {
+                if (jit_native_call_closure_callsite_dispatch(
+                        vm,
+                        caller_closure,
+                        opcode_offset,
+                        target,
+                        args,
+                        argc,
+                        NULL,
+                        out_value)) {
+                    return 1;
+                }
+            } else {
+                if (jit_native_call_closure_dispatch(vm, target, args, argc, NULL, out_value)) {
+                    return 1;
+                }
+            }
         }
     } else if (IS_NATIVE(callee)) {
         if ((!has_hint || AS_OBJ(callee) == target_hint) &&
@@ -2337,15 +3245,136 @@ static int jit_native_call_closure_dispatch(
     void* program_ptr,
     Value* out_value) {
     if (vm == NULL || closure == NULL || args == NULL || out_value == NULL || argc < 0) return 0;
+    if (program_ptr != NULL) {
+        JitNativeCalleeEntryFn fn = jit_native_get_or_create_callee_entry(closure, program_ptr, argc);
+        if (fn != NULL && fn(vm, closure, args, out_value)) {
+            return 1;
+        }
+    }
     if (program_ptr != NULL &&
         toi_jit_execute_program_direct_with_args(vm, closure, program_ptr, argc, (Value*)args, out_value)) {
         return 1;
     }
+    if (toi_jit_try_execute_linked_with_args(vm, closure, argc, (Value*)args, out_value)) return 1;
     if (toi_jit_try_execute_compiled_with_args(vm, closure, argc, (Value*)args, out_value)) return 1;
     if (toi_jit_try_execute_with_args(vm, closure, argc, (Value*)args, out_value)) return 1;
     return jit_value_call_primitive_arm(vm, OBJ_VAL(closure), (Value*)args, argc, out_value);
 }
 
+static int jit_native_call_closure_dispatch_after_entry_miss(
+    VM* vm,
+    ObjClosure* closure,
+    const Value* args,
+    int argc,
+    void* program_ptr,
+    Value* out_value) {
+    if (vm == NULL || closure == NULL || args == NULL || out_value == NULL || argc < 0) return 0;
+    if (program_ptr != NULL &&
+        toi_jit_execute_program_direct_with_args(vm, closure, program_ptr, argc, (Value*)args, out_value)) {
+        return 1;
+    }
+    if (toi_jit_try_execute_linked_with_args(vm, closure, argc, (Value*)args, out_value)) return 1;
+    if (toi_jit_try_execute_compiled_with_args(vm, closure, argc, (Value*)args, out_value)) return 1;
+    if (toi_jit_try_execute_with_args(vm, closure, argc, (Value*)args, out_value)) return 1;
+    return jit_value_call_primitive_arm(vm, OBJ_VAL(closure), (Value*)args, argc, out_value);
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
+static int jit_native_call_closure_callsite_dispatch(
+    VM* vm,
+    ObjClosure* caller_closure,
+    uint32_t opcode_offset,
+    ObjClosure* callee_closure,
+    const Value* args,
+    int argc,
+    void* program_ptr,
+    Value* out_value) {
+    if (vm == NULL || callee_closure == NULL || args == NULL || out_value == NULL || argc < 0) return 0;
+    if (caller_closure != NULL && argc >= 0 && argc <= 255) {
+        uint32_t h = jit_native_callsite_pic_hash(caller_closure, opcode_offset, callee_closure, argc);
+        JitNativeCallsitePicEntry* e = &jit_native_callsite_pic[h];
+        if (e->valid &&
+            e->caller == caller_closure &&
+            e->callee == callee_closure &&
+            e->opcode_offset == opcode_offset &&
+            (int)e->argc == argc &&
+            e->entry_fn != NULL) {
+            if (e->entry_fn(vm, callee_closure, args, out_value)) {
+                return 1;
+            }
+            e->valid = 0;
+            e->caller = NULL;
+            e->callee = NULL;
+            e->program_ptr = NULL;
+            e->entry_fn = NULL;
+            e->opcode_offset = 0;
+            e->argc = 0;
+        }
+    }
+    if (program_ptr != NULL) {
+        JitNativeCalleeEntryFn fn = jit_native_get_or_create_callee_entry(callee_closure, program_ptr, argc);
+        if (fn != NULL && fn(vm, callee_closure, args, out_value)) {
+            return 1;
+        }
+    }
+    if (program_ptr != NULL &&
+        toi_jit_execute_program_direct_with_args(vm, callee_closure, program_ptr, argc, (Value*)args, out_value)) {
+        return 1;
+    }
+    if (caller_closure != NULL) {
+        void* callsite_program_ptr = NULL;
+        if (toi_jit_get_compiled_program_ptr_at_callsite(
+                vm,
+                caller_closure,
+                opcode_offset,
+                callee_closure,
+                &callsite_program_ptr) &&
+            callsite_program_ptr != NULL) {
+            if (argc >= 0 && argc <= 255) {
+                uint32_t h = jit_native_callsite_pic_hash(caller_closure, opcode_offset, callee_closure, argc);
+                JitNativeCallsitePicEntry* e = &jit_native_callsite_pic[h];
+                JitNativeCalleeEntryFn fn = jit_native_get_or_create_callee_entry(
+                    callee_closure, callsite_program_ptr, argc);
+                if (fn != NULL) {
+                    e->valid = 1;
+                    e->caller = caller_closure;
+                    e->callee = callee_closure;
+                    e->program_ptr = callsite_program_ptr;
+                    e->entry_fn = fn;
+                    e->opcode_offset = opcode_offset;
+                    e->argc = (uint8_t)argc;
+                }
+            }
+            JitNativeCalleeEntryFn fn =
+                jit_native_get_or_create_callee_entry(callee_closure, callsite_program_ptr, argc);
+            if (fn != NULL && fn(vm, callee_closure, args, out_value)) {
+                return 1;
+            }
+            if (toi_jit_execute_program_direct_with_args(
+                    vm, callee_closure, callsite_program_ptr, argc, (Value*)args, out_value)) {
+                return 1;
+            }
+        }
+    }
+    if (caller_closure != NULL &&
+        toi_jit_try_execute_compiled_at_callsite_with_args(
+            vm,
+            caller_closure,
+            opcode_offset,
+            callee_closure,
+            argc,
+            (Value*)args,
+            out_value)) {
+        return 1;
+    }
+    return jit_native_call_closure_dispatch(vm, callee_closure, args, argc, program_ptr, out_value);
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
 static int jit_native_invoke_dispatch(
     VM* vm,
     const Value* receiver_ptr,
@@ -2355,6 +3384,74 @@ static int jit_native_invoke_dispatch(
     Value* out_value) {
     if (vm == NULL || receiver_ptr == NULL || args == NULL || out_value == NULL || method == NULL || argc < 0) return 0;
     return jit_invoke_primitive_arm(vm, *receiver_ptr, OBJ_VAL(method), (Value*)args, argc, out_value);
+}
+
+static int jit_native_invoke_dispatch_chained(
+    VM* vm,
+    const Value* receiver_ptr,
+    const Value* args,
+    int argc,
+    ObjString* method,
+    Value* out_value) {
+    if (vm == NULL || receiver_ptr == NULL || args == NULL || out_value == NULL || method == NULL || argc < 0) return 0;
+    Value receiver = *receiver_ptr;
+    if (IS_TABLE(receiver)) {
+        ObjTable* t = AS_TABLE(receiver);
+        if (t != NULL && t->no_metatable_fast) {
+            uint32_t ih = jit_native_invoke_ic_hash(t, method, argc);
+            JitNativeInvokeIcEntry* ie = &jit_native_invoke_ic[ih];
+            if (ie->valid &&
+                ie->table == t &&
+                ie->method == method &&
+                ie->shape_version == t->table.shape_version &&
+                (int)ie->argc == argc &&
+                ie->callee != NULL) {
+                int margc = argc + 1;
+                Value invoke_args[margc];
+                invoke_args[0] = receiver;
+                for (int i = 0; i < argc; i++) invoke_args[i + 1] = args[i];
+                if (jit_native_call_closure_dispatch(
+                        vm,
+                        ie->callee,
+                        invoke_args,
+                        margc,
+                        NULL,
+                        out_value)) {
+                    return 1;
+                }
+                ie->valid = 0;
+            }
+            Value raw_method = NIL_VAL;
+            if (table_get(&t->table, method, &raw_method) && IS_CLOSURE(raw_method)) {
+                ObjClosure* callee = AS_CLOSURE(raw_method);
+                int margc = argc + 1;
+                Value invoke_args[margc];
+                invoke_args[0] = receiver;
+                for (int i = 0; i < argc; i++) invoke_args[i + 1] = args[i];
+                ie->table = t;
+                ie->method = method;
+                ie->callee = callee;
+                ie->shape_version = t->table.shape_version;
+                ie->argc = (uint8_t)argc;
+                ie->valid = 1;
+                if (jit_native_call_closure_dispatch(
+                        vm,
+                        callee,
+                        invoke_args,
+                        margc,
+                        NULL,
+                        out_value)) {
+                    return 1;
+                }
+            }
+        }
+    }
+    return jit_invoke_primitive_arm(vm, receiver, OBJ_VAL(method), (Value*)args, argc, out_value);
+}
+
+static int jit_native_trace_force_bridge_wrapper(void) {
+    const char* v = getenv("TOI_JIT_NATIVE_TRACE_FORCE_BRIDGE");
+    return v != NULL && v[0] != '\0' && strcmp(v, "0") != 0;
 }
 
 static int toi_jit_arm64_compile_native_trace_direct_core(
@@ -2402,11 +3499,6 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
             case TOI_JIT_NATIVE_OP_CMP_GT:
             case TOI_JIT_NATIVE_OP_CMP_EQ:
             case TOI_JIT_NATIVE_OP_NOT:
-            case TOI_JIT_NATIVE_OP_APPEND:
-            case TOI_JIT_NATIVE_OP_GET_TABLE:
-            case TOI_JIT_NATIVE_OP_GET_TABLE_NUM:
-            case TOI_JIT_NATIVE_OP_SET_TABLE:
-            case TOI_JIT_NATIVE_OP_SET_TABLE_NUM:
             case TOI_JIT_NATIVE_OP_BUILD_STRING2:
             case TOI_JIT_NATIVE_OP_BUILD_STRING3:
             case TOI_JIT_NATIVE_OP_BUILD_STRING4:
@@ -2417,6 +3509,12 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
             case TOI_JIT_NATIVE_OP_JUMP_IF_FALSE:
             case TOI_JIT_NATIVE_OP_JUMP_IF_TRUE:
             case TOI_JIT_NATIVE_OP_ADJUST_STACK:
+                break;
+            case TOI_JIT_NATIVE_OP_APPEND:
+            case TOI_JIT_NATIVE_OP_GET_TABLE:
+            case TOI_JIT_NATIVE_OP_GET_TABLE_NUM:
+            case TOI_JIT_NATIVE_OP_SET_TABLE:
+            case TOI_JIT_NATIVE_OP_SET_TABLE_NUM:
                 break;
             default:
                 DC_FAIL("unsupported-op", i);
@@ -2593,7 +3691,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
     // x0=vm x1=closure x2=slots x3=slot_count x4=out_state
     // Stack frame layout:
     //   [sp+0]   helper scratch (double/value)
-    //   [sp+8]   slot_count spill
+    //   [sp+8]   helper scratch payload
+    //   [sp+224] slot_count spill
     //   [sp+16]  closure spill
     //   [sp+24]  vm spill
     //   [sp+32..] build-string Value parts scratch
@@ -2602,15 +3701,29 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
     //   [sp+200] append temp value Value
     //   [sp+216] append out Value
     //   [sp+240] slots spill
+    //   [sp+248] out_state spill
     //   [sp+256..2303] direct-core value scratch slots (128 x Value)
     //   [sp+2304..3071] call/invoke staging buffer (48 x Value)
+    //   [sp+3072] saved LR (x30) for helper blr calls
     const uint16_t CALL_STAGE_BASE = 2304u;
     const int CALL_STAGE_CAP = 48;
-    if (!a64_emit(&buf, a64_sub_imm(31, 31, 3072))) goto emit_fail;
-    if (!a64_emit(&buf, a64_str_x_imm(3, 31, 8))) goto emit_fail;  // spill slot_count
+    if (!a64_emit(&buf, a64_sub_imm(31, 31, 3088))) goto emit_fail;
+    if (!a64_emit(&buf, a64_str_x_imm(30, 31, 3072))) goto emit_fail; // save LR
+    if (!a64_emit(&buf, a64_str_x_imm(3, 31, 224))) goto emit_fail;  // spill slot_count
     if (!a64_emit(&buf, a64_str_x_imm(1, 31, 16))) goto emit_fail; // spill closure
     if (!a64_emit(&buf, a64_str_x_imm(0, 31, 24))) goto emit_fail; // spill vm
     if (!a64_emit(&buf, a64_str_x_imm(2, 31, 240))) goto emit_fail; // spill slots
+    if (!a64_emit(&buf, a64_str_x_imm(4, 31, 248))) goto emit_fail; // spill out_state
+    {
+        // Seed out_state with a conservative runtime deopt marker so
+        // direct-core deopt exits never report reason=none.
+        uint64_t initial_deopt_state =
+            ((uint64_t)instrs[0].deopt_offset) |
+            ((uint64_t)instrs[0].op << 32) |
+            ((uint64_t)TOI_JIT_NATIVE_DEOPT_RUNTIME << 40);
+        if (!a64_emit_mov_imm64(&buf, 9, initial_deopt_state)) goto emit_fail;
+        if (!a64_emit(&buf, a64_str_x_imm(9, 4, 0))) goto emit_fail;
+    }
     if (!a64_emit(&buf, a64_cmp_w_imm(3, need_slots))) goto emit_fail;
     int b_bad_slot_count = buf.count;
     if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.lt deopt
@@ -2677,6 +3790,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(2, 31, 0))) goto emit_fail; // x2 = &scratch
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_number)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -2745,6 +3860,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(2, 31, 0))) goto emit_fail; // x2 = &scratch Value
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -2797,11 +3914,13 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (ar == 0) goto emit_fail;
                     if (a.kind == 4 || a.kind == 3 || a.kind == 1) {
                         if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail;
-                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)a.slot)) goto emit_fail;
                         if (!a64_emit(&buf, a64_add_imm(3, 31, 0))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_number_slot)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -2813,6 +3932,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(2, 31, 0))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_number_upvalue)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -2824,6 +3945,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(1, 31, 0))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_number_value_ptr)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -2853,11 +3976,13 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (br == 0) goto emit_fail;
                     if (b.kind == 4 || b.kind == 3 || b.kind == 1) {
                         if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail;
-                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)b.slot)) goto emit_fail;
                         if (!a64_emit(&buf, a64_add_imm(3, 31, 8))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_number_slot)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -2869,6 +3994,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(2, 31, 8))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_number_upvalue)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -2880,6 +4007,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(1, 31, 8))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_number_value_ptr)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -2950,11 +4079,13 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_patch_b(&buf, bend, end_label)) goto emit_fail;
                 } else if (a.kind == 4 && b.kind == 0 && IS_NUMBER(b.constant)) {
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail;
-                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)a.slot)) goto emit_fail;
                     if (!a64_emit(&buf, a64_fmov_rr(0, b.reg))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_cmp_eq_slot_const_number)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_fsub(rd, rd, rd))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bfalse = buf.count;
@@ -2964,11 +4095,13 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_patch_b_cond(&buf, bfalse, done, 0x0u)) goto emit_fail;
                 } else if (a.kind == 3 && b.kind == 2 && IS_STRING(b.constant)) {
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail;
-                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)a.slot)) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)(uintptr_t)AS_STRING(b.constant))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_cmp_eq_slot_const_string)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_fsub(rd, rd, rd))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bfalse = buf.count;
@@ -2991,6 +4124,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(2, 31, 184))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -3035,6 +4170,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(2, 31, 200))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -3071,6 +4208,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(1, 31, 200))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_values_equal_ptr)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_fsub(rd, rd, rd))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bfalse = buf.count;
@@ -3103,10 +4242,12 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     uint8_t rd = a64_alloc_temp(&temp_used);
                     if (rd == 0) goto emit_fail;
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail;
-                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)t.slot)) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_value_falsey_slot)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_fsub(rd, rd, rd))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bfalse = buf.count;
@@ -3122,6 +4263,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(0, 31, src))) goto emit_fail; // x0 = &value
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_value_falsey_value_ptr)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_fsub(rd, rd, rd))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bfalse = buf.count;
@@ -3137,6 +4280,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit_mov_imm64(&buf, 1, (uint64_t)t.slot)) goto emit_fail; // x1 = upvalue slot
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_value_falsey_upvalue)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_fsub(rd, rd, rd))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bfalse = buf.count;
@@ -3181,6 +4326,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(2, 31, 184))) goto emit_fail; // x2 = &table temp
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -3226,6 +4373,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(2, 31, 200))) goto emit_fail; // x2 = &value temp
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -3263,6 +4412,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                 if (!a64_emit(&buf, a64_add_imm(2, 31, 216))) goto emit_fail; // &out value
                 if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_append_from_values)) goto emit_fail;
                 if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                 if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                 if (deopt_branch_count >= 256) goto emit_fail;
                 deopt_branches[deopt_branch_count++] = buf.count;
@@ -3385,13 +4536,15 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         }
 
                         if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail; // x0 = slots
-                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail; // x1 = slot_count
+                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail; // x1 = slot_count
                         if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                         if (!a64_emit(&buf, a64_fmov_rr(0, key.reg))) goto emit_fail; // d0 = key
                         if (!a64_emit(&buf, a64_add_imm(3, 31, 0))) goto emit_fail; // x3 = &Value scratch
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_num_slot_as_value)) goto emit_fail;
 
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -3413,6 +4566,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(2, 31, 0))) goto emit_fail; // x2 = &Value scratch
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_num_upvalue_as_value)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -3430,7 +4585,7 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                 }
                 if (table.kind == 1) {
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail; // x0 = slots
-                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail; // x1 = slot_count
+                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail; // x1 = slot_count
                     if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                     if (!a64_emit(&buf, a64_fmov_rr(0, key.reg))) goto emit_fail; // d0 = key
                     if (!a64_emit(&buf, a64_add_imm(3, 31, 0))) goto emit_fail; // x3 = &scratch
@@ -3443,6 +4598,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_num_upvalue_as_number)) goto emit_fail;
                 }
                 if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                 if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                 if (deopt_branch_count >= 256) goto emit_fail;
                 deopt_branches[deopt_branch_count++] = buf.count;
@@ -3463,7 +4620,7 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     uint8_t dst_slot = instrs[i + 1].a;
                     if (table.kind == 1) {
                         if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail; // x0 = slots
-                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail; // x1 = slot_count
+                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail; // x1 = slot_count
                         if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                         if (key.kind == 2 && IS_STRING(key.constant)) {
                             int inline_fallback_br[16];
@@ -3602,13 +4759,15 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                             }
 
                             if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail; // x0 = slots
-                            if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail; // x1 = slot_count
+                            if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail; // x1 = slot_count
                             if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                             if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)(uintptr_t)AS_STRING(key.constant))) goto emit_fail;
                             if (!a64_emit(&buf, a64_add_imm(4, 31, 0))) goto emit_fail; // &Value scratch
                             if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_slot_as_value)) goto emit_fail;
 
                             if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                             if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                             if (deopt_branch_count >= 256) goto emit_fail;
                             deopt_branches[deopt_branch_count++] = buf.count;
@@ -3624,14 +4783,13 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                             int inline_done_label = buf.count;
                             if (!a64_patch_b(&buf, inline_done_br, inline_done_label)) goto emit_fail;
                         } else if (key.kind == 3) {
-                            uint16_t table_off = (uint16_t)((uint16_t)table.slot * (uint16_t)sizeof(Value));
-                            uint16_t key_off = (uint16_t)((uint16_t)key.slot * (uint16_t)sizeof(Value));
-                            if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 16))) goto emit_fail; // x0 = closure
-                            if (!a64_emit(&buf, a64_add_imm(1, 2, table_off))) goto emit_fail; // x1 = &table Value
-                            if (!a64_emit(&buf, a64_add_imm(2, 2, key_off))) goto emit_fail; // x2 = &key Value
-                            if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)in->deopt_offset)) goto emit_fail; // x3 = site
+                            uint16_t key_obj_off = (uint16_t)((uint16_t)key.slot * (uint16_t)sizeof(Value) + 8u);
+                            if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 240))) goto emit_fail; // x0 = slots
+                            if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;   // x1 = slot_count
+                            if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
+                            if (!a64_emit(&buf, a64_ldr_x_imm(3, 0, key_obj_off))) goto emit_fail; // x3 = key ObjString*
                             if (!a64_emit(&buf, a64_add_imm(4, 31, 0))) goto emit_fail; // x4 = &Value scratch
-                            if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_strkey_value_ptr_as_value_ic)) goto emit_fail;
+                            if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_slot_as_value)) goto emit_fail;
                         } else if (key.kind == 8) {
                             if (!a64_emit(&buf, a64_ldr_x_imm(10, 31, 16))) goto emit_fail; // x10 = closure
                             if (!a64_emit_mov_imm64(&buf, 11, (uint64_t)key.slot)) goto emit_fail;
@@ -3641,10 +4799,15 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                             if (!a64_emit(&buf, a64_mov_x(1, 11))) goto emit_fail;
                             if (!a64_emit(&buf, a64_mov_x(2, 12))) goto emit_fail;
                             if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                             if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                             if (deopt_branch_count >= 256) goto emit_fail;
                             deopt_branches[deopt_branch_count++] = buf.count;
                             if (!a64_emit(&buf, 0x54000000u)) goto emit_fail;
+                            if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 240))) goto emit_fail; // x0 = slots
+                            if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;   // x1 = slot_count
+                            if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                             if (!a64_emit(&buf, a64_ldr_x_imm(3, 31, 8))) goto emit_fail; // key ptr from scratch
                             if (!a64_emit(&buf, a64_add_imm(4, 31, 0))) goto emit_fail;
                             if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_slot_as_value)) goto emit_fail;
@@ -3658,16 +4821,19 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                             if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)(uintptr_t)AS_STRING(key.constant))) goto emit_fail;
                             if (!a64_emit(&buf, a64_add_imm(3, 31, 0))) goto emit_fail;
                             if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_upvalue_as_value)) goto emit_fail;
-                        } else if (key.kind == 3) {
-                            uint16_t key_off = (uint16_t)((uint16_t)key.slot * (uint16_t)sizeof(Value) + 8u);
-                            if (!a64_emit(&buf, a64_ldr_x_imm(2, 2, key_off))) goto emit_fail; // x2 = ObjString*
-                            if (!a64_emit(&buf, a64_add_imm(3, 31, 0))) goto emit_fail; // x3 = &Value scratch
-                            if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_upvalue_as_value)) goto emit_fail;
-                        } else {
+                    } else if (key.kind == 3) {
+                        uint16_t key_off = (uint16_t)((uint16_t)key.slot * (uint16_t)sizeof(Value) + 8u);
+                        if (!a64_emit(&buf, a64_ldr_x_imm(10, 31, 240))) goto emit_fail; // x10 = slots
+                        if (!a64_emit(&buf, a64_ldr_x_imm(2, 10, key_off))) goto emit_fail; // x2 = ObjString*
+                        if (!a64_emit(&buf, a64_add_imm(3, 31, 0))) goto emit_fail; // x3 = &Value scratch
+                        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_upvalue_as_value)) goto emit_fail;
+                    } else {
                             goto emit_fail;
                         }
                     }
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -3684,7 +4850,7 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                 int inline_skip_call_br = -1;
                 if (table.kind == 1) {
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail; // x0 = slots
-                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail; // x1 = slot_count
+                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail; // x1 = slot_count
                     if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                     if (key.kind == 2 && IS_STRING(key.constant)) {
                         int inline_fallback_br[16];
@@ -3827,14 +4993,13 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(4, 31, 0))) goto emit_fail; // x4 = &scratch
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_slot_as_number)) goto emit_fail;
                     } else if (key.kind == 3) {
-                        uint16_t table_off = (uint16_t)((uint16_t)table.slot * (uint16_t)sizeof(Value));
-                        uint16_t key_off = (uint16_t)((uint16_t)key.slot * (uint16_t)sizeof(Value));
-                        if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 16))) goto emit_fail; // x0 = closure
-                        if (!a64_emit(&buf, a64_add_imm(1, 2, table_off))) goto emit_fail; // x1 = &table Value
-                        if (!a64_emit(&buf, a64_add_imm(2, 2, key_off))) goto emit_fail; // x2 = &key Value
-                        if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)in->deopt_offset)) goto emit_fail; // x3 = site
+                        uint16_t key_obj_off = (uint16_t)((uint16_t)key.slot * (uint16_t)sizeof(Value) + 8u);
+                        if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 240))) goto emit_fail; // x0 = slots
+                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;   // x1 = slot_count
+                        if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
+                        if (!a64_emit(&buf, a64_ldr_x_imm(3, 0, key_obj_off))) goto emit_fail; // x3 = key ObjString*
                         if (!a64_emit(&buf, a64_add_imm(4, 31, 0))) goto emit_fail; // x4 = &scratch
-                        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_strkey_value_ptr_as_number_ic)) goto emit_fail;
+                        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_slot_as_number)) goto emit_fail;
                     } else if (key.kind == 8) {
                         if (!a64_emit(&buf, a64_ldr_x_imm(10, 31, 16))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 11, (uint64_t)key.slot)) goto emit_fail;
@@ -3844,10 +5009,15 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_mov_x(1, 11))) goto emit_fail;
                         if (!a64_emit(&buf, a64_mov_x(2, 12))) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
                         if (!a64_emit(&buf, 0x54000000u)) goto emit_fail;
+                        if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 240))) goto emit_fail; // x0 = slots
+                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;   // x1 = slot_count
+                        if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                         if (!a64_emit(&buf, a64_ldr_x_imm(3, 31, 8))) goto emit_fail;
                         if (!a64_emit(&buf, a64_add_imm(4, 31, 0))) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_slot_as_number)) goto emit_fail;
@@ -3863,7 +5033,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_upvalue_as_number)) goto emit_fail;
                     } else if (key.kind == 3) {
                         uint16_t key_off = (uint16_t)((uint16_t)key.slot * (uint16_t)sizeof(Value) + 8u);
-                        if (!a64_emit(&buf, a64_ldr_x_imm(2, 2, key_off))) goto emit_fail; // x2 = ObjString*
+                        if (!a64_emit(&buf, a64_ldr_x_imm(10, 31, 240))) goto emit_fail; // x10 = slots
+                        if (!a64_emit(&buf, a64_ldr_x_imm(2, 10, key_off))) goto emit_fail; // x2 = ObjString*
                         if (!a64_emit(&buf, a64_add_imm(3, 31, 0))) goto emit_fail; // x3 = &scratch
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_table_str_upvalue_as_number)) goto emit_fail;
                     } else {
@@ -3871,6 +5042,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     }
                 }
                 if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                 if (table.kind == 1 && inline_skip_call_br >= 0) {
                     if (!a64_patch_b(&buf, inline_skip_call_br, buf.count)) goto emit_fail;
                 }
@@ -3903,6 +5076,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(2, 31, 200))) goto emit_fail; // x2 = &value temp
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -3934,9 +5109,10 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                 } else {
                     goto emit_fail;
                 }
+                int inline_skip_call_br = -1;
                 if (table.kind == 1) {
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail; // x0 = slots
-                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail; // x1 = slot_count
+                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail; // x1 = slot_count
                     if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                     if (!a64_emit(&buf, a64_fmov_rr(0, key.reg))) goto emit_fail; // d0 = key
                     if (!a64_emit(&buf, a64_add_imm(3, 31, 200))) goto emit_fail; // x3 = &value
@@ -3949,6 +5125,11 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_set_table_num_upvalue_from_value)) goto emit_fail;
                 }
                 if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
+                if (table.kind == 1 && inline_skip_call_br >= 0) {
+                    if (!a64_patch_b(&buf, inline_skip_call_br, buf.count)) goto emit_fail;
+                }
                 if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                 if (deopt_branch_count >= 256) goto emit_fail;
                 deopt_branches[deopt_branch_count++] = buf.count;
@@ -3976,6 +5157,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(2, 31, 200))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -4007,11 +5190,144 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                 } else {
                     goto emit_fail;
                 }
+                int inline_skip_call_br = -1;
                 if (table.kind == 1) {
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail; // x0 = slots
-                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail; // x1 = slot_count
+                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail; // x1 = slot_count
                     if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)table.slot)) goto emit_fail; // x2 = table slot
                     if (key.kind == 2 && IS_STRING(key.constant)) {
+                        int inline_fallback_br[16];
+                        uint8_t inline_fallback_cond[16];
+                        int inline_fallback_count = 0;
+                        uint16_t table_off = (uint16_t)((uint16_t)table.slot * (uint16_t)sizeof(Value));
+                        uint16_t table_obj_off = (uint16_t)(table_off + 8u);
+                        uint16_t off_obj_type = (uint16_t)offsetof(struct Obj, type);
+                        uint16_t off_obj_nmfast = (uint16_t)offsetof(ObjTable, no_metatable_fast);
+                        uint16_t off_closure_fn = (uint16_t)offsetof(ObjClosure, function);
+                        uint16_t off_chunk_set_ic_tables = (uint16_t)(offsetof(ObjFunction, chunk) + offsetof(Chunk, set_table_ic_tables));
+                        uint16_t off_chunk_set_ic_keys = (uint16_t)(offsetof(ObjFunction, chunk) + offsetof(Chunk, set_table_ic_keys));
+                        uint16_t off_chunk_set_ic_slots = (uint16_t)(offsetof(ObjFunction, chunk) + offsetof(Chunk, set_table_ic_slots));
+                        uint16_t off_chunk_set_ic_versions = (uint16_t)(offsetof(ObjFunction, chunk) + offsetof(Chunk, set_table_ic_versions));
+                        uint16_t off_table_shape = (uint16_t)(offsetof(ObjTable, table) + offsetof(Table, shape_version));
+                        uint16_t off_table_capacity = (uint16_t)(offsetof(ObjTable, table) + offsetof(Table, capacity));
+                        uint16_t off_table_entries = (uint16_t)(offsetof(ObjTable, table) + offsetof(Table, entries));
+                        uint16_t off_entry_key = (uint16_t)offsetof(Entry, key);
+                        uint16_t off_entry_value = (uint16_t)offsetof(Entry, value);
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(9, 2, table_off))) goto emit_fail; // x9 = table Value.type
+                        if (!a64_emit(&buf, a64_cmp_w_imm(9, (uint16_t)VAL_OBJ))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x1u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne fallback
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(10, 2, table_obj_off))) goto emit_fail; // x10 = table Obj*
+                        if (!a64_emit(&buf, a64_ldr_w_imm(11, 10, off_obj_type))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_cmp_w_imm(11, (uint16_t)OBJ_TABLE))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x1u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne fallback
+
+                        if (!a64_emit(&buf, a64_ldr_b_imm(11, 10, off_obj_nmfast))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_cmp_w_imm(11, 0))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x0u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.eq fallback
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(11, 31, 16))) goto emit_fail; // x11 = closure
+                        if (!a64_emit(&buf, a64_ldr_x_imm(11, 11, off_closure_fn))) goto emit_fail; // x11 = function
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(12, 11, off_chunk_set_ic_tables))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_subs_imm(31, 12, 0))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x0u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.eq fallback
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(13, 11, off_chunk_set_ic_keys))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_subs_imm(31, 13, 0))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x0u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.eq fallback
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(14, 11, off_chunk_set_ic_slots))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_subs_imm(31, 14, 0))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x0u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.eq fallback
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(15, 11, off_chunk_set_ic_versions))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_subs_imm(31, 15, 0))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x0u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.eq fallback
+
+                        if (!a64_emit_mov_imm64(&buf, 16, (uint64_t)in->deopt_offset)) goto emit_fail; // x16 = site
+
+                        if (!a64_emit(&buf, a64_add_shifted(12, 12, 16, 3))) goto emit_fail; // &tables[site]
+                        if (!a64_emit(&buf, a64_ldr_x_imm(12, 12, 0))) goto emit_fail; // tables[site]
+                        if (!a64_emit(&buf, a64_subs_reg(31, 12, 10))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x1u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne fallback
+
+                        if (!a64_emit(&buf, a64_add_shifted(13, 13, 16, 3))) goto emit_fail; // &keys[site]
+                        if (!a64_emit(&buf, a64_ldr_x_imm(13, 13, 0))) goto emit_fail; // keys[site]
+                        if (!a64_emit_mov_imm64(&buf, 12, (uint64_t)(uintptr_t)AS_STRING(key.constant))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_subs_reg(31, 13, 12))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x1u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne fallback
+
+                        if (!a64_emit(&buf, a64_add_shifted(15, 15, 16, 2))) goto emit_fail; // &versions[site]
+                        if (!a64_emit(&buf, a64_ldr_w_imm(15, 15, 0))) goto emit_fail; // w15 = ic version
+                        if (!a64_emit(&buf, a64_ldr_w_imm(13, 10, off_table_shape))) goto emit_fail; // w13 = shape
+                        if (!a64_emit(&buf, a64_subs_reg(31, 15, 13))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x1u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne fallback
+
+                        if (!a64_emit(&buf, a64_add_shifted(14, 14, 16, 2))) goto emit_fail; // &slots[site]
+                        if (!a64_emit(&buf, a64_ldr_w_imm(14, 14, 0))) goto emit_fail; // w14 = slot
+                        if (!a64_emit(&buf, a64_ldr_w_imm(15, 10, off_table_capacity))) goto emit_fail; // w15 = capacity
+                        if (!a64_emit(&buf, a64_subs_reg(31, 14, 15))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0xAu;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ge fallback
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(15, 10, off_table_entries))) goto emit_fail; // x15 = entries
+                        if (!a64_emit(&buf, a64_add_shifted(15, 15, 14, 4))) goto emit_fail; // &entries[slot]
+                        if (!a64_emit(&buf, a64_ldr_x_imm(16, 15, off_entry_key))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_subs_reg(31, 16, 12))) goto emit_fail;
+                        if (inline_fallback_count >= 16) goto emit_fail;
+                        inline_fallback_br[inline_fallback_count++] = buf.count;
+                        inline_fallback_cond[inline_fallback_count - 1] = 0x1u;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne fallback
+
+                        if (!a64_emit(&buf, a64_ldr_x_imm(16, 31, 200))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_str_x_imm(16, 15, off_entry_value))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_ldr_x_imm(16, 31, 208))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_str_x_imm(16, 15, (uint16_t)(off_entry_value + 8u)))) goto emit_fail;
+
+                        if (!a64_emit_mov_imm64(&buf, 0, 1u)) goto emit_fail; // success
+                        inline_skip_call_br = buf.count;
+                        if (!a64_emit(&buf, 0x14000000u)) goto emit_fail; // b post-call
+
+                        {
+                            int inline_fallback_label = buf.count;
+                            for (int fb = 0; fb < inline_fallback_count; fb++) {
+                                if (!a64_patch_b_cond(&buf, inline_fallback_br[fb], inline_fallback_label, inline_fallback_cond[fb])) goto emit_fail;
+                            }
+                        }
                         if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)(uintptr_t)AS_STRING(key.constant))) goto emit_fail; // x3 = key
                         if (!a64_emit(&buf, a64_add_imm(4, 31, 200))) goto emit_fail; // x4 = &value
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_set_table_str_slot_from_value)) goto emit_fail;
@@ -4028,6 +5344,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_mov_x(1, 11))) goto emit_fail;
                         if (!a64_emit(&buf, a64_mov_x(2, 12))) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -4055,6 +5373,11 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     }
                 }
                 if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
+                if (table.kind == 1 && inline_skip_call_br >= 0) {
+                    if (!a64_patch_b(&buf, inline_skip_call_br, buf.count)) goto emit_fail;
+                }
                 if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                 if (deopt_branch_count >= 256) goto emit_fail;
                 deopt_branches[deopt_branch_count++] = buf.count;
@@ -4116,6 +5439,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(2, 31, base))) goto emit_fail; // x2 = &part
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -4143,13 +5468,15 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 24))) goto emit_fail; // x0 = vm
                     if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 16))) goto emit_fail; // x1 = closure
                     if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail; // x2 = slots
-                    if (!a64_emit(&buf, a64_ldr_x_imm(3, 31, 8))) goto emit_fail; // x3 = slot_count
+                    if (!a64_emit(&buf, a64_ldr_x_imm(3, 31, 224))) goto emit_fail; // x3 = slot_count
                     if (!a64_emit_mov_imm64(&buf, 4, (uint64_t)fused_table_slot)) goto emit_fail; // x4 = table slot
                     if (!a64_emit_mov_imm64(&buf, 5, (uint64_t)fused_get_site)) goto emit_fail; // x5 = site
                     if (!a64_emit(&buf, a64_add_imm(6, 31, 32))) goto emit_fail; // x6 = parts
                     if (!a64_emit(&buf, a64_add_imm(7, 31, 176))) goto emit_fail; // x7 = out_pair[2]
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_build3_get_table_slot_ic)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -4191,6 +5518,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(3, 31, 176))) goto emit_fail;  // x3 = &out str
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_build_string_from_parts)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     if (deopt_branch_count >= 256) goto emit_fail;
                     deopt_branches[deopt_branch_count++] = buf.count;
@@ -4238,8 +5567,17 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                 int nvals = argc + 1; // callee/receiver + args
                 if (argc < 0 || vsp < nvals) goto emit_fail;
                 int out_slot = vsp - nvals;
-                int guarded_closure_call = (in->op == TOI_JIT_NATIVE_OP_CALL && IS_CLOSURE(in->constant));
+                int guarded_closure_call = (in->op == TOI_JIT_NATIVE_OP_CALL &&
+                                            IS_CLOSURE(in->constant) &&
+                                            !jit_native_call_poly_enabled());
                 uint64_t guarded_program_hint = guarded_closure_call ? in->aux_data : 0u;
+                JitNativeCalleeEntryFn guarded_entry_fn = NULL;
+                if (guarded_closure_call && guarded_program_hint != 0u) {
+                    guarded_entry_fn = jit_native_get_or_create_callee_entry(
+                        AS_CLOSURE(in->constant),
+                        (void*)(uintptr_t)guarded_program_hint,
+                        argc);
+                }
                 int direct_local_callee = 0;
                 uint8_t direct_callee_slot = 0;
                 if (!guarded_closure_call && in->op == TOI_JIT_NATIVE_OP_CALL) {
@@ -4317,6 +5655,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                         if (!a64_emit(&buf, a64_add_imm(2, 31, base))) goto emit_fail; // x2 = &staged value
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_get_upvalue_slot_as_value)) goto emit_fail;
                         if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                         if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                         if (deopt_branch_count >= 256) goto emit_fail;
                         deopt_branches[deopt_branch_count++] = buf.count;
@@ -4339,9 +5679,33 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     }
                 }
 
+                int b_guarded_entry_success = -1;
                 if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 24))) goto emit_fail; // x0 = vm
                 if (guarded_closure_call) {
-                    if (!a64_emit_mov_imm64(&buf, 1, (uint64_t)(uintptr_t)AS_CLOSURE(in->constant))) goto emit_fail; // x1 = closure*
+                    if (guarded_entry_fn != NULL) {
+                        if (!a64_emit_mov_imm64(&buf, 1, (uint64_t)(uintptr_t)AS_CLOSURE(in->constant))) goto emit_fail; // x1 = callee closure*
+                        if (direct_local_args) {
+                            if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail; // x2 = slots
+                            if (argc > 0) {
+                                uint16_t arg_off = (uint16_t)((uint16_t)direct_arg_base * (uint16_t)sizeof(Value));
+                                if (!a64_emit(&buf, a64_add_imm(2, 2, arg_off))) goto emit_fail; // x2 = args ptr
+                            }
+                        } else {
+                            if (!a64_emit(&buf, a64_add_imm(2, 31, (uint16_t)(CALL_STAGE_BASE + 16u)))) goto emit_fail; // x2 = staged args
+                        }
+                        if (!a64_emit(&buf, a64_add_imm(3, 31, 184))) goto emit_fail; // x3 = &out Value
+                        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)guarded_entry_fn)) goto emit_fail;
+                        if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
+                        if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
+                        b_guarded_entry_success = buf.count;
+                        if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne success
+                        if (!a64_emit(&buf, a64_ldr_x_imm(0, 31, 24))) goto emit_fail; // x0 = vm
+                    }
+                    // Guarded-entry miss path stays native: dispatch with known callee/program
+                    // and only continue to VM if this fallback also rejects.
+                    if (!a64_emit_mov_imm64(&buf, 1, (uint64_t)(uintptr_t)AS_CLOSURE(in->constant))) goto emit_fail; // x1 = callee closure*
                     if (direct_local_args) {
                         if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail; // x2 = slots
                         if (argc > 0) {
@@ -4354,8 +5718,10 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)argc)) goto emit_fail; // x3 = argc
                     if (!a64_emit_mov_imm64(&buf, 4, guarded_program_hint)) goto emit_fail; // x4 = program hint ptr
                     if (!a64_emit(&buf, a64_add_imm(5, 31, 184))) goto emit_fail; // x5 = &out Value
-                    if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_call_closure_dispatch)) goto emit_fail;
+                    if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_call_closure_dispatch_after_entry_miss)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                 } else {
                     if (direct_local_callee) {
                         uint16_t callee_off = (uint16_t)((uint16_t)direct_callee_slot * (uint16_t)sizeof(Value));
@@ -4375,21 +5741,29 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     }
                     if (!a64_emit_mov_imm64(&buf, 3, (uint64_t)argc)) goto emit_fail; // x3 = argc
                     if (in->op == TOI_JIT_NATIVE_OP_CALL) {
-                        if (!a64_emit_mov_imm64(&buf, 4, IS_OBJ(in->constant) ? (uint64_t)(uintptr_t)AS_OBJ(in->constant) : 0u)) goto emit_fail; // x4 = target hint obj*
-                        if (!a64_emit(&buf, a64_add_imm(5, 31, 184))) goto emit_fail; // x5 = &out Value
+                        if (!a64_emit(&buf, a64_mov_x(5, 3))) goto emit_fail; // x5 = argc
+                        if (!a64_emit(&buf, a64_mov_x(4, 2))) goto emit_fail; // x4 = args ptr
+                        if (!a64_emit(&buf, a64_mov_x(3, 1))) goto emit_fail; // x3 = callee ptr
+                        if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 16))) goto emit_fail; // x1 = caller closure
+                        if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)in->deopt_offset)) goto emit_fail; // x2 = callsite offset
+                        if (!a64_emit_mov_imm64(&buf, 6, IS_OBJ(in->constant) ? (uint64_t)(uintptr_t)AS_OBJ(in->constant) : 0u)) goto emit_fail; // x6 = target hint obj*
+                        if (!a64_emit(&buf, a64_add_imm(7, 31, 184))) goto emit_fail; // x7 = &out Value
                         if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_call_dispatch)) goto emit_fail;
                     } else {
                         if (!IS_STRING(in->constant)) goto emit_fail;
                         if (!a64_emit_mov_imm64(&buf, 4, (uint64_t)(uintptr_t)AS_STRING(in->constant))) goto emit_fail; // x4 = method
                         if (!a64_emit(&buf, a64_add_imm(5, 31, 184))) goto emit_fail; // x5 = &out Value
-                        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_invoke_dispatch)) goto emit_fail;
+                        if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_invoke_dispatch_chained)) goto emit_fail;
                     }
                 }
                 if (!guarded_closure_call) {
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                 }
+                int b_call_success = -1;
                 if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
-                int b_call_success = buf.count;
+                b_call_success = buf.count;
                 if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.ne success
 
                 // Primitive rejected target; continue in VM at this opcode.
@@ -4408,7 +5782,12 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                 }
 
                 int call_success_label = buf.count;
-                if (!a64_patch_b_cond(&buf, b_call_success, call_success_label, 0x1u)) goto emit_fail; // ne
+                if (b_call_success >= 0) {
+                    if (!a64_patch_b_cond(&buf, b_call_success, call_success_label, 0x1u)) goto emit_fail; // ne
+                }
+                if (guarded_closure_call && b_guarded_entry_success >= 0) {
+                    if (!a64_patch_b_cond(&buf, b_guarded_entry_success, call_success_label, 0x1u)) goto emit_fail; // ne
+                }
 
                 // Push call result as value-scratch at stack position after pop(argc+1)+push(1).
                 {
@@ -4467,10 +5846,12 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     a64_free_temp(&temp_used, z);
                 } else if (t.kind == 4 || t.kind == 3 || t.kind == 1) {
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail;
-                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 8))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 2, (uint64_t)t.slot)) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_value_falsey_slot)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bpos = buf.count;
                     if (!a64_emit(&buf, 0x54000000u)) goto emit_fail;
@@ -4485,6 +5866,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit(&buf, a64_add_imm(0, 31, src))) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_value_falsey_value_ptr)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bpos = buf.count;
                     if (!a64_emit(&buf, 0x54000000u)) goto emit_fail;
@@ -4499,6 +5882,8 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                     if (!a64_emit_mov_imm64(&buf, 1, (uint64_t)t.slot)) goto emit_fail;
                     if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)&jit_native_value_falsey_upvalue)) goto emit_fail;
                     if (!a64_emit(&buf, a64_blr(9))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;
+                    if (!a64_emit(&buf, a64_ldr_x_imm(4, 31, 248))) goto emit_fail;
                     if (!a64_emit(&buf, a64_cmp_w_imm(0, 0))) goto emit_fail;
                     int bpos = buf.count;
                     if (!a64_emit(&buf, 0x54000000u)) goto emit_fail;
@@ -4550,17 +5935,20 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
 
     int exit_label = buf.count;
     if (!a64_emit_mov_imm64(&buf, 0, (uint64_t)TOI_JIT_NATIVE_EXEC_EXIT)) goto emit_fail;
-    if (!a64_emit(&buf, a64_add_imm(31, 31, 3072))) goto emit_fail;
+    if (!a64_emit(&buf, a64_ldr_x_imm(30, 31, 3072))) goto emit_fail; // restore LR
+    if (!a64_emit(&buf, a64_add_imm(31, 31, 3088))) goto emit_fail;
     if (!a64_emit(&buf, 0xD65F03C0u)) goto emit_fail;
 
     int continue_label = buf.count;
     if (!a64_emit_mov_imm64(&buf, 0, (uint64_t)TOI_JIT_NATIVE_EXEC_CONTINUE)) goto emit_fail;
-    if (!a64_emit(&buf, a64_add_imm(31, 31, 3072))) goto emit_fail;
+    if (!a64_emit(&buf, a64_ldr_x_imm(30, 31, 3072))) goto emit_fail; // restore LR
+    if (!a64_emit(&buf, a64_add_imm(31, 31, 3088))) goto emit_fail;
     if (!a64_emit(&buf, 0xD65F03C0u)) goto emit_fail;
 
     int deopt_label = buf.count;
     if (!a64_emit_mov_imm64(&buf, 0, (uint64_t)TOI_JIT_NATIVE_EXEC_DEOPT)) goto emit_fail;
-    if (!a64_emit(&buf, a64_add_imm(31, 31, 3072))) goto emit_fail;
+    if (!a64_emit(&buf, a64_ldr_x_imm(30, 31, 3072))) goto emit_fail; // restore LR
+    if (!a64_emit(&buf, a64_add_imm(31, 31, 3088))) goto emit_fail;
     if (!a64_emit(&buf, 0xD65F03C0u)) goto emit_fail;
 
     if (!a64_patch_b_cond(&buf, b_bad_slot_count, deopt_label, 0xBu)) goto emit_fail; // lt
@@ -4647,7 +6035,7 @@ int toi_jit_arm64_compile_qfor_num_stub(
         }
         return 0;
     }
-    if (code[loop_offset] != OP_QFOR_LOOP_NUM) {
+    if (code[loop_offset] != OP_QFOR_LOOP_NUM && code[loop_offset] != OP_FOR_LOOP) {
         if (err_buf != NULL && err_buf_size > 0) {
             snprintf(err_buf, err_buf_size, "arm64: unsupported loop opcode %u", (unsigned)code[loop_offset]);
         }
@@ -4886,6 +6274,12 @@ int toi_jit_arm64_compile_math_reduce(
 void toi_jit_arm64_free_code(void* code_mem, size_t code_size) {
     if (code_mem == NULL || code_size == 0) return;
     munmap(code_mem, code_size);
+}
+
+void toi_jit_arm64_get_chain_stats(uint64_t* attempts, uint64_t* hits, uint64_t* misses) {
+    if (attempts != NULL) *attempts = jit_native_chain_attempts;
+    if (hits != NULL) *hits = jit_native_chain_hits;
+    if (misses != NULL) *misses = jit_native_chain_misses;
 }
 
 int toi_jit_arm64_compile_numeric_loop(
@@ -5381,19 +6775,22 @@ int toi_jit_arm64_compile_native_trace(
         return 0;
     }
 
-    // First try direct emitted trace-op execution (no C bridge dispatch).
-    if (toi_jit_arm64_compile_native_trace_direct_core(
-            instrs,
-            instr_count,
-            guards,
-            guard_count,
-            var_slot,
-            end_slot,
-            out_fn,
-            out_code_mem,
-            out_code_size)) {
-        if (out_is_direct_core != NULL) *out_is_direct_core = 1;
-        return 1;
+    // First try direct emitted trace-op execution (no C bridge dispatch),
+    // unless explicitly forced to wrapper mode.
+    if (!jit_native_trace_force_bridge_wrapper()) {
+        if (toi_jit_arm64_compile_native_trace_direct_core(
+                instrs,
+                instr_count,
+                guards,
+                guard_count,
+                var_slot,
+                end_slot,
+                out_fn,
+                out_code_mem,
+                out_code_size)) {
+            if (out_is_direct_core != NULL) *out_is_direct_core = 1;
+            return 1;
+        }
     }
 
     Arm64CodeBuf buf;

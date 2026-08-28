@@ -1,0 +1,149 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Files And System</title>
+    <link rel="stylesheet" href="../docs.css">
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+</head>
+<body>
+    <aside>
+    <a class="brand" href="../README.html">
+    <img class="brand-logo" src="../logo.svg" alt="Toi logo">
+    <span>Toi Docs</span>
+    </a>
+    <ul class="nav">
+    
+    
+    <li><a href="../README.html">Quick Start</a></li>
+    
+    
+    
+    <li><a href="../benchmarks.html">Benchmarks</a></li>
+    
+    
+    
+    <li><a href="../getting-started.html">Getting Started</a></li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group">
+    <summary>Language</summary>
+    <ul class="subnav">
+    
+    <li><a href="../language/control-flow.html">Control Flow</a></li>
+    
+    <li><a href="../language/functions.html">Functions</a></li>
+    
+    <li><a href="../language/modules.html">Modules</a></li>
+    
+    <li><a href="../language/syntax.html">Language Syntax</a></li>
+    
+    <li><a href="../language/types-and-values.html">Types And Values</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group active" open>
+    <summary>Standard Library</summary>
+    <ul class="subnav">
+    
+    <li><a href="../stdlib/README.html">Standard Library</a></li>
+    
+    <li><a href="../stdlib/core.html">Core</a></li>
+    
+    <li class="active"><a href="../stdlib/files-and-system.html">Files And System</a></li>
+    
+    <li><a href="../stdlib/networking-and-concurrency.html">Networking And Concurrency</a></li>
+    
+    <li><a href="../stdlib/text-and-data.html">Text And Data</a></li>
+    
+    <li><a href="../stdlib/toi-libraries.html">Toi Libraries</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    </ul>
+    </aside>
+    <main><h1 id="files and system">Files And System</h1>
+<p>This group covers filesystem access, process helpers, low-level output, and OS-facing utilities.</p>
+<h2 id="`io`"><code>io</code></h2>
+<p>File and buffer I/O.</p>
+<p>Module-level entry points:</p>
+<ul>
+<li><code>io.open(path, mode)</code>
+</li>
+<li><code>io.buffer(initial=nil)</code>
+</li>
+</ul>
+<p>Common file methods:</p>
+<ul>
+<li><code>read([n])</code>
+</li>
+<li><code>readline()</code>
+</li>
+<li><code>write(data)</code>
+</li>
+<li><code>seek(...)</code>
+</li>
+<li><code>tell()</code>
+</li>
+<li><code>close()</code>
+</li>
+</ul>
+<pre><code class="language-toi"><span class="tok key">import</span> io
+
+<span class="tok key">with</span> io<span class="tok pun">.</span><span class="tok fn">open</span><span class="tok pun">(</span><span class="tok str">&quot;notes.txt&quot;</span><span class="tok pun">,</span> <span class="tok str">&quot;w&quot;</span><span class="tok pun">)</span> <span class="tok key">as</span> f
+  f<span class="tok pun">.</span><span class="tok fn">write</span><span class="tok pun">(</span><span class="tok str">&quot;hello&quot;</span><span class="tok pun">)</span></code></pre>
+<h2 id="`os`"><code>os</code></h2>
+<p>General operating-system helpers:</p>
+<ul>
+<li>environment: <code>getenv</code>, <code>setenv</code>
+</li>
+<li>process: <code>system</code>, <code>exit</code>
+</li>
+<li>files: <code>remove</code>, <code>rename</code>, <code>mkdir</code>, <code>rmdir</code>
+</li>
+<li>discovery: <code>listdir</code>, <code>isfile</code>, <code>isdir</code>, <code>exists</code>, <code>getcwd</code>
+</li>
+<li>memory/process helpers: <code>rss</code>, <code>trim</code>
+</li>
+</ul>
+<h2 id="`sys`"><code>sys</code></h2>
+<p>Low-level output helpers such as <code>sys.write(...)</code>.</p>
+<h2 id="`stat`"><code>stat</code></h2>
+<p>Filesystem metadata:</p>
+<ul>
+<li><code>stat</code>
+</li>
+<li><code>lstat</code>
+</li>
+<li><code>chmod</code>
+</li>
+<li><code>umask</code>
+</li>
+</ul>
+<h2 id="`dir`"><code>dir</code></h2>
+<p>Directory iteration helpers such as <code>dir.list(...)</code> and <code>dir.scandir(...)</code>.</p>
+<h2 id="`signal`"><code>signal</code></h2>
+<p>POSIX signal helpers:</p>
+<ul>
+<li><code>raise</code>
+</li>
+<li><code>ignore</code>
+</li>
+<li><code>default</code>
+</li>
+</ul>
+<h2 id="`mmap`"><code>mmap</code></h2>
+<p>Memory-mapped file access for large-file workflows and zero-copy style patterns.</p></main>
+</body>
+</html>

@@ -12,27 +12,30 @@ fn bench(name, func)
 
 fn bench_math()
   acc = 0
-  for i in 1..2000000
+  for i in 1..20000000
     acc = acc + (i * 3.14159) / ((i % 97) + 1)
   return acc
 
 fn bench_random()
   acc = 0
-  for i in 1..2000000
+  for i in 1..4000000
     acc = acc + math.random()
   return acc
 
 
 fn bench_string_concat()
-  parts = {""}
-  for i in 1..20000
-    parts[i] = "abc"
-  s = string.join("", parts)
-  return #s
+  total = 0
+  for pass in 1..200
+    parts = {""}
+    for i in 1..20000
+      parts[i] = "abc"
+    s = string.join("", parts)
+    total += #s
+  return total
 
 fn bench_string_ops()
   total = 0
-  for i in 1..20000
+  for i in 1..140000
     s = f"the quick brown fox jumps over the lazy dog {i}"
     x = s.upper()
     y = x.lower()
@@ -46,39 +49,43 @@ fn bench_table()
   for i in 1..200000
     t <+ i * 2
   sum = 0
-  for i in 1..200000
-    sum += t[i]
+  for pass in 1..50
+    for i in 1..200000
+      sum += t[i]
   return sum
 
 fn bench_sort()
   values = {}
-  table.reserve(values, 120000)
-  for i in 1..120000
-    values[i] = (i * 1103515245 + 12345) % 1000003
-  table.sort(values)
   total = 0
-  for i in 1..120000
-    total += values[i]
+  for pass in 1..6
+    values = {}
+    table.reserve(values, 120000)
+    for i in 1..120000
+      values[i] = (i * 1103515245 + 12345) % 1000003
+    table.sort(values)
+    for i in 1..120000
+      total += values[i]
   return total
 
 fn bench_list_comprehension()
   t = {i * 3 for i in 1..200000}
   sum = 0
-  for i in 1..200000
-    sum += t[i]
+  for pass in 1..55
+    for i in 1..200000
+      sum += t[i]
   return sum
 
 fn bench_calls()
   fn add(a: int, b: str)
     return a
   acc = 0
-  for i in 1..2000000
+  for i in 1..6000000
     acc = add(acc, "df")
   return acc
 
 fn bench_fstring()
   total = 0
-  for i in 1..200000
+  for i in 1..600000
     s = f"user:{i}-x{i % 10}"
     total = total + #s
   return total
@@ -99,7 +106,7 @@ fn bench_app_pipeline()
 
   cache = {}
   total = 0
-  for i in 1..300000
+  for i in 1..600000
     method = methods[(i % 4) + 1]
     path = paths[(i % 6) + 1]
     key = f"{method} {path}"
@@ -166,7 +173,7 @@ fn bench_app_handlers()
   routes["GET /health"] = 7
 
   total = 0
-  for i in 1..300000
+  for i in 1..600000
     method = methods[(i % 8) + 1]
     path = paths[(i % 8) + 1]
     key = f"{method} {path}"
@@ -197,7 +204,7 @@ fn bench_memory()
   gc
   base = mem()
   t = {}
-  for i in 1..200000
+  for i in 1..500000
     t[i] = string.format("abc%d", i)
   gc
   used = mem() - base

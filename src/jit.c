@@ -4,352 +4,30 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 #include "chunk.h"
+#include "jit_arm64.h"
 #include "jit_backend.h"
+#include "memory.h"
 #include "jit_native_trace.h"
 #include "jit.h"
+#include "jit_call_runtime.h"
+#include "jit_internal.h"
+#include "jit_ir.h"
 #include "object.h"
 #include "vm.h"
-#include "vm/build_string.h"
 
-typedef enum {
-    JOP_TINY_INLINE,
-    JOP_CONSTANT,
-    JOP_NIL,
-    JOP_TRUE,
-    JOP_FALSE,
-    JOP_POP,
-    JOP_GET_LOCAL,
-    JOP_GET2_LOCAL,
-    JOP_GET_UPVALUE,
-    JOP_SET_LOCAL,
-    JOP_SET_LOCAL_POP,
-    JOP_APPEND,
-    JOP_GET_TABLE,
-    JOP_GET_TABLE_NUM,
-    JOP_SET_TABLE,
-    JOP_SET_TABLE_NUM,
-    JOP_INC_LOCAL,
-    JOP_SUB_LOCAL_CONST,
-    JOP_MUL_LOCAL_CONST,
-    JOP_DIV_LOCAL_CONST,
-    JOP_MOD_LOCAL_CONST,
-    JOP_ADD_CONST,
-    JOP_SUB_CONST,
-    JOP_MUL_CONST,
-    JOP_DIV_CONST,
-    JOP_MOD_CONST,
-    JOP_ADD,
-    JOP_ADD_INPLACE,
-    JOP_SUBTRACT,
-    JOP_MULTIPLY,
-    JOP_DIVIDE,
-    JOP_MODULO,
-    JOP_NEGATE,
-    JOP_NOT,
-    JOP_IADD,
-    JOP_ISUB,
-    JOP_IMUL,
-    JOP_IDIV,
-    JOP_IMOD,
-    JOP_FADD,
-    JOP_FSUB,
-    JOP_FMUL,
-    JOP_FDIV,
-    JOP_FMOD,
-    JOP_QFADD,
-    JOP_QFSUB,
-    JOP_QFMUL,
-    JOP_QFDIV,
-    JOP_QFMOD,
-    JOP_EQUAL,
-    JOP_QGREATER_NUM,
-    JOP_QLESS_NUM,
-    JOP_JUMP,
-    JOP_JUMP_IF_FALSE,
-    JOP_JUMP_IF_TRUE,
-    JOP_CALL,
-    JOP_INVOKE,
-    JOP_LENGTH,
-    JOP_SLICE,
-    JOP_BUILD_STRING2,
-    JOP_BUILD_STRING3,
-    JOP_BUILD_STRING4,
-    JOP_BUILD_STRING5,
-    JOP_QCALL2,
-    JOP_QFOR_PREP_NUM,
-    JOP_QFOR_LOOP_NUM,
-    JOP_ADJUST_STACK,
-    JOP_RETURN
-} JitOpCode;
+#include "jit_pipeline.h"
 
-typedef struct {
-    JitOpCode op;
-    uint8_t a;
-    uint8_t b;
-    uint16_t target;
-    uint32_t byte_offset;
-    Value constant;
-} JitOp;
-
-#define JIT_TARGET_EXIT 0xFFFFu
-#define TYPED_EXIT_NONE 0xFFFFu
-
-typedef enum {
-    TYPED_EXIT_REASON_NONE = 0,
-    TYPED_EXIT_REASON_TYPE = 1,
-    TYPED_EXIT_REASON_STACK = 2,
-    TYPED_EXIT_REASON_CALL = 3,
-    TYPED_EXIT_REASON_INVOKE = 4,
-    TYPED_EXIT_REASON_TABLE = 5,
-    TYPED_EXIT_REASON_CONTROL = 6,
-    TYPED_EXIT_REASON_UNSUPPORTED = 7
-} TypedExitReason;
-
-typedef struct {
-    ObjFunction* function;
-    int op_count;
-    int max_slot;
-    int max_stack;
-    JitOp* ops;
-} JitProgram;
-
-typedef struct {
-    ObjFunction* function;
-    JitProgram* program;
-    uint8_t queued;
-    uint8_t compiled;
-    uint8_t failed;
-    uint16_t compile_attempts;
-    uint8_t runtime_disabled;
-    uint32_t exec_attempts;
-    uint32_t exec_hits;
-    uint16_t runtime_probe_limit;
-} JitTrackedFunction;
-
-typedef struct {
-    ObjFunction* function;
-    uint32_t opcode_offset;
-    uint32_t loop_start_offset;
-    uint32_t after_offset;
-    uint16_t max_slot;
-    uint16_t max_stack;
-    uint8_t opcode;
-    uint8_t compiled;
-    uint8_t failed;
-    uint8_t has_program;
-    uint16_t entry_pc;
-    uint32_t hot_count;
-    uint32_t compile_attempts;
-    uint8_t fail_reason;
-    uint8_t fail_opcode;
-    uint32_t fail_offset;
-    int op_count;
-    JitOp* ops;
-    ObjClosure** call_ic_closures;
-    JitProgram** call_ic_programs;
-    ObjClosure** call_ic2_closures;
-    JitProgram** call_ic2_programs;
-    ObjClosure** call_ic3_closures;
-    JitProgram** call_ic3_programs;
-    ObjClosure** call_ic4_closures;
-    JitProgram** call_ic4_programs;
-    ObjClosure** call_ic5_closures;
-    JitProgram** call_ic5_programs;
-    uint8_t numeric_fast_eligible;
-    uint8_t typed_fast_eligible;
-    uint8_t typed_fast_disabled;
-    uint32_t typed_fast_attempts;
-    uint32_t typed_fast_hits;
-    uint8_t typed_ir_ready;
-    uint16_t typed_exit_count;
-    uint32_t typed_exit_total;
-    uint8_t typed_last_exit_reason;
-    uint32_t typed_hot_exit_threshold;
-    uint16_t typed_hot_exit_count;
-    uint16_t* typed_pc_exit_ids;
-    uint8_t* typed_exit_reasons;
-    uint32_t* typed_exit_hits;
-    uint8_t* typed_exit_hot;
-    uint8_t value_fast_eligible;
-    uint8_t value_fast_disabled;
-    uint32_t value_fast_attempts;
-    uint32_t value_fast_hits;
-    uint8_t runtime_disabled;
-    uint32_t exec_attempts;
-    uint32_t exec_hits;
-    uint16_t runtime_probe_limit;
-    ToiJitNumericLoopFn native_numeric_loop_fn;
-    ToiJitSlotLoopFn native_slot_loop_fn;
-    ToiJitValueLoopFn native_value_loop_fn;
-    ToiJitNativeTraceFn native_trace_fn;
-    uint16_t native_value_instr_count;
-    uint8_t native_value_var_slot;
-    uint8_t native_value_end_slot;
-    ToiJitValueInstr native_value_instrs[256];
-    uint8_t native_trace_ready;
-    uint8_t native_trace_exec_safe;
-    uint8_t native_trace_direct_core;
-    uint16_t native_trace_instr_count;
-    uint16_t native_trace_guard_count;
-    uint8_t native_trace_has_call;
-    uint8_t native_trace_has_invoke;
-    uint8_t native_trace_has_build_string;
-    uint8_t native_trace_has_mutating_table;
-    uint8_t native_trace_has_get_table_generic;
-    uint16_t native_trace_prefix_work;
-    ToiJitNativeTraceInstr native_trace_instrs[256];
-    ToiJitNativeGuard native_trace_guards[256];
-    void* native_trace_code_mem;
-    size_t native_trace_code_size;
-    uint64_t native_trace_exec_attempts;
-    uint64_t native_trace_exec_hits;
-    uint64_t native_trace_exit_hits;
-    uint64_t native_trace_continue_hits;
-    uint64_t native_trace_soft_bails;
-    uint64_t native_trace_guard_failures;
-    uint64_t native_trace_deopts;
-    uint32_t native_trace_sandbox_runs;
-    uint8_t native_trace_sandbox_disabled;
-    uint8_t native_loop_acc_slot;
-    uint8_t native_loop_var_slot;
-    uint8_t native_loop_end_slot;
-    uint8_t native_loop_const_count;
-    uint8_t native_slot_loop_slot_count;
-    uint8_t native_slot_loop_used_count;
-    uint8_t native_slot_loop_written_count;
-    uint8_t native_slot_loop_used_slots[64];
-    uint8_t native_slot_loop_written_slots[64];
-    uint8_t native_slot_loop_upvalue_const_count;
-    uint8_t native_slot_loop_upvalue_const_idx[16];
-    uint8_t native_slot_loop_upvalue_idx[16];
-    double native_loop_consts[32];
-    ToiJitQforEmptyFn native_qfor_empty_fn;
-    ToiJitMathReduceFn native_math_reduce_fn;
-    uint8_t math_acc_slot;
-    uint8_t math_var_slot;
-    uint8_t math_end_slot;
-    double math_c1;
-    double math_c2;
-    double math_c3;
-    void* native_code_mem;
-    size_t native_code_size;
-} JitLoopTrace;
-
-#define TOI_JIT_LOOP_CACHE_SIZE 1024
-
-typedef struct {
-    ObjFunction* function;
-    uint32_t opcode_offset;
-    uint8_t opcode;
-    uint32_t loop_index_plus1;
-} JitLoopCacheEntry;
-
-#define TOI_JIT_FUNC_CACHE_SIZE 2048
-
-typedef struct {
-    ObjFunction* function;
-    uint32_t tracked_index_plus1;
-} JitFuncCacheEntry;
-
-typedef struct {
-    ObjFunction* function;
-    uint32_t loop_opcode_offset;
-    uint32_t exit_byte_offset;
-    uint16_t exit_id;
-    uint8_t reason;
-    uint8_t stitched;
-    uint32_t hits;
-} JitSideExitCandidate;
-
-typedef struct ToiJitState {
-    JitTrackedFunction* tracked;
-    int count;
-    int capacity;
-    JitLoopTrace* loops;
-    int loop_count;
-    int loop_capacity;
-    JitSideExitCandidate* side_exits;
-    int side_exit_count;
-    int side_exit_capacity;
-    JitFuncCacheEntry func_cache[TOI_JIT_FUNC_CACHE_SIZE];
-    JitLoopCacheEntry loop_cache[TOI_JIT_LOOP_CACHE_SIZE];
-    uint8_t loop_exec_enabled;
-    uint8_t loop_numeric_fast_enabled;
-    uint8_t loop_value_fast_enabled;
-    uint64_t loop_backedge_events;
-    uint64_t loop_compile_attempts;
-    uint64_t loop_compiled_count;
-    uint64_t loop_compile_fail_count;
-    uint64_t loop_fail_reason_unsupported;
-    uint64_t loop_fail_reason_decode;
-    uint64_t loop_fail_reason_jump;
-    uint64_t loop_fail_reason_stack;
-    uint8_t loop_last_fail_opcode;
-    uint32_t loop_last_fail_offset;
-    uint8_t loop_last_fail_reason;
-    uint64_t loop_fail_opcode_counts[256];
-    uint64_t loop_exec_attempts;
-    uint64_t loop_exec_hits;
-    uint8_t backend_host_supported;
-    uint8_t backend_enabled;
-    ToiJitBackendKind backend_kind;
-    uint64_t backend_loop_compile_attempts;
-    uint64_t backend_loop_compile_success;
-    uint64_t backend_loop_compile_fail;
-    uint64_t backend_value_loop_compile_attempts;
-    uint64_t backend_value_loop_compile_success;
-    uint64_t backend_value_loop_compile_fail;
-    uint64_t backend_value_loop_exec_attempts;
-    uint64_t backend_value_loop_exec_hits;
-    uint64_t backend_value_loop_runtime_disabled;
-    uint64_t backend_loop_exec_attempts;
-    uint64_t backend_loop_exec_hits;
-    uint64_t backend_slot_lower_attempts;
-    uint64_t backend_slot_lower_success;
-    uint64_t backend_slot_lower_fail;
-    uint64_t backend_slot_lower_fail_opcode_counts[256];
-    uint64_t native_trace_build_attempts;
-    uint64_t native_trace_build_success;
-    uint64_t native_trace_build_fail;
-    uint64_t native_trace_compile_attempts;
-    uint64_t native_trace_compile_success;
-    uint64_t native_trace_compile_fail;
-    uint64_t native_trace_compile_direct_core;
-    uint64_t native_trace_exec_safe_traces;
-    uint64_t native_trace_exec_unsafe_traces;
-    uint64_t native_trace_unsafe_opcode_counts[256];
-    uint64_t native_trace_runtime_disabled;
-    uint8_t native_trace_exec_globally_disabled;
-    uint8_t native_trace_exec_disable_reason;
-    uint64_t native_trace_exec_attempts;
-    uint64_t native_trace_exec_hits;
-    uint64_t native_trace_exec_attempts_direct_core;
-    uint64_t native_trace_exec_hits_direct_core;
-    uint64_t native_trace_guard_failures;
-    uint64_t native_trace_deopts;
-    uint64_t native_trace_deopt_opcode_counts[256];
-    uint64_t native_trace_deopt_reason_counts[32];
-    uint64_t native_trace_sandbox_attempts;
-    uint64_t native_trace_sandbox_success;
-    uint64_t native_trace_sandbox_fail;
-    uint8_t native_trace_exec_enabled;
-    uint8_t native_trace_sandbox_enabled;
-    uint64_t func_runtime_disabled;
-    uint64_t loop_runtime_disabled;
-    uint64_t loop_numeric_fast_attempts;
-    uint64_t loop_numeric_fast_hits;
-    uint64_t loop_typed_fast_attempts;
-    uint64_t loop_typed_fast_hits;
-    uint64_t loop_typed_exit_promotions;
-    uint64_t loop_typed_side_exit_stitches;
-    uint64_t loop_side_exit_candidates;
-    uint64_t loop_side_exit_hits;
-} ToiJitState;
-
-static ToiJitState* jit_state(VM* vm) {
+ToiJitState* jit_state(VM* vm) {
     return (ToiJitState*)vm->native_jit;
+}
+
+int toi_jit_in_native_trace(VM* vm) {
+    ToiJitState* st = jit_state(vm);
+    if (st == NULL) return 0;
+    return st->native_trace_active_depth != 0;
 }
 
 static uint32_t jit_func_hash(ObjFunction* function) {
@@ -379,41 +57,60 @@ static JitTrackedFunction* jit_find_tracked(ToiJitState* st, ObjFunction* functi
     return NULL;
 }
 
-static int read_u16(const uint8_t* code, int offset);
-static int decode_instr_len(const uint8_t* code, int offset, int count);
-static int execute_program(
+static JitTrackedFunction* jit_link_site_cache_lookup(
+    ToiJitState* st,
+    ObjFunction* caller,
+    uint32_t opcode_offset,
+    ObjFunction* callee) {
+    if (st == NULL || st->next_pipeline == NULL || caller == NULL || callee == NULL) return NULL;
+    uint32_t tracked_index_plus1 = jit_pipeline_link_site_cache_lookup(
+        st->next_pipeline, caller, opcode_offset, callee);
+    if (tracked_index_plus1 == 0) return NULL;
+    uint32_t idx = tracked_index_plus1 - 1u;
+    if ((int)idx >= st->count) {
+        jit_pipeline_link_site_cache_store(st->next_pipeline, caller, opcode_offset, callee, 0u);
+        return NULL;
+    }
+    JitTrackedFunction* entry = &st->tracked[idx];
+    if (entry->function != callee) {
+        jit_pipeline_link_site_cache_store(st->next_pipeline, caller, opcode_offset, callee, 0u);
+        return NULL;
+    }
+    return entry;
+}
+
+static void jit_link_site_cache_store(
+    ToiJitState* st,
+    ObjFunction* caller,
+    uint32_t opcode_offset,
+    ObjFunction* callee,
+    JitTrackedFunction* entry) {
+    if (st == NULL || st->next_pipeline == NULL || caller == NULL || callee == NULL || entry == NULL) return;
+    if (st->tracked == NULL || st->count <= 0) return;
+    int raw_idx = (int)(entry - st->tracked);
+    if (raw_idx < 0 || raw_idx >= st->count) return;
+    jit_pipeline_link_site_cache_store(
+        st->next_pipeline, caller, opcode_offset, callee, (uint32_t)raw_idx + 1u);
+}
+
+int execute_program(
     VM* vm,
     ObjClosure* closure,
     int arg_count,
     JitProgram* program,
     Value* args,
     Value* out);
-static int map_supported_opcode(uint8_t op, JitOpCode* out);
 static JitLoopTrace* jit_find_loop(ToiJitState* st, ObjFunction* function, int opcode_offset, uint8_t opcode);
-static int jit_build_string_primitive(VM* vm, Value* parts, int count, Value* out);
-static void jit_update_trace_call_ic(VM* vm, JitLoopTrace* trace, int pc, Value callee, int argc);
-static int jit_try_trace_call_ic(
-    VM* vm,
-    ObjFunction* function,
-    JitLoopTrace* trace,
-    const JitOp* op,
-    int pc,
-    Value callee,
-    Value* args,
-    int argc,
-    Value* out);
-static int jit_call_primitive(VM* vm, Value callee, Value* args, int argc, Value* out);
-static int jit_invoke_primitive(VM* vm, Value receiver, Value method_name, Value* args, int argc, Value* out);
-static int jit_value_is_self_callable(Value v);
-static int jit_objstring_eq_name(ObjString* a, ObjString* b, const char* cstr);
-static int jit_length_primitive(Value in, Value* out);
-static int jit_slice_primitive(Value obj, Value start, Value end, Value step, Value* out);
-static int jit_eval_tiny_inline2_local(ObjFunction* function, Value arg0, Value arg1, Value* out);
+int jit_eval_tiny_inline2_local(ObjFunction* function, Value arg0, Value arg1, Value* out);
 static Value numeric_binop(JitOpCode op, double a, double b);
-static int jit_get_compiled_closure_program(VM* vm, ObjClosure* closure, JitProgram** out_program);
 static int build_typed_trace_meta(JitLoopTrace* trace);
 static uint8_t typed_exit_reason_for_op(JitOpCode op);
 static void jit_record_typed_exit(ToiJitState* st, JitLoopTrace* trace, int pc, uint8_t reason);
+static int jit_try_stitch_soft_continue_calls(
+    VM* vm,
+    CallFrame* frame,
+    ToiJitNativeExecState* exec_state,
+    uint32_t* io_off);
 static uint32_t jit_typed_hot_exit_threshold(void);
 static int jit_try_typed_side_exit_to_interp(
     ToiJitState* st,
@@ -427,6 +124,78 @@ static int jit_try_typed_side_exit_to_interp(
     int pc);
 static void jit_record_side_exit_candidate(ToiJitState* st, JitLoopTrace* trace, uint16_t exit_id, int pc);
 static void native_trace_seed_call_program_hints(VM* vm, JitLoopTrace* trace);
+
+static int jit_program_ops_chain_safe(const JitProgram* program) {
+    if (program == NULL || program->ops == NULL || program->op_count <= 0) return 0;
+    for (int i = 0; i < program->op_count; i++) {
+        JitOpCode op = program->ops[i].op;
+        switch (op) {
+            case JOP_TINY_INLINE:
+            case JOP_CONSTANT:
+            case JOP_NIL:
+            case JOP_TRUE:
+            case JOP_FALSE:
+            case JOP_POP:
+            case JOP_GET_LOCAL:
+            case JOP_GET2_LOCAL:
+            case JOP_GET_UPVALUE:
+            case JOP_SET_LOCAL:
+            case JOP_SET_LOCAL_POP:
+            case JOP_INC_LOCAL:
+            case JOP_SUB_LOCAL_CONST:
+            case JOP_MUL_LOCAL_CONST:
+            case JOP_DIV_LOCAL_CONST:
+            case JOP_MOD_LOCAL_CONST:
+            case JOP_ADD_CONST:
+            case JOP_SUB_CONST:
+            case JOP_MUL_CONST:
+            case JOP_DIV_CONST:
+            case JOP_MOD_CONST:
+            case JOP_ADD:
+            case JOP_ADD_INPLACE:
+            case JOP_SUBTRACT:
+            case JOP_MULTIPLY:
+            case JOP_DIVIDE:
+            case JOP_MODULO:
+            case JOP_NEGATE:
+            case JOP_NOT:
+            case JOP_IADD:
+            case JOP_ISUB:
+            case JOP_IMUL:
+            case JOP_IDIV:
+            case JOP_IMOD:
+            case JOP_FADD:
+            case JOP_FSUB:
+            case JOP_FMUL:
+            case JOP_FDIV:
+            case JOP_FMOD:
+            case JOP_QFADD:
+            case JOP_QFSUB:
+            case JOP_QFMUL:
+            case JOP_QFDIV:
+            case JOP_QFMOD:
+            case JOP_EQUAL:
+            case JOP_QGREATER_NUM:
+            case JOP_QLESS_NUM:
+            case JOP_JUMP:
+            case JOP_JUMP_IF_FALSE:
+            case JOP_JUMP_IF_TRUE:
+            case JOP_QFOR_PREP_NUM:
+            case JOP_QFOR_LOOP_NUM:
+            case JOP_ADJUST_STACK:
+            case JOP_RETURN:
+                break;
+            default:
+                return 0;
+        }
+    }
+    return 1;
+}
+
+int toi_jit_program_chain_safe(void* program_ptr) {
+    if (program_ptr == NULL) return 0;
+    return jit_program_ops_chain_safe((const JitProgram*)program_ptr);
+}
 
 enum {
     LOOP_FAIL_NONE = 0,
@@ -480,13 +249,152 @@ static const char* native_trace_deopt_reason_name(uint8_t reason) {
     }
 }
 
+static int jit_try_stitch_soft_continue_calls(
+    VM* vm,
+    CallFrame* frame,
+    ToiJitNativeExecState* exec_state,
+    uint32_t* io_off) {
+    if (vm == NULL || frame == NULL || frame->closure == NULL || exec_state == NULL || io_off == NULL) return 0;
+    if (exec_state->reason != TOI_JIT_NATIVE_DEOPT_CALL_TARGET &&
+        exec_state->reason != TOI_JIT_NATIVE_DEOPT_INVOKE_TARGET) {
+        return 0;
+    }
+    ObjFunction* function = frame->closure->function;
+    if (function == NULL) return 0;
+    Chunk* chunk = &function->chunk;
+    int sp = (int)exec_state->stack_count;
+    if (sp <= 0 || sp > TOI_JIT_NATIVE_EXEC_STACK_CAP) return 0;
+    Value* st = exec_state->stack;
+    uint32_t off = *io_off;
+    uint8_t* code = chunk->code;
+    int stitched_count = 0;
+    const int stitch_budget = 32;
+    while (stitched_count < stitch_budget && off < (uint32_t)chunk->count) {
+        uint8_t op = code[off];
+        int len = jit_ir_decode_instr_len(code, (int)off, chunk->count);
+        if (len <= 0 || (int)off + len > chunk->count) break;
+        if (op == OP_INVOKE) {
+            int argc = (int)code[off + 2];
+            if (argc < 0 || sp < argc + 1) return 0;
+            int recv_idx = sp - 1 - argc;
+            Value method = chunk->constants.values[(int)code[off + 1]];
+            Value out = NIL_VAL;
+            if (!jit_invoke_primitive(vm, st[recv_idx], method, &st[recv_idx + 1], argc, &out)) {
+                if (stitched_count == 0) return 0;
+                break;
+            }
+            st[recv_idx] = out;
+            sp = recv_idx + 1;
+            exec_state->stack_count = (uint16_t)sp;
+            off += (uint32_t)len;
+            stitched_count++;
+            continue;
+        }
+        int argc = -1;
+        if (op == OP_CALL) argc = (int)code[off + 1];
+        else if (op == OP_CALL0 || op == OP_QCALL0) argc = 0;
+        else if (op == OP_CALL1 || op == OP_QCALL1) argc = 1;
+        else if (op == OP_CALL2 || op == OP_QCALL2) argc = 2;
+        if (argc < 0) break;
+        if (sp < argc + 1) return 0;
+        int callee_idx = sp - 1 - argc;
+        int out_count = 0;
+        int out_cap = TOI_JIT_NATIVE_EXEC_STACK_CAP - callee_idx;
+        if (out_cap <= 0) return 0;
+        if (!jit_call_primitive_multi(
+                vm,
+                st[callee_idx],
+                &st[callee_idx + 1],
+                argc,
+                &st[callee_idx],
+                out_cap,
+                &out_count)) {
+            if (stitched_count == 0) return 0;
+            break;
+        }
+        if (out_count <= 0 || callee_idx + out_count > TOI_JIT_NATIVE_EXEC_STACK_CAP) return 0;
+        sp = callee_idx + out_count;
+        exec_state->stack_count = (uint16_t)sp;
+        off += (uint32_t)len;
+        stitched_count++;
+    }
+    if (stitched_count == 0) return 0;
+    *io_off = off;
+    exec_state->reason = TOI_JIT_NATIVE_DEOPT_NONE;
+    exec_state->resume_offset = *io_off;
+    return 1;
+}
+
 static int jit_dump_loops_enabled(void) {
     const char* v = getenv("TOI_JIT_DUMP_LOOPS");
     return v != NULL && v[0] != '\0' && strcmp(v, "0") != 0;
 }
 
+static int jit_debug_mixed_loop_enabled(void) {
+    const char* v = getenv("TOI_JIT_DEBUG_MIXED_LOOP");
+    return v != NULL && v[0] != '\0' && strcmp(v, "0") != 0;
+}
+
+static int jit_debug_mixed_loop_limit(void) {
+    const char* v = getenv("TOI_JIT_DEBUG_MIXED_LOOP_MAX");
+    if (v == NULL || *v == '\0') return 200;
+    char* endptr = NULL;
+    long parsed = strtol(v, &endptr, 10);
+    if (endptr == v) return 200;
+    if (parsed < 1) return 1;
+    if (parsed > 100000) return 100000;
+    return (int)parsed;
+}
+
+static int jit_debug_mixed_loop_matches_fn(ObjFunction* function) {
+    if (!jit_debug_mixed_loop_enabled()) return 0;
+    const char* filter = getenv("TOI_JIT_DEBUG_MIXED_LOOP_FN");
+    if (filter == NULL || *filter == '\0') return 1;
+    const char* fn_name = "<script>";
+    if (function != NULL && function->name != NULL && function->name->chars != NULL) {
+        fn_name = function->name->chars;
+    }
+    return strstr(fn_name, filter) != NULL;
+}
+
+static const char* jit_value_kind_name(Value value) {
+    if (IS_NIL(value)) return "nil";
+    if (IS_BOOL(value)) return "bool";
+    if (IS_NUMBER(value)) return "number";
+    if (!IS_OBJ(value)) return "value";
+    struct Obj* obj = AS_OBJ(value);
+    if (obj == NULL) return "obj";
+    switch (obj->type) {
+        case OBJ_STRING: return "string";
+        case OBJ_TABLE: return "table";
+        case OBJ_FUNCTION: return "function";
+        case OBJ_NATIVE: return "native";
+        case OBJ_UPVALUE: return "upvalue";
+        case OBJ_CLOSURE: return "closure";
+        case OBJ_THREAD: return "thread";
+        case OBJ_USERDATA: return "userdata";
+        case OBJ_BOUND_METHOD: return "bound_method";
+        default: return "obj";
+    }
+}
+
+static int is_numeric_for_loop_opcode(uint8_t opcode) {
+    return opcode == OP_QFOR_LOOP_NUM || opcode == OP_FOR_LOOP;
+}
+
 static int jit_mixed_loops_enabled(void) {
     return 1;
+}
+
+static uint32_t jit_loop_hot_threshold(void) {
+    const char* v = getenv("TOI_JIT_LOOP_HOT");
+    if (v == NULL || *v == '\0') return 1024u;
+    char* endptr = NULL;
+    unsigned long parsed = strtoul(v, &endptr, 10);
+    if (endptr == v) return 1024u;
+    if (parsed < 8ul) return 8u;
+    if (parsed > 100000ul) return 100000u;
+    return (uint32_t)parsed;
 }
 
 static uint32_t jit_typed_hot_exit_threshold(void) {
@@ -888,12 +796,6 @@ static int is_falsey_jit(Value v) {
     return 0;
 }
 
-static void free_program(JitProgram* program) {
-    if (program == NULL) return;
-    free(program->ops);
-    free(program);
-}
-
 static Value jit_seed_call_hint_from_chunk(const Chunk* chunk, int off, int argc) {
     if (chunk == NULL || off < 0 || argc < 0 || off >= chunk->capacity) return NIL_VAL;
     ObjClosure* c = NULL;
@@ -920,7 +822,7 @@ static Value jit_seed_call_hint_from_chunk(const Chunk* chunk, int off, int argc
     return NIL_VAL;
 }
 
-static JitTrackedFunction* jit_find_or_add(VM* vm, ObjFunction* function) {
+JitTrackedFunction* jit_find_or_add(VM* vm, ObjFunction* function) {
     ToiJitState* st = jit_state(vm);
     if (st == NULL || function == NULL) return NULL;
 
@@ -1034,14 +936,14 @@ static int compile_qfor_loop_trace(ObjFunction* function, JitLoopTrace* trace, i
     int max_stack = 0;
 
     for (int off = loop_start; off < loop_end;) {
-        int len = decode_instr_len(code, off, chunk->count);
+        int len = jit_ir_decode_instr_len(code, off, chunk->count);
         if (len <= 0 || off + len > loop_end) {
             set_loop_fail(trace, LOOP_FAIL_DECODE, code[off], off);
             free(byte_to_idx);
             return 0;
         }
         JitOpCode mapped = JOP_POP;
-        if (!map_supported_opcode(code[off], &mapped)) {
+        if (!jit_ir_map_supported_opcode(code[off], &mapped)) {
             set_loop_fail(trace, LOOP_FAIL_UNSUPPORTED, code[off], off);
             free(byte_to_idx);
             return 0;
@@ -1191,7 +1093,7 @@ static int compile_qfor_loop_trace(ObjFunction* function, JitLoopTrace* trace, i
         JitOp* out = &ops[idx++];
         out->byte_offset = (uint32_t)off;
         if (off == (int)trace->opcode_offset) entry_pc = idx - 1;
-        if (!map_supported_opcode(op, &out->op)) {
+        if (!jit_ir_map_supported_opcode(op, &out->op)) {
             set_loop_fail(trace, LOOP_FAIL_UNSUPPORTED, op, off);
             free(byte_to_idx);
             free(ops);
@@ -1262,7 +1164,7 @@ static int compile_qfor_loop_trace(ObjFunction* function, JitLoopTrace* trace, i
             case OP_JUMP_IF_TRUE:
             case OP_LOOP: {
                 int sign = (op == OP_LOOP) ? -1 : 1;
-                int jump = read_u16(code, off + 1);
+                int jump = jit_ir_read_u16(code, off + 1);
                 int target_byte = off + 3 + sign * jump;
                 if (target_byte < loop_start || target_byte >= loop_end) {
                     if (op != OP_LOOP && target_byte >= loop_end) {
@@ -1305,13 +1207,15 @@ static int compile_qfor_loop_trace(ObjFunction* function, JitLoopTrace* trace, i
                 break;
             }
             case OP_QFOR_PREP_NUM:
-            case OP_QFOR_LOOP_NUM: {
+            case OP_QFOR_LOOP_NUM:
+            case OP_FOR_PREP:
+            case OP_FOR_LOOP: {
                 out->a = code[off + 1];
                 out->b = code[off + 2];
-                int sign = (op == OP_QFOR_LOOP_NUM) ? -1 : 1;
-                int jump = read_u16(code, off + 3);
+                int sign = (op == OP_QFOR_LOOP_NUM || op == OP_FOR_LOOP) ? -1 : 1;
+                int jump = jit_ir_read_u16(code, off + 3);
                 int target_byte = off + 5 + sign * jump;
-                if (op == OP_QFOR_PREP_NUM &&
+                if ((op == OP_QFOR_PREP_NUM || op == OP_FOR_PREP) &&
                     (target_byte < loop_start || target_byte >= loop_end)) {
                     out->target = JIT_TARGET_EXIT;
                 } else {
@@ -1355,7 +1259,7 @@ static int compile_qfor_loop_trace(ObjFunction* function, JitLoopTrace* trace, i
             default:
                 break;
         }
-        off += decode_instr_len(code, off, chunk->count);
+        off += jit_ir_decode_instr_len(code, off, chunk->count);
     }
 
     free(trace->ops);
@@ -1490,15 +1394,6 @@ static int trace_has_dynamic_calls(const JitLoopTrace* trace) {
     return 0;
 }
 
-static int trace_has_mutating_table_ops(const JitLoopTrace* trace) {
-    if (trace == NULL || !trace->has_program || trace->ops == NULL) return 0;
-    for (int i = 0; i < trace->op_count; i++) {
-        JitOpCode op = trace->ops[i].op;
-        if (op == JOP_APPEND || op == JOP_SET_TABLE || op == JOP_SET_TABLE_NUM) return 1;
-    }
-    return 0;
-}
-
 static uint16_t trace_runtime_probe_limit(const JitLoopTrace* trace) {
     if (trace == NULL) return 128;
     if (trace->native_slot_loop_fn != NULL) return 8192;
@@ -1511,7 +1406,7 @@ static uint16_t trace_runtime_probe_limit(const JitLoopTrace* trace) {
     return 128;
 }
 
-static uint16_t program_runtime_probe_limit(const JitProgram* program) {
+uint16_t program_runtime_probe_limit(const JitProgram* program) {
     if (program == NULL || program->ops == NULL || program->op_count <= 0) return 128;
     int has_call = 0;
     int has_invoke = 0;
@@ -2089,8 +1984,16 @@ static int build_value_loop_ir(
             case JOP_GET_TABLE_NUM: insn.op = TOI_JIT_VAL_GET_TABLE_NUM; break;
             case JOP_SET_TABLE: insn.op = TOI_JIT_VAL_SET_TABLE; break;
             case JOP_SET_TABLE_NUM: insn.op = TOI_JIT_VAL_SET_TABLE_NUM; break;
-            case JOP_CALL: insn.op = TOI_JIT_VAL_CALL; insn.a = op->a; break;
-            case JOP_INVOKE: insn.op = TOI_JIT_VAL_INVOKE; insn.a = op->a; break;
+            case JOP_CALL:
+                insn.op = TOI_JIT_VAL_CALL;
+                insn.a = op->a;
+                insn.constant = op->constant;
+                break;
+            case JOP_INVOKE:
+                insn.op = TOI_JIT_VAL_INVOKE;
+                insn.a = op->a;
+                insn.constant = op->constant;
+                break;
             case JOP_BUILD_STRING2: insn.op = TOI_JIT_VAL_BUILD_STRING2; break;
             case JOP_BUILD_STRING3: insn.op = TOI_JIT_VAL_BUILD_STRING3; break;
             case JOP_BUILD_STRING4: insn.op = TOI_JIT_VAL_BUILD_STRING4; break;
@@ -2579,7 +2482,7 @@ static int native_trace_is_exec_safe(const JitLoopTrace* trace, uint8_t* out_rej
     if (!trace->native_trace_ready || trace->native_trace_fn == NULL) return 0;
     if (trace->native_trace_instr_count == 0 || trace->native_trace_instr_count > 256) return 0;
     if (trace->native_trace_guard_count > 256) return 0;
-    if (trace->opcode != OP_QFOR_LOOP_NUM) return 0;
+    if (!is_numeric_for_loop_opcode(trace->opcode) && trace->opcode != OP_LOOP) return 0;
 
     int instr_count = (int)trace->native_trace_instr_count;
     for (int i = 0; i < instr_count; i++) {
@@ -2629,6 +2532,11 @@ static int native_trace_is_exec_safe(const JitLoopTrace* trace, uint8_t* out_rej
 
 static int native_trace_guards_hold(VM* vm, const JitLoopTrace* trace, CallFrame* frame) {
     if (vm == NULL || trace == NULL || frame == NULL || frame->closure == NULL) return 0;
+    static int poly_calls_env = -1;
+    if (poly_calls_env < 0) {
+        const char* v = getenv("TOI_JIT_NATIVE_CALL_POLY");
+        poly_calls_env = (v != NULL && v[0] != '\0' && strcmp(v, "0") != 0) ? 1 : 0;
+    }
     int slot_count = (int)trace->max_slot + 1;
     for (int i = 0; i < (int)trace->native_trace_guard_count; i++) {
         const ToiJitNativeGuard* g = &trace->native_trace_guards[i];
@@ -2676,6 +2584,9 @@ static int native_trace_guards_hold(VM* vm, const JitLoopTrace* trace, CallFrame
                 break;
             }
             case TOI_JIT_NATIVE_GUARD_CALL_TARGET: {
+                if (trace->native_trace_direct_core && poly_calls_env) {
+                    break;
+                }
                 Value callee = NIL_VAL;
                 int argc = (int)g->aux;
                 if (g->slot_b == 1) {
@@ -2708,6 +2619,9 @@ static int native_trace_guards_hold(VM* vm, const JitLoopTrace* trace, CallFrame
                 break;
             }
             case TOI_JIT_NATIVE_GUARD_INVOKE_TARGET: {
+                if (trace->native_trace_direct_core && poly_calls_env) {
+                    break;
+                }
                 Value receiver = NIL_VAL;
                 if (g->slot_b == 1) {
                     if ((int)g->slot_a < 0 || (int)g->slot_a >= frame->closure->upvalue_count) return 0;
@@ -3402,9 +3316,20 @@ static int execute_typed_trace_fast(
                 Value callee = work[callee_idx];
                 Value out = NIL_VAL;
                 int ic_hit = jit_try_trace_call_ic(vm, function, trace, op, pc, callee, &work[callee_idx + 1], argc, &out);
-                if (!ic_hit &&
-                    !jit_call_primitive(vm, callee, &work[callee_idx + 1], argc, &out)) {
-                    TYPED_FAIL("call-primitive");
+                if (!ic_hit) {
+                    int out_count = 0;
+                    if (!jit_call_primitive_multi(
+                            vm,
+                            callee,
+                            &work[callee_idx + 1],
+                            argc,
+                            &work[callee_idx],
+                            trace->max_stack - callee_idx,
+                            &out_count)) {
+                        TYPED_FAIL("call-primitive");
+                    }
+                    if (out_count != 1) TYPED_FAIL("call-multi-return");
+                    out = work[callee_idx];
                 }
                 if (!ic_hit) {
                     jit_update_trace_call_ic(vm, trace, pc, callee, argc);
@@ -3624,20 +3549,20 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
     Chunk* chunk = &function->chunk;
     if (chunk->code == NULL) return 0;
     set_loop_fail(trace, LOOP_FAIL_NONE, OP_NIL, 0);
-    if (trace->opcode != OP_QFOR_LOOP_NUM && trace->opcode != OP_LOOP) return 0;
+    if (!is_numeric_for_loop_opcode(trace->opcode) && trace->opcode != OP_LOOP) return 0;
     int offset = (int)trace->opcode_offset;
     if (offset < 0 || offset >= chunk->count) return 0;
     if (chunk->code[offset] != trace->opcode) return 0;
 
     int jump = 0;
     int next = 0;
-    if (trace->opcode == OP_QFOR_LOOP_NUM) {
+    if (is_numeric_for_loop_opcode(trace->opcode)) {
         if (offset + 4 >= chunk->count) return 0;
-        jump = read_u16(chunk->code, offset + 3);
+        jump = jit_ir_read_u16(chunk->code, offset + 3);
         next = offset + 5;
     } else if (trace->opcode == OP_LOOP) {
         if (offset + 2 >= chunk->count) return 0;
-        jump = read_u16(chunk->code, offset + 1);
+        jump = jit_ir_read_u16(chunk->code, offset + 1);
         next = offset + 3;
     } else {
         set_loop_fail(trace, LOOP_FAIL_UNSUPPORTED, trace->opcode, offset);
@@ -3653,10 +3578,6 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
     trace->after_offset = (uint32_t)next;
 
     if (!compile_qfor_loop_trace(function, trace, loop_start, next)) return 0;
-    if (trace_has_dynamic_calls(trace) && trace_has_mutating_table_ops(trace)) {
-        set_loop_fail(trace, LOOP_FAIL_UNSUPPORTED, OP_SET_TABLE, loop_start);
-        return 0;
-    }
     trace->runtime_disabled = 0;
     trace->native_slot_loop_fn = NULL;
     trace->native_value_loop_fn = NULL;
@@ -4072,526 +3993,6 @@ skip_value_loop_compile:;
     return 1;
 }
 
-static int read_u16(const uint8_t* code, int offset) {
-    return ((int)code[offset] << 8) | (int)code[offset + 1];
-}
-
-static int decode_instr_len(const uint8_t* code, int offset, int count) {
-    if (offset >= count) return 0;
-    switch (code[offset]) {
-        case OP_CONSTANT:
-        case OP_GET_GLOBAL:
-        case OP_DEFINE_GLOBAL:
-        case OP_SET_GLOBAL:
-        case OP_SET_GLOBAL_POP:
-        case OP_DELETE_GLOBAL:
-        case OP_GET_LOCAL:
-        case OP_GET_UPVALUE:
-        case OP_SET_UPVALUE:
-        case OP_SET_UPVALUE_POP:
-        case OP_SET_LOCAL:
-        case OP_SET_LOCAL_POP:
-        case OP_GET_FIELD_CONST:
-        case OP_SET_FIELD_CONST:
-        case OP_SET_FIELD_CONST_KEEP:
-        case OP_PRINT:
-        case OP_CALL:
-        case OP_CALL_NAMED:
-        case OP_CALL_EXPAND:
-        case OP_IMPORT:
-        case OP_BUILD_STRING:
-        case OP_RETURN_N:
-        case OP_ADJUST_STACK:
-        case OP_ADD_CONST:
-        case OP_SUB_CONST:
-        case OP_MUL_CONST:
-        case OP_DIV_CONST:
-        case OP_MOD_CONST:
-            return 2;
-        case OP_GET2_LOCAL:
-        case OP_INVOKE:
-        case OP_QINVOKE0_STR_LOWER:
-        case OP_UNPACK:
-        case OP_INC_LOCAL:
-        case OP_SUB_LOCAL_CONST:
-        case OP_MUL_LOCAL_CONST:
-        case OP_DIV_LOCAL_CONST:
-        case OP_MOD_LOCAL_CONST:
-            return 3;
-        case OP_TRY:
-            return 7;
-        case OP_JUMP:
-        case OP_JUMP_IF_FALSE:
-        case OP_JUMP_IF_TRUE:
-        case OP_LOOP:
-            return 3;
-        case OP_QFOR_PREP_NUM:
-        case OP_QFOR_LOOP_NUM:
-        case OP_FOR_PREP:
-        case OP_FOR_LOOP:
-            return 5;
-        case OP_NIL:
-        case OP_TRUE:
-        case OP_FALSE:
-        case OP_APPEND:
-        case OP_POP:
-        case OP_CLOSE_UPVALUE:
-        case OP_GET_META_TABLE:
-        case OP_GET_TABLE:
-        case OP_GET_TABLE_NUM:
-        case OP_SET_TABLE:
-        case OP_SET_TABLE_KEEP:
-        case OP_SET_TABLE_NUM:
-        case OP_DELETE_TABLE:
-        case OP_NEW_TABLE:
-        case OP_DUP:
-        case OP_ADD_INPLACE:
-        case OP_ADD:
-        case OP_SUBTRACT:
-        case OP_MULTIPLY:
-        case OP_DIVIDE:
-        case OP_MODULO:
-        case OP_LENGTH:
-        case OP_NEGATE:
-        case OP_NOT:
-        case OP_CALL0:
-        case OP_CALL1:
-        case OP_QCALL0:
-        case OP_QCALL1:
-        case OP_CALL2:
-        case OP_IADD:
-        case OP_ISUB:
-        case OP_IMUL:
-        case OP_IDIV:
-        case OP_IMOD:
-        case OP_FADD:
-        case OP_FSUB:
-        case OP_FMUL:
-        case OP_FDIV:
-        case OP_FMOD:
-        case OP_QFADD:
-        case OP_QFSUB:
-        case OP_QFMUL:
-        case OP_QFDIV:
-        case OP_QFMOD:
-        case OP_QGREATER_NUM:
-        case OP_QLESS_NUM:
-        case OP_QCALL2:
-        case OP_QCALL1_STR_FIND:
-        case OP_QINVOKE1_STR_FIND:
-        case OP_BUILD_STRING2:
-        case OP_BUILD_STRING3:
-        case OP_BUILD_STRING4:
-        case OP_BUILD_STRING5:
-        case OP_END_TRY:
-        case OP_END_FINALLY:
-        case OP_IMPORT_STAR:
-        case OP_THROW:
-        case OP_EQUAL:
-        case OP_GREATER:
-        case OP_LESS:
-        case OP_HAS:
-        case OP_IN:
-        case OP_POWER:
-        case OP_INT_DIV:
-        case OP_GC:
-        case OP_SET_METATABLE:
-        case OP_ITER_PREP:
-        case OP_ITER_PREP_IPAIRS:
-        case OP_RANGE:
-        case OP_SLICE:
-        case OP_RETURN:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-static int map_supported_opcode(uint8_t op, JitOpCode* out) {
-    switch (op) {
-        case OP_CONSTANT: *out = JOP_CONSTANT; return 1;
-        case OP_NIL: *out = JOP_NIL; return 1;
-        case OP_TRUE: *out = JOP_TRUE; return 1;
-        case OP_FALSE: *out = JOP_FALSE; return 1;
-        case OP_POP: *out = JOP_POP; return 1;
-        case OP_APPEND: *out = JOP_APPEND; return 1;
-        case OP_GET_LOCAL: *out = JOP_GET_LOCAL; return 1;
-        case OP_GET2_LOCAL: *out = JOP_GET2_LOCAL; return 1;
-        case OP_GET_UPVALUE: *out = JOP_GET_UPVALUE; return 1;
-        case OP_SET_LOCAL: *out = JOP_SET_LOCAL; return 1;
-        case OP_SET_LOCAL_POP: *out = JOP_SET_LOCAL_POP; return 1;
-        case OP_GET_TABLE: *out = JOP_GET_TABLE; return 1;
-        case OP_GET_TABLE_NUM: *out = JOP_GET_TABLE_NUM; return 1;
-        case OP_SET_TABLE: *out = JOP_SET_TABLE; return 1;
-        case OP_SET_TABLE_NUM: *out = JOP_SET_TABLE_NUM; return 1;
-        case OP_INC_LOCAL: *out = JOP_INC_LOCAL; return 1;
-        case OP_SUB_LOCAL_CONST: *out = JOP_SUB_LOCAL_CONST; return 1;
-        case OP_MUL_LOCAL_CONST: *out = JOP_MUL_LOCAL_CONST; return 1;
-        case OP_DIV_LOCAL_CONST: *out = JOP_DIV_LOCAL_CONST; return 1;
-        case OP_MOD_LOCAL_CONST: *out = JOP_MOD_LOCAL_CONST; return 1;
-        case OP_ADD_CONST: *out = JOP_ADD_CONST; return 1;
-        case OP_SUB_CONST: *out = JOP_SUB_CONST; return 1;
-        case OP_MUL_CONST: *out = JOP_MUL_CONST; return 1;
-        case OP_DIV_CONST: *out = JOP_DIV_CONST; return 1;
-        case OP_MOD_CONST: *out = JOP_MOD_CONST; return 1;
-        case OP_ADD: *out = JOP_ADD; return 1;
-        case OP_ADD_INPLACE: *out = JOP_ADD_INPLACE; return 1;
-        case OP_SUBTRACT: *out = JOP_SUBTRACT; return 1;
-        case OP_MULTIPLY: *out = JOP_MULTIPLY; return 1;
-        case OP_DIVIDE: *out = JOP_DIVIDE; return 1;
-        case OP_MODULO: *out = JOP_MODULO; return 1;
-        case OP_NEGATE: *out = JOP_NEGATE; return 1;
-        case OP_NOT: *out = JOP_NOT; return 1;
-        case OP_IADD: *out = JOP_IADD; return 1;
-        case OP_ISUB: *out = JOP_ISUB; return 1;
-        case OP_IMUL: *out = JOP_IMUL; return 1;
-        case OP_IDIV: *out = JOP_IDIV; return 1;
-        case OP_IMOD: *out = JOP_IMOD; return 1;
-        case OP_FADD: *out = JOP_FADD; return 1;
-        case OP_FSUB: *out = JOP_FSUB; return 1;
-        case OP_FMUL: *out = JOP_FMUL; return 1;
-        case OP_FDIV: *out = JOP_FDIV; return 1;
-        case OP_FMOD: *out = JOP_FMOD; return 1;
-        case OP_QFADD: *out = JOP_QFADD; return 1;
-        case OP_QFSUB: *out = JOP_QFSUB; return 1;
-        case OP_QFMUL: *out = JOP_QFMUL; return 1;
-        case OP_QFDIV: *out = JOP_QFDIV; return 1;
-        case OP_QFMOD: *out = JOP_QFMOD; return 1;
-        case OP_EQUAL: *out = JOP_EQUAL; return 1;
-        case OP_QGREATER_NUM: *out = JOP_QGREATER_NUM; return 1;
-        case OP_QLESS_NUM: *out = JOP_QLESS_NUM; return 1;
-        case OP_JUMP: *out = JOP_JUMP; return 1;
-        case OP_JUMP_IF_FALSE: *out = JOP_JUMP_IF_FALSE; return 1;
-        case OP_JUMP_IF_TRUE: *out = JOP_JUMP_IF_TRUE; return 1;
-        case OP_LOOP: *out = JOP_JUMP; return 1;
-        case OP_CALL:
-        case OP_CALL0:
-        case OP_CALL1:
-        case OP_CALL2:
-            *out = JOP_CALL; return 1;
-        case OP_INVOKE: *out = JOP_INVOKE; return 1;
-        case OP_LENGTH: *out = JOP_LENGTH; return 1;
-        case OP_SLICE: *out = JOP_SLICE; return 1;
-        case OP_BUILD_STRING2: *out = JOP_BUILD_STRING2; return 1;
-        case OP_BUILD_STRING3: *out = JOP_BUILD_STRING3; return 1;
-        case OP_BUILD_STRING4: *out = JOP_BUILD_STRING4; return 1;
-        case OP_BUILD_STRING5: *out = JOP_BUILD_STRING5; return 1;
-        case OP_QCALL2: *out = JOP_QCALL2; return 1;
-        case OP_QFOR_PREP_NUM: *out = JOP_QFOR_PREP_NUM; return 1;
-        case OP_QFOR_LOOP_NUM: *out = JOP_QFOR_LOOP_NUM; return 1;
-        case OP_ADJUST_STACK: *out = JOP_ADJUST_STACK; return 1;
-        case OP_RETURN: *out = JOP_RETURN; return 1;
-        default: return 0;
-    }
-}
-
-static int is_numeric_const_ok(Chunk* chunk, int idx) {
-    if (idx < 0 || idx >= chunk->constants.count) return 0;
-    Value c = chunk->constants.values[idx];
-    return IS_NUMBER(c) || IS_BOOL(c) || IS_NIL(c);
-}
-
-static JitProgram* compile_program(ObjFunction* function) {
-    if (function == NULL) return NULL;
-    if (function->is_variadic || function->defaults_count != 0) return NULL;
-    if (function->tiny_inline_kind != TINY_INLINE_NONE &&
-        function->arity == 2 &&
-        !function->is_variadic &&
-        function->defaults_count == 0) {
-        JitProgram* tiny = (JitProgram*)calloc(1, sizeof(JitProgram));
-        if (tiny == NULL) return NULL;
-        tiny->ops = (JitOp*)calloc(1, sizeof(JitOp));
-        if (tiny->ops == NULL) {
-            free(tiny);
-            return NULL;
-        }
-        tiny->function = function;
-        tiny->op_count = 1;
-        tiny->max_slot = 2;
-        tiny->max_stack = 4;
-        tiny->ops[0].op = JOP_TINY_INLINE;
-        tiny->ops[0].a = function->tiny_inline_kind;
-        return tiny;
-    }
-
-    Chunk* chunk = &function->chunk;
-    int count = chunk->count;
-    const uint8_t* code = chunk->code;
-    if (count <= 0 || code == NULL) return NULL;
-
-    int* byte_to_jit = (int*)malloc(sizeof(int) * (size_t)count);
-    if (byte_to_jit == NULL) return NULL;
-    for (int i = 0; i < count; i++) byte_to_jit[i] = -1;
-
-    int op_count = 0;
-    int max_slot = function->arity;
-    int max_stack = 0;
-    int stack_depth = function->arity + 1;
-
-    for (int offset = 0; offset < count;) {
-        int len = decode_instr_len(code, offset, count);
-        if (len <= 0 || offset + len > count) {
-            free(byte_to_jit);
-            return NULL;
-        }
-
-        JitOpCode jit_op = JOP_POP;
-        if (!map_supported_opcode(code[offset], &jit_op)) {
-            free(byte_to_jit);
-            return NULL;
-        }
-        byte_to_jit[offset] = op_count++;
-
-        switch (code[offset]) {
-            case OP_CONSTANT:
-            case OP_NIL:
-            case OP_TRUE:
-            case OP_FALSE:
-            case OP_GET_LOCAL:
-            case OP_GET_UPVALUE:
-                stack_depth += 1;
-                break;
-            case OP_GET2_LOCAL:
-                stack_depth += 2;
-                break;
-            case OP_POP:
-            case OP_SET_LOCAL_POP:
-                stack_depth -= 1;
-                break;
-            case OP_APPEND:
-            case OP_GET_TABLE:
-            case OP_GET_TABLE_NUM:
-                stack_depth -= 1;
-                break;
-            case OP_SET_TABLE_NUM:
-                stack_depth -= 2;
-                break;
-            case OP_SET_TABLE:
-                stack_depth -= 2;
-                break;
-            case OP_CALL:
-                stack_depth -= (int)code[offset + 1];
-                break;
-            case OP_CALL1:
-                stack_depth -= 1;
-                break;
-            case OP_CALL2:
-                stack_depth -= 2;
-                break;
-            case OP_INVOKE:
-                stack_depth -= (int)code[offset + 2];
-                break;
-            case OP_SLICE:
-                stack_depth -= 3;
-                break;
-            case OP_BUILD_STRING2:
-                stack_depth -= 1;
-                break;
-            case OP_BUILD_STRING3:
-                stack_depth -= 2;
-                break;
-            case OP_BUILD_STRING4:
-                stack_depth -= 3;
-                break;
-            case OP_BUILD_STRING5:
-                stack_depth -= 4;
-                break;
-            case OP_QCALL2:
-                stack_depth -= 2;
-                break;
-            case OP_SET_LOCAL:
-            case OP_ADD_CONST:
-            case OP_SUB_CONST:
-            case OP_MUL_CONST:
-            case OP_DIV_CONST:
-            case OP_MOD_CONST:
-            case OP_NEGATE:
-            case OP_NOT:
-            case OP_JUMP:
-            case OP_JUMP_IF_FALSE:
-            case OP_JUMP_IF_TRUE:
-            case OP_QFOR_PREP_NUM:
-            case OP_QFOR_LOOP_NUM:
-            case OP_ADJUST_STACK:
-                break;
-            case OP_INC_LOCAL:
-            case OP_SUB_LOCAL_CONST:
-            case OP_MUL_LOCAL_CONST:
-            case OP_DIV_LOCAL_CONST:
-            case OP_MOD_LOCAL_CONST:
-                stack_depth += 1;
-                break;
-            case OP_RETURN:
-                stack_depth -= 1;
-                break;
-            default:
-                stack_depth -= 1;
-                break;
-        }
-        if (stack_depth < 0) {
-            free(byte_to_jit);
-            return NULL;
-        }
-        if (stack_depth > max_stack) max_stack = stack_depth;
-
-        uint8_t op = code[offset];
-        if (op == OP_GET_LOCAL || op == OP_SET_LOCAL || op == OP_SET_LOCAL_POP ||
-            op == OP_INC_LOCAL || op == OP_SUB_LOCAL_CONST || op == OP_MUL_LOCAL_CONST ||
-            op == OP_DIV_LOCAL_CONST || op == OP_MOD_LOCAL_CONST) {
-            int slot = (int)code[offset + 1];
-            if (slot > max_slot) max_slot = slot;
-        } else if (op == OP_GET2_LOCAL) {
-            int a = (int)code[offset + 1];
-            int b = (int)code[offset + 2];
-            if (a > max_slot) max_slot = a;
-            if (b > max_slot) max_slot = b;
-        }
-
-        if (op == OP_CONSTANT && !is_numeric_const_ok(chunk, (int)code[offset + 1])) {
-            free(byte_to_jit);
-            return NULL;
-        }
-        if ((op == OP_ADD_CONST || op == OP_SUB_CONST || op == OP_MUL_CONST || op == OP_DIV_CONST || op == OP_MOD_CONST) &&
-            !is_numeric_const_ok(chunk, (int)code[offset + 1])) {
-            free(byte_to_jit);
-            return NULL;
-        }
-        if ((op == OP_INC_LOCAL || op == OP_SUB_LOCAL_CONST || op == OP_MUL_LOCAL_CONST ||
-             op == OP_DIV_LOCAL_CONST || op == OP_MOD_LOCAL_CONST) &&
-            !is_numeric_const_ok(chunk, (int)code[offset + 2])) {
-            free(byte_to_jit);
-            return NULL;
-        }
-
-        offset += len;
-    }
-
-    JitProgram* program = (JitProgram*)calloc(1, sizeof(JitProgram));
-    if (program == NULL) {
-        free(byte_to_jit);
-        return NULL;
-    }
-    program->ops = (JitOp*)calloc((size_t)op_count, sizeof(JitOp));
-    if (program->ops == NULL) {
-        free(byte_to_jit);
-        free(program);
-        return NULL;
-    }
-    program->function = function;
-    program->op_count = op_count;
-    program->max_slot = max_slot;
-    program->max_stack = max_stack + 16;
-
-    int jit_i = 0;
-    for (int offset = 0; offset < count;) {
-        uint8_t op = code[offset];
-        JitOp* out = &program->ops[jit_i++];
-        out->byte_offset = (uint32_t)offset;
-        if (!map_supported_opcode(op, &out->op)) {
-            free(byte_to_jit);
-            free_program(program);
-            return NULL;
-        }
-
-        switch (op) {
-            case OP_CONSTANT:
-                out->constant = chunk->constants.values[(int)code[offset + 1]];
-                break;
-            case OP_GET_LOCAL:
-            case OP_GET_UPVALUE:
-            case OP_SET_LOCAL:
-            case OP_SET_LOCAL_POP:
-            case OP_ADJUST_STACK:
-                out->a = code[offset + 1];
-                break;
-            case OP_CALL:
-                out->a = code[offset + 1];
-                break;
-            case OP_CALL0:
-                out->a = 0;
-                break;
-            case OP_CALL1:
-                out->a = 1;
-                break;
-            case OP_CALL2:
-                out->a = 2;
-                break;
-            case OP_INVOKE:
-                out->a = code[offset + 2]; // arg_count
-                out->constant = chunk->constants.values[(int)code[offset + 1]];
-                break;
-            case OP_GET2_LOCAL:
-                out->a = code[offset + 1];
-                out->b = code[offset + 2];
-                break;
-            case OP_INC_LOCAL:
-            case OP_SUB_LOCAL_CONST:
-            case OP_MUL_LOCAL_CONST:
-            case OP_DIV_LOCAL_CONST:
-            case OP_MOD_LOCAL_CONST:
-                out->a = code[offset + 1];
-                out->constant = chunk->constants.values[(int)code[offset + 2]];
-                break;
-            case OP_ADD_CONST:
-            case OP_SUB_CONST:
-            case OP_MUL_CONST:
-            case OP_DIV_CONST:
-            case OP_MOD_CONST:
-                out->constant = chunk->constants.values[(int)code[offset + 1]];
-                break;
-            case OP_JUMP:
-            case OP_JUMP_IF_FALSE:
-            case OP_JUMP_IF_TRUE:
-            case OP_LOOP: {
-                int sign = (op == OP_LOOP) ? -1 : 1;
-                int jump = read_u16(code, offset + 1);
-                int target_byte = offset + 3 + sign * jump;
-                if (target_byte < 0 || target_byte >= count) {
-                    free(byte_to_jit);
-                    free_program(program);
-                    return NULL;
-                }
-                int target = byte_to_jit[target_byte];
-                if (target < 0 || target >= op_count) {
-                    free(byte_to_jit);
-                    free_program(program);
-                    return NULL;
-                }
-                out->target = (uint16_t)target;
-                break;
-            }
-            case OP_QFOR_PREP_NUM:
-            case OP_QFOR_LOOP_NUM: {
-                out->a = code[offset + 1];
-                out->b = code[offset + 2];
-                int sign = (op == OP_QFOR_LOOP_NUM) ? -1 : 1;
-                int jump = read_u16(code, offset + 3);
-                int target_byte = offset + 5 + sign * jump;
-                if (target_byte < 0 || target_byte >= count) {
-                    free(byte_to_jit);
-                    free_program(program);
-                    return NULL;
-                }
-                int target = byte_to_jit[target_byte];
-                if (target < 0 || target >= op_count) {
-                    free(byte_to_jit);
-                    free_program(program);
-                    return NULL;
-                }
-                out->target = (uint16_t)target;
-                break;
-            }
-            default:
-                break;
-        }
-
-        offset += decode_instr_len(code, offset, count);
-    }
-
-    free(byte_to_jit);
-    return program;
-}
-
 static Value numeric_binop(JitOpCode op, double a, double b) {
     if (op == JOP_ADD || op == JOP_IADD || op == JOP_FADD || op == JOP_QFADD) return NUMBER_VAL(a + b);
     if (op == JOP_SUBTRACT || op == JOP_ISUB || op == JOP_FSUB || op == JOP_QFSUB) return NUMBER_VAL(a - b);
@@ -4607,7 +4008,7 @@ static Value numeric_binop(JitOpCode op, double a, double b) {
     return NIL_VAL;
 }
 
-static int jit_eval_tiny_inline2_local(ObjFunction* function, Value arg0, Value arg1, Value* out) {
+int jit_eval_tiny_inline2_local(ObjFunction* function, Value arg0, Value arg1, Value* out) {
     if (function == NULL || out == NULL) return 0;
     switch ((TinyInlineKind)function->tiny_inline_kind) {
         case TINY_INLINE_IADD2:
@@ -4661,795 +4062,7 @@ static int jit_eval_tiny_inline2_local(ObjFunction* function, Value arg0, Value 
     }
 }
 
-static int jit_ascii_case_transform(ObjString* src, int to_upper, Value* out) {
-    if (src == NULL || out == NULL) return 0;
-    int len = src->length;
-    char* buf = (char*)malloc((size_t)len + 1);
-    if (buf == NULL) return 0;
-    for (int i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)src->chars[i];
-        buf[i] = (char)(to_upper ? toupper(c) : tolower(c));
-    }
-    buf[len] = '\0';
-    ObjString* s = take_string(buf, len);
-    *out = OBJ_VAL(s);
-    return 1;
-}
-
-static int jit_build_string_primitive(VM* vm, Value* parts, int count, Value* out) {
-    (void)vm;
-    if (parts == NULL || out == NULL || count < 2 || count > 5) return 0;
-    if (vm != NULL) {
-        int primitive_only = 1;
-        for (int i = 0; i < count; i++) {
-            Value p = parts[i];
-            if (!IS_STRING(p) && !IS_NUMBER(p) && !IS_BOOL(p) && !IS_NIL(p)) {
-                primitive_only = 0;
-                break;
-            }
-        }
-        if (primitive_only) {
-            ObjThread* thread = vm_current_thread(vm);
-            if (thread != NULL && thread->stack_top + count <= thread->stack + thread->stack_capacity) {
-                Value* saved_top = thread->stack_top;
-                for (int i = 0; i < count; i++) {
-                    *thread->stack_top++ = parts[i];
-                }
-                if (vm_build_string(vm, (uint8_t)count)) {
-                    *out = pop(vm);
-                    thread->stack_top = saved_top;
-                    return 1;
-                }
-                thread->stack_top = saved_top;
-                return 0;
-            }
-        }
-    }
-    int total_len = 0;
-    for (int i = 0; i < count; i++) {
-        Value p = parts[i];
-        if (IS_STRING(p)) {
-            total_len += AS_STRING(p)->length;
-            continue;
-        }
-        if (IS_NUMBER(p)) {
-            char num_buf[32];
-            int n = snprintf(num_buf, sizeof(num_buf), "%.14g", AS_NUMBER(p));
-            if (n < 0) return 0;
-            total_len += n;
-            continue;
-        }
-        if (IS_BOOL(p)) {
-            total_len += AS_BOOL(p) ? 4 : 5;
-            continue;
-        }
-        if (IS_NIL(p)) {
-            total_len += 3;
-            continue;
-        }
-        return 0;
-    }
-    char* buf = (char*)malloc((size_t)total_len + 1);
-    if (buf == NULL) return 0;
-    char* cur = buf;
-    for (int i = 0; i < count; i++) {
-        Value p = parts[i];
-        if (IS_STRING(p)) {
-            ObjString* s = AS_STRING(p);
-            memcpy(cur, s->chars, (size_t)s->length);
-            cur += s->length;
-        } else if (IS_NUMBER(p)) {
-            int n = snprintf(cur, 32, "%.14g", AS_NUMBER(p));
-            if (n < 0) {
-                free(buf);
-                return 0;
-            }
-            cur += n;
-        } else if (IS_BOOL(p)) {
-            if (AS_BOOL(p)) {
-                memcpy(cur, "true", 4);
-                cur += 4;
-            } else {
-                memcpy(cur, "false", 5);
-                cur += 5;
-            }
-        } else {
-            memcpy(cur, "nil", 3);
-            cur += 3;
-        }
-    }
-    *cur = '\0';
-    ObjString* s = take_string(buf, total_len);
-    *out = OBJ_VAL(s);
-    return 1;
-}
-
-static int jit_value_to_string_primitive(Value in, Value* out) {
-    if (out == NULL) return 0;
-    if (IS_STRING(in)) {
-        *out = in;
-        return 1;
-    }
-    if (IS_NUMBER(in)) {
-        char num_buf[32];
-        int n = snprintf(num_buf, sizeof(num_buf), "%.14g", AS_NUMBER(in));
-        if (n < 0) return 0;
-        *out = OBJ_VAL(copy_string(num_buf, n));
-        return 1;
-    }
-    if (IS_BOOL(in)) {
-        *out = OBJ_VAL(copy_string(AS_BOOL(in) ? "true" : "false", AS_BOOL(in) ? 4 : 5));
-        return 1;
-    }
-    if (IS_NIL(in)) {
-        *out = OBJ_VAL(copy_string("nil", 3));
-        return 1;
-    }
-    return 0;
-}
-
-static int jit_value_matches_type(Value v, uint8_t type) {
-    switch (type) {
-        case TYPEHINT_ANY:
-            return 1;
-        case TYPEHINT_INT: {
-            if (!IS_NUMBER(v)) return 0;
-            int64_t tmp = 0;
-            return to_int64_local(AS_NUMBER(v), &tmp);
-        }
-        case TYPEHINT_FLOAT:
-            return IS_NUMBER(v);
-        case TYPEHINT_BOOL:
-            return IS_BOOL(v);
-        case TYPEHINT_STR:
-            return IS_STRING(v);
-        case TYPEHINT_TABLE:
-            return IS_TABLE(v);
-        default:
-            return 0;
-    }
-}
-
-static int jit_length_primitive(Value in, Value* out) {
-    if (out == NULL) return 0;
-    if (IS_STRING(in)) {
-        *out = NUMBER_VAL((double)AS_STRING(in)->length);
-        return 1;
-    }
-    if (IS_TABLE(in)) {
-        ObjTable* t = AS_TABLE(in);
-        int count = t->table.count;
-        for (int i = 0; i < t->table.array_capacity; i++) {
-            if (!IS_NIL(t->table.array[i])) count++;
-        }
-        *out = NUMBER_VAL((double)count);
-        return 1;
-    }
-    return 0;
-}
-
-static int jit_slice_primitive(Value obj, Value start, Value end, Value step, Value* out) {
-    if (out == NULL) return 0;
-    if (!IS_STRING(obj)) return 0;
-    ObjString* s = AS_STRING(obj);
-    int len = s->length;
-
-    if (IS_NIL(step)) step = NUMBER_VAL(1.0);
-    if (!IS_NUMBER(step)) return 0;
-    double step_num = AS_NUMBER(step);
-    if (step_num == 0.0) return 0;
-
-    if (IS_NIL(start)) start = NUMBER_VAL(step_num < 0.0 ? (double)len : 1.0);
-    if (IS_NIL(end)) end = NUMBER_VAL(step_num < 0.0 ? 1.0 : (double)len);
-    if (!IS_NUMBER(start) || !IS_NUMBER(end)) return 0;
-
-    double raw_start = AS_NUMBER(start);
-    double raw_end = AS_NUMBER(end);
-    int start_int = (int)raw_start;
-    int end_int = (int)raw_end;
-    if ((double)start_int != raw_start || (double)end_int != raw_end) return 0;
-
-    if (start_int < 0) start_int = len + start_int + 1;
-    if (end_int < 0) end_int = len + end_int;
-
-    int s0 = start_int;
-    int e0 = end_int;
-    if (s0 < 1) s0 = 1;
-    if (e0 > s->length) e0 = s->length;
-
-    if (step_num > 0.0) {
-        if (s0 > e0) {
-            *out = OBJ_VAL(copy_string("", 0));
-            return 1;
-        }
-        if (step_num == 1.0 && s0 == 1 && e0 == s->length) {
-            *out = obj;
-            return 1;
-        }
-        if (step_num == 1.0) {
-            int out_len = e0 - s0 + 1;
-            *out = OBJ_VAL(copy_string_unhashed(s->chars + (s0 - 1), out_len));
-            return 1;
-        }
-        int step_i = (int)step_num;
-        int out_len = 0;
-        for (int i = s0; i <= e0; i += step_i) out_len++;
-        char* buf = (char*)malloc((size_t)out_len + 1);
-        if (buf == NULL) return 0;
-        int w = 0;
-        for (int i = s0; i <= e0; i += step_i) buf[w++] = s->chars[i - 1];
-        buf[w] = '\0';
-        *out = OBJ_VAL(take_string_unhashed(buf, w));
-        return 1;
-    }
-
-    if (s0 < e0) {
-        *out = OBJ_VAL(copy_string("", 0));
-        return 1;
-    }
-    int step_i = (int)step_num;
-    int out_len = 0;
-    for (int i = s0; i >= e0; i += step_i) out_len++;
-    char* buf = (char*)malloc((size_t)out_len + 1);
-    if (buf == NULL) return 0;
-    int w = 0;
-    for (int i = s0; i >= e0; i += step_i) buf[w++] = s->chars[i - 1];
-    buf[w] = '\0';
-    *out = OBJ_VAL(take_string_unhashed(buf, w));
-    return 1;
-}
-
-static int jit_execute_closure_program(VM* vm, ObjClosure* closure, Value* args, int argc, Value* out) {
-    if (vm == NULL || closure == NULL || out == NULL) return 0;
-    ObjFunction* fn = closure->function;
-    if (fn == NULL) return 0;
-    if (fn->is_variadic || fn->defaults_count != 0) return 0;
-    if (argc != fn->arity || argc < 0) return 0;
-    if (fn->param_types_count > 0 && fn->param_types != NULL) {
-        int check_count = (fn->param_types_count < fn->arity) ? fn->param_types_count : fn->arity;
-        for (int i = 0; i < check_count; i++) {
-            if (!jit_value_matches_type(args[i], fn->param_types[i])) return 0;
-        }
-    }
-
-    ToiJitState* st = jit_state(vm);
-    if (st == NULL) return 0;
-    JitTrackedFunction* entry = jit_find_or_add(vm, fn);
-    if (entry == NULL) return 0;
-    if (!entry->compiled && !entry->failed && !entry->queued) {
-        entry->queued = 1;
-        entry->compile_attempts++;
-        vm->native_jit_compile_attempts++;
-        JitProgram* program = compile_program(fn);
-        entry->queued = 0;
-        if (program == NULL) {
-            entry->failed = 1;
-            return 0;
-        }
-        entry->program = program;
-        entry->compiled = 1;
-        entry->runtime_disabled = 0;
-        entry->runtime_probe_limit = program_runtime_probe_limit(program);
-        vm->native_jit_compiled_count++;
-    }
-    if (!entry->compiled || entry->program == NULL || entry->runtime_disabled) return 0;
-
-    return execute_program(vm, closure, argc, entry->program, args, out);
-}
-
-static int jit_get_compiled_closure_program(VM* vm, ObjClosure* closure, JitProgram** out_program) {
-    if (out_program == NULL) return 0;
-    *out_program = NULL;
-    if (vm == NULL || closure == NULL) return 0;
-    ObjFunction* fn = closure->function;
-    if (fn == NULL) return 0;
-    if (fn->is_variadic || fn->defaults_count != 0) return 0;
-
-    ToiJitState* st = jit_state(vm);
-    if (st == NULL) return 0;
-    JitTrackedFunction* entry = jit_find_or_add(vm, fn);
-    if (entry == NULL) return 0;
-    if (!entry->compiled && !entry->failed && !entry->queued) {
-        entry->queued = 1;
-        entry->compile_attempts++;
-        vm->native_jit_compile_attempts++;
-        JitProgram* program = compile_program(fn);
-        entry->queued = 0;
-        if (program == NULL) {
-            entry->failed = 1;
-            return 0;
-        }
-        entry->program = program;
-        entry->compiled = 1;
-        entry->runtime_disabled = 0;
-        entry->runtime_probe_limit = program_runtime_probe_limit(program);
-        vm->native_jit_compiled_count++;
-    }
-    if (!entry->compiled || entry->program == NULL || entry->runtime_disabled) return 0;
-    *out_program = entry->program;
-    return 1;
-}
-
-static int jit_execute_compiled_program_with_args(
-    VM* vm,
-    ObjClosure* closure,
-    JitProgram* program,
-    Value* args,
-    int argc,
-    Value* out) {
-    if (vm == NULL || closure == NULL || program == NULL || out == NULL) return 0;
-    ObjFunction* fn = closure->function;
-    if (fn != NULL && fn->param_types_count > 0 && fn->param_types != NULL) {
-        int check_count = (fn->param_types_count < fn->arity) ? fn->param_types_count : fn->arity;
-        for (int i = 0; i < check_count; i++) {
-            if (!jit_value_matches_type(args[i], fn->param_types[i])) return 0;
-        }
-    }
-    return execute_program(vm, closure, argc, program, args, out);
-}
-
-static int jit_seed_trace_call_ic(
-    ObjFunction* function,
-    const JitOp* op,
-    int argc,
-    ObjClosure** out_closure,
-    JitProgram** out_program) {
-    if (out_closure == NULL || out_program == NULL) return 0;
-    *out_closure = NULL;
-    *out_program = NULL;
-    if (function == NULL || op == NULL) return 0;
-    Chunk* chunk = &function->chunk;
-    int off = (int)op->byte_offset;
-    if (off < 0 || off >= chunk->capacity) return 0;
-    if (chunk->call_ic_closures == NULL || chunk->call_ic_argc == NULL) return 0;
-    ObjClosure* c = chunk->call_ic_closures[off];
-    if (c != NULL && (int)chunk->call_ic_argc[off] == argc) {
-        *out_closure = c;
-        return 1;
-    }
-    if (chunk->call_ic2_closures == NULL || chunk->call_ic2_argc == NULL) return 0;
-    c = chunk->call_ic2_closures[off];
-    if (c != NULL && (int)chunk->call_ic2_argc[off] == argc) {
-        *out_closure = c;
-        return 1;
-    }
-    if (chunk->call_ic3_closures != NULL && chunk->call_ic3_argc != NULL) {
-        c = chunk->call_ic3_closures[off];
-        if (c != NULL && (int)chunk->call_ic3_argc[off] == argc) {
-            *out_closure = c;
-            return 1;
-        }
-    }
-    if (chunk->call_ic4_closures != NULL && chunk->call_ic4_argc != NULL) {
-        c = chunk->call_ic4_closures[off];
-        if (c != NULL && (int)chunk->call_ic4_argc[off] == argc) {
-            *out_closure = c;
-            return 1;
-        }
-    }
-    if (chunk->call_ic5_closures != NULL && chunk->call_ic5_argc != NULL) {
-        c = chunk->call_ic5_closures[off];
-        if (c != NULL && (int)chunk->call_ic5_argc[off] == argc) {
-            *out_closure = c;
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static int jit_program_loop_call_safe(const JitProgram* program) {
-    if (program == NULL || program->ops == NULL || program->op_count <= 0) return 0;
-    for (int i = 0; i < program->op_count; i++) {
-        switch (program->ops[i].op) {
-            case JOP_CONSTANT:
-            case JOP_NIL:
-            case JOP_TRUE:
-            case JOP_FALSE:
-            case JOP_POP:
-            case JOP_GET_LOCAL:
-            case JOP_GET2_LOCAL:
-            case JOP_GET_UPVALUE:
-            case JOP_SET_LOCAL:
-            case JOP_SET_LOCAL_POP:
-            case JOP_INC_LOCAL:
-            case JOP_SUB_LOCAL_CONST:
-            case JOP_MUL_LOCAL_CONST:
-            case JOP_DIV_LOCAL_CONST:
-            case JOP_MOD_LOCAL_CONST:
-            case JOP_ADD_CONST:
-            case JOP_SUB_CONST:
-            case JOP_MUL_CONST:
-            case JOP_DIV_CONST:
-            case JOP_MOD_CONST:
-            case JOP_ADD:
-            case JOP_ADD_INPLACE:
-            case JOP_SUBTRACT:
-            case JOP_MULTIPLY:
-            case JOP_DIVIDE:
-            case JOP_MODULO:
-            case JOP_NEGATE:
-            case JOP_NOT:
-            case JOP_IADD:
-            case JOP_ISUB:
-            case JOP_IMUL:
-            case JOP_IDIV:
-            case JOP_IMOD:
-            case JOP_FADD:
-            case JOP_FSUB:
-            case JOP_FMUL:
-            case JOP_FDIV:
-            case JOP_FMOD:
-            case JOP_QFADD:
-            case JOP_QFSUB:
-            case JOP_QFMUL:
-            case JOP_QFDIV:
-            case JOP_QFMOD:
-            case JOP_EQUAL:
-            case JOP_QGREATER_NUM:
-            case JOP_QLESS_NUM:
-            case JOP_JUMP:
-            case JOP_JUMP_IF_FALSE:
-            case JOP_JUMP_IF_TRUE:
-            case JOP_ADJUST_STACK:
-            case JOP_RETURN:
-            case JOP_TINY_INLINE:
-                break;
-            default:
-                return 0;
-        }
-    }
-    return 1;
-}
-
-static int jit_try_safe_loop_closure_call(
-    VM* vm,
-    ObjClosure* closure,
-    Value* args,
-    int argc,
-    Value* out,
-    JitProgram** out_program) {
-    if (out_program != NULL) *out_program = NULL;
-    if (vm == NULL || closure == NULL || out == NULL) return 0;
-    ObjFunction* fn = closure->function;
-    if (fn == NULL) return 0;
-    if (fn->arity != argc || fn->is_variadic || fn->defaults_count != 0) return 0;
-    JitProgram* program = NULL;
-    if (!jit_get_compiled_closure_program(vm, closure, &program)) return 0;
-    if (!jit_program_loop_call_safe(program)) return 0;
-    if (!jit_execute_compiled_program_with_args(vm, closure, program, args, argc, out)) return 0;
-    if (out_program != NULL) *out_program = program;
-    return 1;
-}
-
-static void jit_update_trace_call_ic(VM* vm, JitLoopTrace* trace, int pc, Value callee, int argc) {
-    if (vm == NULL || trace == NULL) return;
-    if (pc < 0 || pc >= trace->op_count) return;
-    if (trace->call_ic_closures == NULL || trace->call_ic_programs == NULL ||
-        trace->call_ic2_closures == NULL || trace->call_ic2_programs == NULL ||
-        trace->call_ic3_closures == NULL || trace->call_ic3_programs == NULL ||
-        trace->call_ic4_closures == NULL || trace->call_ic4_programs == NULL ||
-        trace->call_ic5_closures == NULL || trace->call_ic5_programs == NULL) {
-        return;
-    }
-    if (!IS_CLOSURE(callee)) return;
-    ObjClosure* closure = AS_CLOSURE(callee);
-    if (closure == NULL || closure->function == NULL) return;
-    if (closure->function->arity != argc) return;
-    JitProgram* program = NULL;
-    if (!jit_get_compiled_closure_program(vm, closure, &program)) return;
-    if (!jit_program_loop_call_safe(program)) return;
-
-    if (trace->call_ic_closures[pc] == closure) {
-        trace->call_ic_programs[pc] = program;
-        return;
-    }
-    if (trace->call_ic2_closures[pc] == closure) {
-        trace->call_ic2_programs[pc] = program;
-        return;
-    }
-    if (trace->call_ic3_closures[pc] == closure) {
-        trace->call_ic3_programs[pc] = program;
-        return;
-    }
-    if (trace->call_ic4_closures[pc] == closure) {
-        trace->call_ic4_programs[pc] = program;
-        return;
-    }
-    if (trace->call_ic5_closures[pc] == closure) {
-        trace->call_ic5_programs[pc] = program;
-        return;
-    }
-
-    if (trace->call_ic_closures[pc] == NULL) {
-        trace->call_ic_closures[pc] = closure;
-        trace->call_ic_programs[pc] = program;
-        return;
-    }
-
-    if (trace->call_ic2_closures[pc] == NULL) {
-        trace->call_ic2_closures[pc] = closure;
-        trace->call_ic2_programs[pc] = program;
-        return;
-    }
-    if (trace->call_ic3_closures[pc] == NULL) {
-        trace->call_ic3_closures[pc] = closure;
-        trace->call_ic3_programs[pc] = program;
-        return;
-    }
-    if (trace->call_ic4_closures[pc] == NULL) {
-        trace->call_ic4_closures[pc] = closure;
-        trace->call_ic4_programs[pc] = program;
-        return;
-    }
-    if (trace->call_ic5_closures[pc] == NULL) {
-        trace->call_ic5_closures[pc] = closure;
-        trace->call_ic5_programs[pc] = program;
-        return;
-    }
-
-    // Keep slot1 as most stable target, rotate replacement across 2..5.
-    ObjClosure* old2 = trace->call_ic2_closures[pc];
-    JitProgram* old2p = trace->call_ic2_programs[pc];
-    trace->call_ic2_closures[pc] = trace->call_ic3_closures[pc];
-    trace->call_ic2_programs[pc] = trace->call_ic3_programs[pc];
-    trace->call_ic3_closures[pc] = trace->call_ic4_closures[pc];
-    trace->call_ic3_programs[pc] = trace->call_ic4_programs[pc];
-    trace->call_ic4_closures[pc] = trace->call_ic5_closures[pc];
-    trace->call_ic4_programs[pc] = trace->call_ic5_programs[pc];
-    trace->call_ic5_closures[pc] = closure;
-    trace->call_ic5_programs[pc] = program;
-    (void)old2;
-    (void)old2p;
-}
-
-static int jit_try_trace_call_ic(
-    VM* vm,
-    ObjFunction* function,
-    JitLoopTrace* trace,
-    const JitOp* op,
-    int pc,
-    Value callee,
-    Value* args,
-    int argc,
-    Value* out) {
-    if (vm == NULL || trace == NULL || op == NULL || out == NULL) return 0;
-    if (pc < 0 || pc >= trace->op_count) return 0;
-    if (trace->call_ic_closures == NULL || trace->call_ic_programs == NULL ||
-        trace->call_ic2_closures == NULL || trace->call_ic2_programs == NULL ||
-        trace->call_ic3_closures == NULL || trace->call_ic3_programs == NULL ||
-        trace->call_ic4_closures == NULL || trace->call_ic4_programs == NULL ||
-        trace->call_ic5_closures == NULL || trace->call_ic5_programs == NULL) {
-        return 0;
-    }
-    ObjClosure* closure1 = trace->call_ic_closures[pc];
-    JitProgram* program1 = trace->call_ic_programs[pc];
-    ObjClosure* closure2 = trace->call_ic2_closures[pc];
-    JitProgram* program2 = trace->call_ic2_programs[pc];
-    ObjClosure* closure3 = trace->call_ic3_closures[pc];
-    JitProgram* program3 = trace->call_ic3_programs[pc];
-    ObjClosure* closure4 = trace->call_ic4_closures[pc];
-    JitProgram* program4 = trace->call_ic4_programs[pc];
-    ObjClosure* closure5 = trace->call_ic5_closures[pc];
-    JitProgram* program5 = trace->call_ic5_programs[pc];
-    if (closure1 == NULL && closure2 == NULL && closure3 == NULL && closure4 == NULL && closure5 == NULL) {
-        ObjClosure* seed_closure = NULL;
-        JitProgram* seed_program = NULL;
-        if (!jit_seed_trace_call_ic(function, op, argc, &seed_closure, &seed_program)) return 0;
-        trace->call_ic_closures[pc] = seed_closure;
-        trace->call_ic_programs[pc] = seed_program;
-        closure1 = seed_closure;
-        program1 = seed_program;
-    }
-    if (!IS_CLOSURE(callee)) return 0;
-    ObjClosure* callee_closure = AS_CLOSURE(callee);
-    int slot = 0;
-    ObjClosure* closure = NULL;
-    JitProgram* program = NULL;
-    if (callee_closure == closure1) {
-        slot = 1;
-        closure = closure1;
-        program = program1;
-    } else if (callee_closure == closure2) {
-        slot = 2;
-        closure = closure2;
-        program = program2;
-    } else if (callee_closure == closure3) {
-        slot = 3;
-        closure = closure3;
-        program = program3;
-    } else if (callee_closure == closure4) {
-        slot = 4;
-        closure = closure4;
-        program = program4;
-    } else if (callee_closure == closure5) {
-        slot = 5;
-        closure = closure5;
-        program = program5;
-    } else {
-        return 0;
-    }
-    if (program == NULL) {
-        if (!jit_get_compiled_closure_program(vm, closure, &program)) {
-            if (slot == 1) {
-                trace->call_ic_closures[pc] = NULL;
-                trace->call_ic_programs[pc] = NULL;
-            } else if (slot == 2) {
-                trace->call_ic2_closures[pc] = NULL;
-                trace->call_ic2_programs[pc] = NULL;
-            } else if (slot == 3) {
-                trace->call_ic3_closures[pc] = NULL;
-                trace->call_ic3_programs[pc] = NULL;
-            } else if (slot == 4) {
-                trace->call_ic4_closures[pc] = NULL;
-                trace->call_ic4_programs[pc] = NULL;
-            } else {
-                trace->call_ic5_closures[pc] = NULL;
-                trace->call_ic5_programs[pc] = NULL;
-            }
-            return 0;
-        }
-        if (!jit_program_loop_call_safe(program)) {
-            if (slot == 1) {
-                trace->call_ic_closures[pc] = NULL;
-                trace->call_ic_programs[pc] = NULL;
-            } else if (slot == 2) {
-                trace->call_ic2_closures[pc] = NULL;
-                trace->call_ic2_programs[pc] = NULL;
-            } else if (slot == 3) {
-                trace->call_ic3_closures[pc] = NULL;
-                trace->call_ic3_programs[pc] = NULL;
-            } else if (slot == 4) {
-                trace->call_ic4_closures[pc] = NULL;
-                trace->call_ic4_programs[pc] = NULL;
-            } else {
-                trace->call_ic5_closures[pc] = NULL;
-                trace->call_ic5_programs[pc] = NULL;
-            }
-            return 0;
-        }
-        if (slot == 1) {
-            trace->call_ic_programs[pc] = program;
-        } else if (slot == 2) {
-            trace->call_ic2_programs[pc] = program;
-        } else if (slot == 3) {
-            trace->call_ic3_programs[pc] = program;
-        } else if (slot == 4) {
-            trace->call_ic4_programs[pc] = program;
-        } else {
-            trace->call_ic5_programs[pc] = program;
-        }
-    }
-    if (!jit_execute_compiled_program_with_args(vm, closure, program, args, argc, out)) {
-        // Program became ineligible at runtime; drop this IC entry.
-        if (slot == 1) {
-            trace->call_ic_closures[pc] = NULL;
-            trace->call_ic_programs[pc] = NULL;
-        } else if (slot == 2) {
-            trace->call_ic2_closures[pc] = NULL;
-            trace->call_ic2_programs[pc] = NULL;
-        } else if (slot == 3) {
-            trace->call_ic3_closures[pc] = NULL;
-            trace->call_ic3_programs[pc] = NULL;
-        } else if (slot == 4) {
-            trace->call_ic4_closures[pc] = NULL;
-            trace->call_ic4_programs[pc] = NULL;
-        } else {
-            trace->call_ic5_closures[pc] = NULL;
-            trace->call_ic5_programs[pc] = NULL;
-        }
-        return 0;
-    }
-    return 1;
-}
-
-static int jit_call_primitive(VM* vm, Value callee, Value* args, int argc, Value* out) {
-    if (vm == NULL || out == NULL) return 0;
-    if (IS_BOUND_METHOD(callee)) {
-        ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
-        if (bound == NULL || bound->method == NULL) return 0;
-        Value method_val = OBJ_VAL(bound->method);
-        Value shifted_args[argc + 1];
-        shifted_args[0] = bound->receiver;
-        for (int i = 0; i < argc; i++) shifted_args[i + 1] = args[i];
-        return jit_call_primitive(vm, method_val, shifted_args, argc + 1, out);
-    }
-    if (IS_CLOSURE(callee)) {
-        ObjClosure* c = AS_CLOSURE(callee);
-        ObjFunction* fn = (c != NULL) ? c->function : NULL;
-        if (fn == NULL) return 0;
-        if (fn->tiny_inline_kind != TINY_INLINE_NONE && argc == 2) {
-            if (jit_eval_tiny_inline2_local(fn, args[0], args[1], out)) return 1;
-        }
-        if (jit_execute_closure_program(vm, c, args, argc, out)) return 1;
-        return 0;
-    }
-    if (IS_NATIVE(callee)) {
-        ObjNative* n = AS_NATIVE_OBJ(callee);
-        if (n == NULL || n->name == NULL) return 0;
-        if (argc == 1 && n->name->length == 3 && memcmp(n->name->chars, "str", 3) == 0) {
-            return jit_value_to_string_primitive(args[0], out);
-        }
-        if (argc == 1 && n->name->length == 8 && memcmp(n->name->chars, "tostring", 8) == 0) {
-            return jit_value_to_string_primitive(args[0], out);
-        }
-
-        ObjThread* thread = vm_current_thread(vm);
-        if (thread == NULL || thread->stack_top + argc > thread->stack + thread->stack_capacity) return 0;
-        Value* saved_top = thread->stack_top;
-        for (int i = 0; i < argc; i++) {
-            *thread->stack_top++ = args[i];
-        }
-        Value* native_args = saved_top;
-        int retc = n->function(vm, argc, native_args);
-        if (retc <= 0) {
-            thread->stack_top = saved_top;
-            return 0;
-        }
-        ObjThread* after = vm_current_thread(vm);
-        if (after != thread) {
-            thread->stack_top = saved_top;
-            return 0;
-        }
-        if (thread->stack_top - saved_top < retc) {
-            thread->stack_top = saved_top;
-            return 0;
-        }
-        *out = thread->stack_top[-retc];
-        thread->stack_top = saved_top;
-        return 1;
-    }
-    return 0;
-}
-
-static int jit_value_is_self_callable(Value v) {
-    if (IS_CLOSURE(v)) return AS_CLOSURE(v)->function->is_self;
-    if (IS_NATIVE(v)) return AS_NATIVE_OBJ(v)->is_self;
-    return 0;
-}
-
-static int jit_objstring_eq_name(ObjString* a, ObjString* b, const char* cstr) {
-    if (a == NULL) return 0;
-    if (b != NULL && a == b) return 1;
-    if (cstr == NULL) return 0;
-    size_t n = strlen(cstr);
-    if ((size_t)a->length != n) return 0;
-    return memcmp(a->chars, cstr, n) == 0;
-}
-
-static int jit_invoke_primitive(VM* vm, Value receiver, Value method_name, Value* args, int argc, Value* out) {
-    if (vm == NULL || out == NULL) return 0;
-    if (!IS_STRING(method_name) || argc < 0) return 0;
-    ObjString* method = AS_STRING(method_name);
-
-    if (IS_STRING(receiver) && argc == 0) {
-        if (jit_objstring_eq_name(method, vm->str_lower_name, "lower")) {
-            return jit_ascii_case_transform(AS_STRING(receiver), 0, out);
-        }
-        if (jit_objstring_eq_name(method, vm->str_upper_name, "upper")) {
-            return jit_ascii_case_transform(AS_STRING(receiver), 1, out);
-        }
-    }
-
-    if (IS_TABLE(receiver)) {
-        ObjTable* t = AS_TABLE(receiver);
-        if (t != NULL) {
-            Value raw_method = NIL_VAL;
-            if (table_get(&t->table, method, &raw_method)) {
-                if (!t->is_module && jit_value_is_self_callable(raw_method)) {
-                    Value shifted_args[argc + 1];
-                    shifted_args[0] = receiver;
-                    for (int i = 0; i < argc; i++) shifted_args[i + 1] = args[i];
-                    return jit_call_primitive(vm, raw_method, shifted_args, argc + 1, out);
-                }
-                return jit_call_primitive(vm, raw_method, args, argc, out);
-            }
-        }
-    }
-
-    return 0;
-}
-
-static int execute_program(
+int execute_program(
     VM* vm,
     ObjClosure* closure,
     int arg_count,
@@ -5541,8 +4154,254 @@ static int execute_program(
     for (int i = 0; i < sp; i++) stack[i] = locals[i];
 
     uint16_t pc = 0;
+    JitOp* op = NULL;
+#if defined(__GNUC__) || defined(__clang__)
+    static void* hot_dispatch_table[JOP_RETURN + 1] = {
+        [JOP_CONSTANT] = &&op_hot_constant,
+        [JOP_NIL] = &&op_hot_nil,
+        [JOP_TRUE] = &&op_hot_true,
+        [JOP_FALSE] = &&op_hot_false,
+        [JOP_POP] = &&op_hot_pop,
+        [JOP_GET_LOCAL] = &&op_hot_get_local,
+        [JOP_GET2_LOCAL] = &&op_hot_get2_local,
+        [JOP_SET_LOCAL] = &&op_hot_set_local,
+        [JOP_SET_LOCAL_POP] = &&op_hot_set_local_pop,
+        [JOP_INC_LOCAL] = &&op_hot_local_arith,
+        [JOP_SUB_LOCAL_CONST] = &&op_hot_local_arith,
+        [JOP_MUL_LOCAL_CONST] = &&op_hot_local_arith,
+        [JOP_DIV_LOCAL_CONST] = &&op_hot_local_arith,
+        [JOP_MOD_LOCAL_CONST] = &&op_hot_local_arith,
+        [JOP_ADD_CONST] = &&op_hot_const_arith,
+        [JOP_SUB_CONST] = &&op_hot_const_arith,
+        [JOP_MUL_CONST] = &&op_hot_const_arith,
+        [JOP_DIV_CONST] = &&op_hot_const_arith,
+        [JOP_MOD_CONST] = &&op_hot_const_arith,
+        [JOP_ADD] = &&op_hot_bin_arith,
+        [JOP_ADD_INPLACE] = &&op_hot_bin_arith,
+        [JOP_SUBTRACT] = &&op_hot_bin_arith,
+        [JOP_MULTIPLY] = &&op_hot_bin_arith,
+        [JOP_DIVIDE] = &&op_hot_bin_arith,
+        [JOP_MODULO] = &&op_hot_bin_arith,
+        [JOP_IADD] = &&op_hot_bin_arith,
+        [JOP_ISUB] = &&op_hot_bin_arith,
+        [JOP_IMUL] = &&op_hot_bin_arith,
+        [JOP_IDIV] = &&op_hot_bin_arith,
+        [JOP_IMOD] = &&op_hot_bin_arith,
+        [JOP_FADD] = &&op_hot_bin_arith,
+        [JOP_FSUB] = &&op_hot_bin_arith,
+        [JOP_FMUL] = &&op_hot_bin_arith,
+        [JOP_FDIV] = &&op_hot_bin_arith,
+        [JOP_FMOD] = &&op_hot_bin_arith,
+        [JOP_QFADD] = &&op_hot_bin_arith,
+        [JOP_QFSUB] = &&op_hot_bin_arith,
+        [JOP_QFMUL] = &&op_hot_bin_arith,
+        [JOP_QFDIV] = &&op_hot_bin_arith,
+        [JOP_QFMOD] = &&op_hot_bin_arith,
+        [JOP_NEGATE] = &&op_hot_negate,
+        [JOP_NOT] = &&op_hot_not,
+        [JOP_EQUAL] = &&op_hot_equal,
+        [JOP_QGREATER_NUM] = &&op_hot_cmp_num,
+        [JOP_QLESS_NUM] = &&op_hot_cmp_num,
+        [JOP_JUMP] = &&op_hot_jump,
+        [JOP_JUMP_IF_FALSE] = &&op_hot_jump_if_false,
+        [JOP_JUMP_IF_TRUE] = &&op_hot_jump_if_true,
+        [JOP_QFOR_PREP_NUM] = &&op_hot_qfor_prep,
+        [JOP_QFOR_LOOP_NUM] = &&op_hot_qfor_loop,
+        [JOP_ADJUST_STACK] = &&op_hot_adjust_stack,
+        [JOP_RETURN] = &&op_hot_return
+    };
+#define HOT_DISPATCH()                                                                \
+    do {                                                                              \
+        if (pc >= (uint16_t)program->op_count) return 0;                             \
+        op = &program->ops[pc];                                                       \
+        void* hot_target = hot_dispatch_table[op->op];                                \
+        if (hot_target != NULL) goto *hot_target;                                     \
+        goto op_cold;                                                                  \
+    } while (0)
+    HOT_DISPATCH();
+op_hot_constant:
+    if (sp >= program->max_stack) return 0;
+    stack[sp++] = op->constant;
+    pc++;
+    HOT_DISPATCH();
+op_hot_nil:
+    if (sp >= program->max_stack) return 0;
+    stack[sp++] = NIL_VAL;
+    pc++;
+    HOT_DISPATCH();
+op_hot_true:
+    if (sp >= program->max_stack) return 0;
+    stack[sp++] = BOOL_VAL(1);
+    pc++;
+    HOT_DISPATCH();
+op_hot_false:
+    if (sp >= program->max_stack) return 0;
+    stack[sp++] = BOOL_VAL(0);
+    pc++;
+    HOT_DISPATCH();
+op_hot_pop:
+    if (sp <= 0) return 0;
+    sp--;
+    pc++;
+    HOT_DISPATCH();
+op_hot_get_local:
+    if ((int)op->a > program->max_slot || sp >= program->max_stack) return 0;
+    stack[sp++] = locals[op->a];
+    pc++;
+    HOT_DISPATCH();
+op_hot_get2_local:
+    if ((int)op->a > program->max_slot || (int)op->b > program->max_slot || sp + 1 >= program->max_stack) {
+        return 0;
+    }
+    stack[sp++] = locals[op->a];
+    stack[sp++] = locals[op->b];
+    pc++;
+    HOT_DISPATCH();
+op_hot_set_local:
+    if ((int)op->a > program->max_slot || sp <= 0) return 0;
+    locals[op->a] = stack[sp - 1];
+    pc++;
+    HOT_DISPATCH();
+op_hot_set_local_pop:
+    if ((int)op->a > program->max_slot || sp <= 0) return 0;
+    locals[op->a] = stack[sp - 1];
+    sp--;
+    pc++;
+    HOT_DISPATCH();
+op_hot_local_arith: {
+    if ((int)op->a > program->max_slot || sp >= program->max_stack) return 0;
+    Value a = locals[op->a];
+    Value b = op->constant;
+    if (!IS_NUMBER(a) || !IS_NUMBER(b)) return 0;
+    double ad = AS_NUMBER(a);
+    double bd = AS_NUMBER(b);
+    Value outv = NIL_VAL;
+    if (op->op == JOP_INC_LOCAL) outv = NUMBER_VAL(ad + bd);
+    else if (op->op == JOP_SUB_LOCAL_CONST) outv = NUMBER_VAL(ad - bd);
+    else if (op->op == JOP_MUL_LOCAL_CONST) outv = NUMBER_VAL(ad * bd);
+    else if (op->op == JOP_DIV_LOCAL_CONST) outv = NUMBER_VAL(ad / bd);
+    else outv = numeric_binop(JOP_MODULO, ad, bd);
+    locals[op->a] = outv;
+    stack[sp++] = outv;
+    pc++;
+    HOT_DISPATCH();
+}
+op_hot_const_arith: {
+    if (sp <= 0) return 0;
+    Value a = stack[sp - 1];
+    Value b = op->constant;
+    if (!IS_NUMBER(a) || !IS_NUMBER(b)) return 0;
+    double ad = AS_NUMBER(a);
+    double bd = AS_NUMBER(b);
+    if (op->op == JOP_ADD_CONST) stack[sp - 1] = NUMBER_VAL(ad + bd);
+    else if (op->op == JOP_SUB_CONST) stack[sp - 1] = NUMBER_VAL(ad - bd);
+    else if (op->op == JOP_MUL_CONST) stack[sp - 1] = NUMBER_VAL(ad * bd);
+    else if (op->op == JOP_DIV_CONST) stack[sp - 1] = NUMBER_VAL(ad / bd);
+    else stack[sp - 1] = numeric_binop(JOP_MODULO, ad, bd);
+    pc++;
+    HOT_DISPATCH();
+}
+op_hot_bin_arith: {
+    if (sp < 2) return 0;
+    Value b = stack[sp - 1];
+    Value a = stack[sp - 2];
+    if (!IS_NUMBER(a) || !IS_NUMBER(b)) return 0;
+    stack[sp - 2] = numeric_binop(op->op, AS_NUMBER(a), AS_NUMBER(b));
+    sp--;
+    pc++;
+    HOT_DISPATCH();
+}
+op_hot_negate:
+    if (sp <= 0 || !IS_NUMBER(stack[sp - 1])) return 0;
+    stack[sp - 1] = NUMBER_VAL(-AS_NUMBER(stack[sp - 1]));
+    pc++;
+    HOT_DISPATCH();
+op_hot_not:
+    if (sp <= 0) return 0;
+    stack[sp - 1] = BOOL_VAL(is_falsey_jit(stack[sp - 1]));
+    pc++;
+    HOT_DISPATCH();
+op_hot_equal: {
+    if (sp < 2) return 0;
+    Value b = stack[sp - 1];
+    Value a = stack[sp - 2];
+    int eq = 0;
+    if (a.type == b.type) {
+        if (IS_NIL(a)) eq = 1;
+        else if (IS_BOOL(a)) eq = (AS_BOOL(a) == AS_BOOL(b));
+        else if (IS_NUMBER(a)) eq = (AS_NUMBER(a) == AS_NUMBER(b));
+        else if (IS_OBJ(a)) eq = (AS_OBJ(a) == AS_OBJ(b));
+    }
+    stack[sp - 2] = BOOL_VAL(eq);
+    sp--;
+    pc++;
+    HOT_DISPATCH();
+}
+op_hot_cmp_num: {
+    if (sp < 2) return 0;
+    Value b = stack[sp - 1];
+    Value a = stack[sp - 2];
+    if (!IS_NUMBER(a) || !IS_NUMBER(b)) return 0;
+    int cmp = (op->op == JOP_QGREATER_NUM) ? (AS_NUMBER(a) > AS_NUMBER(b))
+                                           : (AS_NUMBER(a) < AS_NUMBER(b));
+    stack[sp - 2] = BOOL_VAL(cmp);
+    sp--;
+    pc++;
+    HOT_DISPATCH();
+}
+op_hot_jump:
+    pc = op->target;
+    HOT_DISPATCH();
+op_hot_jump_if_false:
+    if (sp <= 0) return 0;
+    pc = is_falsey_jit(stack[sp - 1]) ? op->target : (uint16_t)(pc + 1);
+    HOT_DISPATCH();
+op_hot_jump_if_true:
+    if (sp <= 0) return 0;
+    pc = is_falsey_jit(stack[sp - 1]) ? (uint16_t)(pc + 1) : op->target;
+    HOT_DISPATCH();
+op_hot_qfor_prep: {
+    if ((int)op->a > program->max_slot || (int)op->b > program->max_slot) return 0;
+    Value v = locals[op->a];
+    Value end = locals[op->b];
+    if (!IS_NUMBER(v) || !IS_NUMBER(end)) return 0;
+    if (AS_NUMBER(v) > AS_NUMBER(end)) {
+        if (op->target == JIT_TARGET_EXIT) return 0;
+        pc = op->target;
+    } else {
+        pc = (uint16_t)(pc + 1);
+    }
+    HOT_DISPATCH();
+}
+op_hot_qfor_loop: {
+    if ((int)op->a > program->max_slot || (int)op->b > program->max_slot) return 0;
+    Value v = locals[op->a];
+    Value end = locals[op->b];
+    if (!IS_NUMBER(v) || !IS_NUMBER(end)) return 0;
+    double next = AS_NUMBER(v) + 1.0;
+    locals[op->a] = NUMBER_VAL(next);
+    pc = (next <= AS_NUMBER(end)) ? op->target : (uint16_t)(pc + 1);
+    HOT_DISPATCH();
+}
+op_hot_adjust_stack:
+    if ((int)op->a < 0 || (int)op->a > program->max_stack) return 0;
+    sp = (int)op->a;
+    pc++;
+    HOT_DISPATCH();
+op_hot_return:
+    if (sp <= 0) return 0;
+    if (has_direct_args) {
+        *out = stack[sp - 1];
+    } else {
+        thread->stack_top -= (arg_count + 1);
+        *thread->stack_top++ = stack[sp - 1];
+    }
+    return 1;
+op_cold:
+#undef HOT_DISPATCH
+#endif
     while (pc < (uint16_t)program->op_count) {
-        JitOp* op = &program->ops[pc];
+        op = &program->ops[pc];
         switch (op->op) {
             case JOP_TINY_INLINE:
                 return 0;
@@ -5823,10 +4682,18 @@ static int execute_program(
                 int argc = (int)op->a;
                 if (argc < 0 || sp < argc + 1) return 0;
                 int callee_idx = sp - 1 - argc;
-                Value out = NIL_VAL;
-                if (!jit_call_primitive(vm, stack[callee_idx], &stack[callee_idx + 1], argc, &out)) return 0;
-                stack[callee_idx] = out;
-                sp = callee_idx + 1;
+                int out_count = 0;
+                if (!jit_call_primitive_multi(
+                        vm,
+                        stack[callee_idx],
+                        &stack[callee_idx + 1],
+                        argc,
+                        &stack[callee_idx],
+                        program->max_stack - callee_idx,
+                        &out_count)) {
+                    return 0;
+                }
+                sp = callee_idx + out_count;
                 pc++;
                 break;
             }
@@ -5960,10 +4827,16 @@ void toi_jit_init(VM* vm) {
     st->loop_value_fast_enabled = 1;
     st->native_trace_exec_enabled = (uint8_t)TOI_JIT_DEBUG_NATIVE_TRACE_EXEC;
     st->native_trace_sandbox_enabled = (uint8_t)TOI_JIT_DEBUG_NATIVE_TRACE_SANDBOX;
+    st->native_trace_compiled_exec_enabled = (uint8_t)jit_pipeline_native_trace_compiled_exec_enabled();
     st->backend_kind = toi_jit_backend_select("auto");
     st->backend_enabled = (uint8_t)(st->backend_kind != TOI_JIT_BACKEND_NONE);
     st->backend_host_supported = 0;
     st->backend_host_supported = (uint8_t)toi_jit_backend_host_supported(st->backend_kind);
+    st->next_pipeline_enabled = (uint8_t)jit_pipeline_pipeline_enabled();
+    if (st->next_pipeline_enabled) {
+        st->next_pipeline = jit_pipeline_create();
+        if (st->next_pipeline == NULL) st->next_pipeline_enabled = 0;
+    }
     vm->native_jit = st;
 }
 
@@ -5972,7 +4845,7 @@ void toi_jit_free(VM* vm) {
     ToiJitState* st = jit_state(vm);
     if (st == NULL) return;
     for (int i = 0; i < st->count; i++) {
-        free_program(st->tracked[i].program);
+        jit_program_free(st->tracked[i].program);
         st->tracked[i].program = NULL;
     }
     for (int i = 0; i < st->loop_count; i++) {
@@ -6021,6 +4894,8 @@ void toi_jit_free(VM* vm) {
     free(st->tracked);
     free(st->loops);
     free(st->side_exits);
+    jit_pipeline_free(st->next_pipeline);
+    st->next_pipeline = NULL;
     free(st);
     vm->native_jit = NULL;
 }
@@ -6028,6 +4903,7 @@ void toi_jit_free(VM* vm) {
 void toi_jit_mark_roots(VM* vm) {
     ToiJitState* st = jit_state(vm);
     if (st == NULL) return;
+    jit_pipeline_mark_roots(st->next_pipeline);
     for (int i = 0; i < st->count; i++) {
         if (st->tracked[i].function != NULL) {
             mark_object((struct Obj*)st->tracked[i].function);
@@ -6082,17 +4958,23 @@ void toi_jit_mark_roots(VM* vm) {
 
 void toi_jit_notify_hot_function(VM* vm, ObjFunction* function) {
     if (vm == NULL || !vm->native_jit_enabled || function == NULL) return;
+    ToiJitState* st = jit_state(vm);
+    if (st == NULL) return;
 
     vm->native_jit_hot_candidates++;
     JitTrackedFunction* entry = jit_find_or_add(vm, function);
     if (entry == NULL) return;
     if (entry->compiled || entry->failed || entry->queued) return;
+    if (st->next_pipeline_enabled && st->next_pipeline != NULL) {
+        jit_pipeline_note_hot_function(st->next_pipeline, function);
+        (void)jit_pipeline_try_compile_stub(st->next_pipeline, function);
+    }
 
     entry->queued = 1;
     entry->compile_attempts++;
     vm->native_jit_compile_attempts++;
 
-    JitProgram* program = compile_program(function);
+    JitProgram* program = jit_program_compile(function);
     entry->queued = 0;
     if (program == NULL) {
         entry->failed = 1;
@@ -6106,14 +4988,15 @@ void toi_jit_notify_hot_function(VM* vm, ObjFunction* function) {
     vm->native_jit_compiled_count++;
 }
 
-int toi_jit_try_execute(VM* vm, ObjClosure* closure, int arg_count) {
-    if (vm == NULL || !vm->native_jit_enabled || closure == NULL) return 0;
-
-    ToiJitState* st = jit_state(vm);
-    if (st == NULL) return 0;
-    JitTrackedFunction* entry = jit_find_tracked(st, closure->function);
-    if (entry == NULL || !entry->compiled || entry->program == NULL) return 0;
-    if (entry->runtime_disabled) return 0;
+static int jit_try_execute_entry_stack(
+    VM* vm,
+    ToiJitState* st,
+    JitTrackedFunction* entry,
+    ObjClosure* closure,
+    int arg_count) {
+    if (vm == NULL || st == NULL || entry == NULL || closure == NULL) return 0;
+    if (!entry->compiled || entry->program == NULL || entry->runtime_disabled) return 0;
+    if (entry->function != closure->function) return 0;
     vm->native_jit_exec_attempts++;
     entry->exec_attempts++;
     uint32_t probe_limit = (entry->runtime_probe_limit != 0) ? (uint32_t)entry->runtime_probe_limit : 128u;
@@ -6130,10 +5013,147 @@ int toi_jit_try_execute(VM* vm, ObjClosure* closure, int arg_count) {
         return 0;
     }
     if (!execute_program(vm, closure, arg_count, entry->program, NULL, NULL)) return 0;
-
     entry->exec_hits++;
     vm->native_jit_exec_hits++;
     return 1;
+}
+
+typedef int (*JitLinkedExecFn)(VM* vm, ObjClosure* closure, int arg_count, Value* args, Value* out);
+
+static int jit_exec_stack_dispatch(VM* vm, ObjClosure* closure, int arg_count, Value* args, Value* out) {
+    (void)args;
+    (void)out;
+    return toi_jit_try_execute(vm, closure, arg_count);
+}
+
+static int jit_exec_compiled_with_args_dispatch(
+    VM* vm,
+    ObjClosure* closure,
+    int arg_count,
+    Value* args,
+    Value* out) {
+    if (args == NULL || out == NULL) return 0;
+    return toi_jit_try_execute_compiled_with_args(vm, closure, arg_count, args, out);
+}
+
+static int jit_linked_pipeline_active(ToiJitState* st) {
+    return st != NULL &&
+        st->next_pipeline_enabled &&
+        st->next_pipeline != NULL &&
+        jit_pipeline_link_exec_is_enabled(st->next_pipeline);
+}
+
+static void jit_linked_record_hit(JitPipelineState* pipeline, int patch_hit) {
+    if (pipeline == NULL) return;
+    jit_pipeline_note_link_exec_hit(pipeline);
+    if (patch_hit) jit_pipeline_note_link_patch_hit(pipeline);
+}
+
+static int jit_try_linked_hot_retry(
+    VM* vm,
+    JitPipelineState* pipeline,
+    ObjFunction* function,
+    ObjClosure* closure,
+    int arg_count,
+    Value* args,
+    Value* out,
+    JitLinkedExecFn exec_fn,
+    int note_attempt,
+    int note_patch_attempt,
+    int note_patch_hit) {
+    if (vm == NULL || pipeline == NULL || function == NULL || closure == NULL || exec_fn == NULL) return 0;
+    if (note_attempt) jit_pipeline_note_link_exec_attempt(pipeline);
+    if (note_patch_attempt) jit_pipeline_note_link_patch_attempt(pipeline);
+    if (exec_fn(vm, closure, arg_count, args, out)) {
+        jit_linked_record_hit(pipeline, note_patch_hit);
+        return 1;
+    }
+    toi_jit_notify_hot_function(vm, function);
+    if (exec_fn(vm, closure, arg_count, args, out)) {
+        jit_linked_record_hit(pipeline, note_patch_hit);
+        return 1;
+    }
+    return 0;
+}
+
+int toi_jit_try_execute(VM* vm, ObjClosure* closure, int arg_count) {
+    if (vm == NULL || !vm->native_jit_enabled || closure == NULL) return 0;
+
+    ToiJitState* st = jit_state(vm);
+    if (st == NULL) return 0;
+    JitTrackedFunction* entry = jit_find_tracked(st, closure->function);
+    if (entry == NULL) return 0;
+    return jit_try_execute_entry_stack(vm, st, entry, closure, arg_count);
+}
+
+int toi_jit_try_execute_linked(VM* vm, ObjClosure* closure, int arg_count) {
+    if (vm == NULL || !vm->native_jit_enabled || closure == NULL) return 0;
+    ToiJitState* st = jit_state(vm);
+    if (!jit_linked_pipeline_active(st)) {
+        return toi_jit_try_execute(vm, closure, arg_count);
+    }
+    if (!jit_pipeline_link_patch_is_enabled(st->next_pipeline)) {
+        return toi_jit_try_execute(vm, closure, arg_count);
+    }
+    ObjFunction* function = closure->function;
+    if (function == NULL || !jit_pipeline_can_execute_linked(st->next_pipeline, function)) {
+        return toi_jit_try_execute(vm, closure, arg_count);
+    }
+    return jit_try_linked_hot_retry(
+        vm, st->next_pipeline, function, closure, arg_count, NULL, NULL, jit_exec_stack_dispatch, 1, 0, 0);
+}
+
+int toi_jit_try_execute_linked_at_site(
+    VM* vm,
+    ObjFunction* caller_function,
+    int opcode_offset,
+    ObjClosure* closure,
+    int arg_count) {
+    if (vm == NULL || !vm->native_jit_enabled || caller_function == NULL || closure == NULL) return 0;
+    ToiJitState* st = jit_state(vm);
+    if (!jit_linked_pipeline_active(st)) {
+        return toi_jit_try_execute(vm, closure, arg_count);
+    }
+    if (!jit_pipeline_link_patch_is_enabled(st->next_pipeline)) {
+        return toi_jit_try_execute(vm, closure, arg_count);
+    }
+    ObjFunction* function = closure->function;
+    if (function == NULL || opcode_offset < 0 ||
+        !jit_pipeline_can_execute_linked_at_site(
+            st->next_pipeline,
+            caller_function,
+            (uint32_t)opcode_offset,
+            function)) {
+        return toi_jit_try_execute(vm, closure, arg_count);
+    }
+    jit_pipeline_note_link_exec_attempt(st->next_pipeline);
+    jit_pipeline_note_link_patch_attempt(st->next_pipeline);
+    JitTrackedFunction* entry = jit_link_site_cache_lookup(
+        st, caller_function, (uint32_t)opcode_offset, function);
+    if (entry != NULL && jit_try_execute_entry_stack(vm, st, entry, closure, arg_count)) {
+        jit_linked_record_hit(st->next_pipeline, 1);
+        return 1;
+    }
+
+    entry = jit_find_tracked(st, function);
+    if (entry != NULL && entry->compiled && entry->program != NULL) {
+        jit_link_site_cache_store(st, caller_function, (uint32_t)opcode_offset, function, entry);
+        if (jit_try_execute_entry_stack(vm, st, entry, closure, arg_count)) {
+            jit_linked_record_hit(st->next_pipeline, 1);
+            return 1;
+        }
+    }
+
+    toi_jit_notify_hot_function(vm, function);
+    entry = jit_find_tracked(st, function);
+    if (entry != NULL && entry->compiled && entry->program != NULL) {
+        jit_link_site_cache_store(st, caller_function, (uint32_t)opcode_offset, function, entry);
+    }
+    if (entry != NULL && jit_try_execute_entry_stack(vm, st, entry, closure, arg_count)) {
+        jit_linked_record_hit(st->next_pipeline, 1);
+        return 1;
+    }
+    return 0;
 }
 
 static int jit_validate_closure_call_args(ObjClosure* closure, int arg_count, Value* args) {
@@ -6232,9 +5252,101 @@ int toi_jit_try_execute_compiled_with_args(VM* vm, ObjClosure* closure, int arg_
     return jit_try_execute_entry_with_args(vm, st, entry, closure, arg_count, args, out);
 }
 
+int toi_jit_try_execute_compiled_at_callsite_with_args(
+    VM* vm,
+    ObjClosure* caller,
+    uint32_t opcode_offset,
+    ObjClosure* callee,
+    int arg_count,
+    Value* args,
+    Value* out) {
+    if (vm == NULL || !vm->native_jit_enabled || caller == NULL || callee == NULL ||
+        args == NULL || out == NULL) {
+        return 0;
+    }
+    ToiJitState* st = jit_state(vm);
+    if (st == NULL) return 0;
+    if (!jit_validate_closure_call_args(callee, arg_count, args)) return 0;
+    ObjFunction* caller_function = caller->function;
+    ObjFunction* callee_function = callee->function;
+    if (caller_function == NULL || callee_function == NULL) return 0;
+
+    JitTrackedFunction* entry = jit_link_site_cache_lookup(st, caller_function, opcode_offset, callee_function);
+    if (entry != NULL &&
+        jit_try_execute_entry_with_args(vm, st, entry, callee, arg_count, args, out)) {
+        return 1;
+    }
+
+    entry = jit_find_tracked(st, callee_function);
+    if (entry != NULL && entry->compiled && entry->program != NULL) {
+        jit_link_site_cache_store(st, caller_function, opcode_offset, callee_function, entry);
+        return jit_try_execute_entry_with_args(vm, st, entry, callee, arg_count, args, out);
+    }
+
+    JitProgram* program = NULL;
+    if (!jit_get_compiled_closure_program(vm, callee, &program) || program == NULL) return 0;
+    entry = jit_find_tracked(st, callee_function);
+    if (entry == NULL) return 0;
+    if (entry->program == NULL) entry->program = program;
+    if (!entry->compiled || entry->program == NULL) return 0;
+    jit_link_site_cache_store(st, caller_function, opcode_offset, callee_function, entry);
+    return jit_try_execute_entry_with_args(vm, st, entry, callee, arg_count, args, out);
+}
+
+int toi_jit_get_compiled_program_ptr_at_callsite(
+    VM* vm,
+    ObjClosure* caller,
+    uint32_t opcode_offset,
+    ObjClosure* callee,
+    void** out_program_ptr) {
+    if (out_program_ptr == NULL) return 0;
+    *out_program_ptr = NULL;
+    if (vm == NULL || !vm->native_jit_enabled || caller == NULL || callee == NULL) return 0;
+    ToiJitState* st = jit_state(vm);
+    if (st == NULL) return 0;
+    ObjFunction* caller_function = caller->function;
+    ObjFunction* callee_function = callee->function;
+    if (caller_function == NULL || callee_function == NULL) return 0;
+
+    JitTrackedFunction* entry = jit_link_site_cache_lookup(st, caller_function, opcode_offset, callee_function);
+    if (entry != NULL && entry->compiled && entry->program != NULL) {
+        *out_program_ptr = (void*)entry->program;
+        return 1;
+    }
+
+    entry = jit_find_tracked(st, callee_function);
+    if (entry != NULL && entry->compiled && entry->program != NULL) {
+        jit_link_site_cache_store(st, caller_function, opcode_offset, callee_function, entry);
+        *out_program_ptr = (void*)entry->program;
+        return 1;
+    }
+
+    JitProgram* program = NULL;
+    if (!jit_get_compiled_closure_program(vm, callee, &program) || program == NULL) return 0;
+    entry = jit_find_tracked(st, callee_function);
+    if (entry == NULL || !entry->compiled || entry->program == NULL) return 0;
+    jit_link_site_cache_store(st, caller_function, opcode_offset, callee_function, entry);
+    *out_program_ptr = (void*)entry->program;
+    return 1;
+}
+
+int toi_jit_try_execute_linked_with_args(VM* vm, ObjClosure* closure, int arg_count, Value* args, Value* out) {
+    if (vm == NULL || !vm->native_jit_enabled || closure == NULL || args == NULL || out == NULL) return 0;
+    ToiJitState* st = jit_state(vm);
+    if (!jit_linked_pipeline_active(st)) return 0;
+    if (!jit_pipeline_link_patch_is_enabled(st->next_pipeline)) {
+        return toi_jit_try_execute_compiled_with_args(vm, closure, arg_count, args, out);
+    }
+    ObjFunction* function = closure->function;
+    if (function == NULL) return 0;
+    if (!jit_pipeline_can_execute_linked(st->next_pipeline, function)) return 0;
+    return jit_try_linked_hot_retry(
+        vm, st->next_pipeline, function, closure, arg_count, args, out, jit_exec_compiled_with_args_dispatch, 1, 0, 0);
+}
+
 void toi_jit_notify_loop_backedge(VM* vm, CallFrame* frame, int opcode_offset, uint8_t opcode) {
     if (vm == NULL || !vm->native_jit_enabled || frame == NULL || frame->closure == NULL) return;
-    if (opcode != OP_QFOR_LOOP_NUM && opcode != OP_LOOP) return;
+    if (!is_numeric_for_loop_opcode(opcode) && opcode != OP_LOOP) return;
 
     ToiJitState* st = jit_state(vm);
     if (st == NULL) return;
@@ -6242,11 +5354,16 @@ void toi_jit_notify_loop_backedge(VM* vm, CallFrame* frame, int opcode_offset, u
     st->loop_backedge_events++;
 
     ObjFunction* function = frame->closure->function;
+    if (st->next_pipeline_enabled && st->next_pipeline != NULL) {
+        jit_pipeline_note_hot_function(st->next_pipeline, function);
+        (void)jit_pipeline_try_compile_stub(st->next_pipeline, function);
+    }
     JitLoopTrace* trace = jit_find_or_add_loop(vm, function, opcode_offset, opcode);
     if (trace == NULL || trace->compiled || trace->failed) return;
 
     trace->hot_count++;
-    if (trace->hot_count < 1024) return;
+    uint32_t hot_threshold = jit_loop_hot_threshold();
+    if (trace->hot_count < hot_threshold) return;
 
     trace->compile_attempts++;
     st->loop_compile_attempts++;
@@ -6298,7 +5415,7 @@ int toi_jit_has_compiled_loops(VM* vm) {
 
 int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_offset, uint8_t opcode) {
     if (vm == NULL || !vm->native_jit_enabled || frame == NULL || frame->closure == NULL) return 0;
-    if (opcode != OP_QFOR_LOOP_NUM && opcode != OP_LOOP) return 0;
+    if (!is_numeric_for_loop_opcode(opcode) && opcode != OP_LOOP) return 0;
 
     ToiJitState* st = jit_state(vm);
     if (st == NULL) return 0;
@@ -6385,7 +5502,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
         st->native_trace_exec_enabled &&
         !st->native_trace_exec_globally_disabled &&
         trace->native_slot_loop_fn == NULL &&
-        trace->opcode == OP_QFOR_LOOP_NUM &&
+        (is_numeric_for_loop_opcode(trace->opcode) || trace->opcode == OP_LOOP) &&
         trace->native_trace_fn != NULL &&
         trace->native_trace_ready &&
         trace->native_trace_exec_safe;
@@ -6399,7 +5516,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
              trace->native_trace_has_get_table_generic ||
              trace->native_trace_has_mutating_table);
 
-        uint32_t native_probe_limit = direct_core ? 32u : 8u;
+        uint32_t native_probe_limit = direct_core ? 8u : 8u;
         if (trace->native_trace_exec_attempts >= native_probe_limit &&
             trace->native_trace_exec_hits == 0) {
             trace->native_trace_exec_safe = 0;
@@ -6433,7 +5550,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
         st->native_trace_exec_enabled &&
         !st->native_trace_exec_globally_disabled &&
         trace->native_slot_loop_fn == NULL &&
-        trace->opcode == OP_QFOR_LOOP_NUM &&
+        (is_numeric_for_loop_opcode(trace->opcode) || trace->opcode == OP_LOOP) &&
         trace->native_trace_fn != NULL &&
         trace->native_trace_ready &&
         trace->native_trace_exec_safe;
@@ -6455,7 +5572,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
         st->native_trace_exec_enabled &&
         !st->native_trace_exec_globally_disabled &&
         trace->native_slot_loop_fn == NULL &&
-        trace->opcode == OP_QFOR_LOOP_NUM &&
+        (is_numeric_for_loop_opcode(trace->opcode) || trace->opcode == OP_LOOP) &&
         trace->native_trace_fn != NULL &&
         trace->native_trace_ready &&
         trace->native_trace_exec_safe;
@@ -6497,17 +5614,36 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
             exec_state.op = 0;
             exec_state.reason = TOI_JIT_NATIVE_DEOPT_NONE;
             exec_state.stack_count = 0;
-            ToiJitNativeExecResult r = toi_jit_backend_run_native_trace(
-                st->backend_kind,
-                vm,
-                frame->closure,
-                run_slots,
-                frame_window,
-                trace->native_trace_instrs,
-                (int)trace->native_trace_instr_count,
-                trace->native_value_var_slot,
-                trace->native_value_end_slot,
-                &exec_state);
+            ToiJitNativeExecResult r = TOI_JIT_NATIVE_EXEC_DEOPT;
+            if (st->native_trace_compiled_exec_enabled &&
+                trace->native_trace_fn != NULL) {
+                // Prefer compiled native-trace entry whenever available.
+                st->native_trace_active_depth++;
+                int rr = trace->native_trace_fn(
+                    vm,
+                    frame->closure,
+                    run_slots,
+                    frame_window,
+                    &exec_state);
+                st->native_trace_active_depth--;
+                if (rr == (int)TOI_JIT_NATIVE_EXEC_EXIT) r = TOI_JIT_NATIVE_EXEC_EXIT;
+                else if (rr == (int)TOI_JIT_NATIVE_EXEC_CONTINUE) r = TOI_JIT_NATIVE_EXEC_CONTINUE;
+                else r = TOI_JIT_NATIVE_EXEC_DEOPT;
+            } else {
+                st->native_trace_active_depth++;
+                r = toi_jit_backend_run_native_trace(
+                    st->backend_kind,
+                    vm,
+                    frame->closure,
+                    run_slots,
+                    frame_window,
+                    trace->native_trace_instrs,
+                    (int)trace->native_trace_instr_count,
+                    trace->native_value_var_slot,
+                    trace->native_value_end_slot,
+                    &exec_state);
+                st->native_trace_active_depth--;
+            }
             if (r == TOI_JIT_NATIVE_EXEC_EXIT) {
                 if (needs_buffered_slots) {
                     for (int i = 0; i < frame_window; i++) frame->slots[i] = work[i];
@@ -6525,6 +5661,11 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                 uint32_t off = (exec_state.resume_offset == 0xffffffffu)
                     ? trace->loop_start_offset
                     : exec_state.resume_offset;
+                if ((exec_state.reason == TOI_JIT_NATIVE_DEOPT_CALL_TARGET ||
+                     exec_state.reason == TOI_JIT_NATIVE_DEOPT_INVOKE_TARGET) &&
+                    jit_try_stitch_soft_continue_calls(vm, frame, &exec_state, &off)) {
+                    exec_state.reason = TOI_JIT_NATIVE_DEOPT_NONE;
+                }
                 if (off < (uint32_t)frame->closure->function->chunk.count) {
                     if (needs_buffered_slots) {
                         for (int i = 0; i < frame_window; i++) frame->slots[i] = work[i];
@@ -6565,6 +5706,13 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                 trace->native_trace_deopts++;
                 st->native_trace_deopt_opcode_counts[exec_state.op]++;
                 if (exec_state.reason < 32u) st->native_trace_deopt_reason_counts[exec_state.reason]++;
+                if (trace->native_trace_exec_safe &&
+                    trace->native_trace_direct_core &&
+                    trace->native_trace_exec_hits == 0 &&
+                    trace->native_trace_deopts >= 2) {
+                    trace->native_trace_exec_safe = 0;
+                    st->native_trace_runtime_disabled++;
+                }
             } else {
                 st->native_trace_guard_failures++;
                 trace->native_trace_guard_failures++;
@@ -6572,6 +5720,13 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                 trace->native_trace_deopts++;
                 st->native_trace_deopt_opcode_counts[exec_state.op]++;
                 if (exec_state.reason < 32u) st->native_trace_deopt_reason_counts[exec_state.reason]++;
+                if (trace->native_trace_exec_safe &&
+                    trace->native_trace_direct_core &&
+                    trace->native_trace_exec_hits == 0 &&
+                    trace->native_trace_deopts >= 2) {
+                    trace->native_trace_exec_safe = 0;
+                    st->native_trace_runtime_disabled++;
+                }
             }
         } else {
             st->native_trace_guard_failures++;
@@ -6791,6 +5946,15 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
     uint32_t iter_guard = 0;
     uint32_t loop_chunk_iters = 0;
     const uint32_t loop_chunk_budget = 4096;
+    const int debug_mixed_loop = jit_debug_mixed_loop_matches_fn(function);
+    int debug_mixed_left = debug_mixed_loop ? jit_debug_mixed_loop_limit() : 0;
+#define DEBUG_MIXED_LOOP(...)                                                                                           \
+    do {                                                                                                                \
+        if (debug_mixed_loop && debug_mixed_left > 0) {                                                                \
+            fprintf(stderr, __VA_ARGS__);                                                                              \
+            debug_mixed_left--;                                                                                         \
+        }                                                                                                               \
+    } while (0)
 #define LOOP_FAIL(reason)                                                                                               \
     do {                                                                                                                \
         if (jit_dump_loops_enabled() && trace->exec_hits == 0 && trace->exec_attempts <= 1) {                         \
@@ -7019,6 +6183,16 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         if (argc < 0 || sp < argc + 1) LOOP_FAIL("call-stack-shape");
                         int callee_idx = sp - 1 - argc;
                         Value callee = work[callee_idx];
+                        DEBUG_MIXED_LOOP(
+                            "[jit-mixed-loop] fn=%s at=%d pc=%d op=CALL pre sp=%d argc=%d callee=%s arg0=%s arg1=%s\n",
+                            (function->name != NULL) ? function->name->chars : "<script>",
+                            opcode_offset,
+                            pc,
+                            sp,
+                            argc,
+                            jit_value_kind_name(callee),
+                            (argc > 0) ? jit_value_kind_name(work[callee_idx + 1]) : "-",
+                            (argc > 1) ? jit_value_kind_name(work[callee_idx + 2]) : "-");
                         Value out = NIL_VAL;
                         int ic_hit = jit_try_trace_call_ic(
                                 vm,
@@ -7042,14 +6216,39 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                                 LOOP_FAIL("call-closure-unsupported");
                             }
                         } else if (!ic_hit &&
-                                   !jit_call_primitive(vm, callee, &work[callee_idx + 1], argc, &out)) {
-                            LOOP_FAIL("call-primitive-miss");
+                                   1) {
+                            int out_count = 0;
+                            if (!jit_call_primitive_multi(
+                                    vm,
+                                    callee,
+                                    &work[callee_idx + 1],
+                                    argc,
+                                    &work[callee_idx],
+                                    trace->max_stack - callee_idx,
+                                    &out_count)) {
+                                LOOP_FAIL("call-primitive-miss");
+                            }
+                            if (out_count <= 0) {
+                                LOOP_FAIL("call-zero-return");
+                            }
+                            out = work[callee_idx];
+                            sp = callee_idx + out_count;
                         }
                         if (!ic_hit) {
                             jit_update_trace_call_ic(vm, trace, pc, callee, argc);
                         }
-                        work[callee_idx] = out;
-                        sp = callee_idx + 1;
+                        if (ic_hit) {
+                            work[callee_idx] = out;
+                            sp = callee_idx + 1;
+                        }
+                        DEBUG_MIXED_LOOP(
+                            "[jit-mixed-loop] fn=%s at=%d pc=%d op=CALL post sp=%d out=%s ic=%d\n",
+                            (function->name != NULL) ? function->name->chars : "<script>",
+                            opcode_offset,
+                            pc,
+                            sp,
+                            jit_value_kind_name(out),
+                            ic_hit);
                         pc++;
                         break;
                     }
@@ -7058,12 +6257,30 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         if (argc < 0 || sp < argc + 1) LOOP_FAIL("invoke-stack-shape");
                         int recv_idx = sp - 1 - argc;
                         Value receiver = work[recv_idx];
+                        DEBUG_MIXED_LOOP(
+                            "[jit-mixed-loop] fn=%s at=%d pc=%d op=INVOKE pre sp=%d argc=%d recv=%s\n",
+                            (function->name != NULL) ? function->name->chars : "<script>",
+                            opcode_offset,
+                            pc,
+                            sp,
+                            argc,
+                            jit_value_kind_name(receiver));
                         Value out = NIL_VAL;
                         if (!jit_invoke_primitive(vm, receiver, op->constant, &work[recv_idx + 1], argc, &out)) {
                             LOOP_FAIL("invoke-unsupported");
                         }
                         work[recv_idx] = out;
                         sp = recv_idx + 1;
+                        DEBUG_MIXED_LOOP(
+                            "[jit-mixed-loop] fn=%s at=%d pc=%d op=INVOKE post sp=%d out=%s method=%s\n",
+                            (function->name != NULL) ? function->name->chars : "<script>",
+                            opcode_offset,
+                            pc,
+                            sp,
+                            jit_value_kind_name(out),
+                            IS_STRING(op->constant)
+                                ? AS_STRING(op->constant)->chars
+                                : "<non-string>");
                         pc++;
                         break;
                     }
@@ -7279,6 +6496,16 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         Value value = work[sp - 1];
                         Value key = work[sp - 2];
                         Value table = work[sp - 3];
+                        DEBUG_MIXED_LOOP(
+                            "[jit-mixed-loop] fn=%s at=%d pc=%d op=%s pre sp=%d table=%s key=%s value=%s\n",
+                            (function->name != NULL) ? function->name->chars : "<script>",
+                            opcode_offset,
+                            pc,
+                            jit_op_name(op->op),
+                            sp,
+                            jit_value_kind_name(table),
+                            jit_value_kind_name(key),
+                            jit_value_kind_name(value));
                         if (!IS_TABLE(table)) LOOP_FAIL("set-table-not-table");
                         ObjTable* t = AS_TABLE(table);
                         if (!t->no_metatable_fast) LOOP_FAIL("set-table-metatable");
@@ -7351,6 +6578,14 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         }
                         work[sp - 3] = value;
                         sp -= 2;
+                        DEBUG_MIXED_LOOP(
+                            "[jit-mixed-loop] fn=%s at=%d pc=%d op=%s post sp=%d out=%s\n",
+                            (function->name != NULL) ? function->name->chars : "<script>",
+                            opcode_offset,
+                            pc,
+                            jit_op_name(op->op),
+                            sp,
+                            jit_value_kind_name(work[sp - 1]));
                         pc++;
                         break;
                     }
@@ -7406,6 +6641,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         LOOP_FAIL("unsupported-op");
         }
     }
+#undef DEBUG_MIXED_LOOP
 #undef LOOP_FAIL
     return 0;
 }
@@ -7414,6 +6650,48 @@ void toi_jit_print_stats(VM* vm) {
     if (vm == NULL || !vm->native_jit_enabled) return;
     ToiJitState* st = jit_state(vm);
     if (st == NULL) return;
+    if (st->next_pipeline_enabled && st->next_pipeline != NULL) {
+        JitPipelineStats ns;
+        jit_pipeline_collect_stats(st->next_pipeline, &ns);
+        fprintf(stderr,
+                "[vm-native-jit-pipeline] enabled=1 hot_functions=%llu compile_attempts=%llu "
+                "compile_success=%llu compile_fail=%llu exec_attempts=%llu exec_hits=%llu "
+                "functions_built=%llu ir_ops=%llu ir_unsupported=%llu ir_calls=%llu ir_invokes=%llu ir_loops=%llu "
+                "lowered_traces=%llu lowered_ops=%llu lowered_calls=%llu lowered_invokes=%llu lowered_unsupported=%llu "
+                "lowered_callsites=%llu lowered_guard_hints=%llu "
+                "link_edges=%llu link_resolved=%llu link_unresolved=%llu "
+                "link_exec_enabled=%d link_patch_enabled=%d "
+                "link_exec_attempts=%llu link_exec_hits=%llu "
+                "link_patch_attempts=%llu link_patch_hits=%llu\n",
+                (unsigned long long)ns.hot_functions,
+                (unsigned long long)ns.compile_attempts,
+                (unsigned long long)ns.compile_success,
+                (unsigned long long)ns.compile_fail,
+                (unsigned long long)ns.exec_attempts,
+                (unsigned long long)ns.exec_hits,
+                (unsigned long long)ns.functions_built,
+                (unsigned long long)ns.ir_ops_total,
+                (unsigned long long)ns.ir_unsupported_total,
+                (unsigned long long)ns.ir_call_sites_total,
+                (unsigned long long)ns.ir_invoke_sites_total,
+                (unsigned long long)ns.ir_loop_sites_total,
+                (unsigned long long)ns.lowered_trace_count,
+                (unsigned long long)ns.lowered_trace_ops_total,
+                (unsigned long long)ns.lowered_trace_calls_total,
+                (unsigned long long)ns.lowered_trace_invokes_total,
+                (unsigned long long)ns.lowered_trace_unsupported_total,
+                (unsigned long long)ns.lowered_callsite_count,
+                (unsigned long long)ns.lowered_callsite_guard_hints,
+                (unsigned long long)ns.link_edge_total,
+                (unsigned long long)ns.link_edge_resolved,
+                (unsigned long long)ns.link_edge_unresolved,
+                (int)ns.link_exec_enabled,
+                (int)ns.link_patch_enabled,
+                (unsigned long long)ns.link_exec_attempts,
+                (unsigned long long)ns.link_exec_hits,
+                (unsigned long long)ns.link_patch_attempts,
+                (unsigned long long)ns.link_patch_hits);
+    }
     int top_fail_opcode = -1;
     uint64_t top_fail_count = 0;
     for (int i = 0; i < 256; i++) {
@@ -7613,6 +6891,17 @@ void toi_jit_print_stats(VM* vm) {
             (unsigned long long)st->native_trace_sandbox_attempts,
             (unsigned long long)st->native_trace_sandbox_success,
             (unsigned long long)st->native_trace_sandbox_fail);
+    if (st->backend_kind == TOI_JIT_BACKEND_ARM64) {
+        uint64_t chain_attempts = 0;
+        uint64_t chain_hits = 0;
+        uint64_t chain_misses = 0;
+        toi_jit_arm64_get_chain_stats(&chain_attempts, &chain_hits, &chain_misses);
+        fprintf(stderr,
+                "[vm-native-jit-chain] attempts=%llu hits=%llu misses=%llu\n",
+                (unsigned long long)chain_attempts,
+                (unsigned long long)chain_hits,
+                (unsigned long long)chain_misses);
+    }
     if (st->loop_compile_fail_count != 0) {
         fprintf(stderr, "[vm-native-jit-loop-fail-opcodes]");
         for (int i = 0; i < 256; i++) {

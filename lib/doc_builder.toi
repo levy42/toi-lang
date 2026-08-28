@@ -63,9 +63,11 @@ fn extract_title(md, fallback)
 fn walk_markdown(root, rel, out)
   dir_path = rel == "" ? root : path.join(root, rel)
 
-  names, err = os.listdir(dir_path)
-  if err
-    die(f"listdir failed for '{dir_path}': {err}")
+  names = os.listdir(dir_path)
+  if names == nil
+    die(f"listdir failed for '{dir_path}'")
+  if type(names) != "table"
+    die(f"listdir returned {type(names)} for '{dir_path}'")
 
   table.sort(names)
   for name in names

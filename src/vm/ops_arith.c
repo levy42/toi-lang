@@ -13,13 +13,6 @@ static inline int to_int64_local(double x, int64_t* out) {
     return 1;
 }
 
-static inline void quicken_current_binary_opcode(CallFrame* frame, uint8_t* ip, uint8_t opcode) {
-    int offset = (int)(ip - frame->closure->function->chunk.code) - 1;
-    if (offset >= 0) {
-        frame->closure->function->chunk.code[offset] = opcode;
-    }
-}
-
 static void concatenate_local(VM* vm) {
     ObjString* b = AS_STRING(pop(vm));
     ObjString* a = AS_STRING(pop(vm));
@@ -124,7 +117,6 @@ int vm_handle_op_add(VM* vm, CallFrame** frame, uint8_t** ip) {
     if (IS_STRING(peek(vm, 0)) && IS_STRING(peek(vm, 1))) {
         concatenate_local(vm);
     } else if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-        quicken_current_binary_opcode(*frame, *ip, OP_QFADD);
         double b = AS_NUMBER(pop(vm));
         double a = AS_NUMBER(pop(vm));
         push(vm, NUMBER_VAL(a + b));
@@ -196,7 +188,6 @@ int vm_handle_op_add_inplace(VM* vm, CallFrame** frame, uint8_t** ip) {
 
 int vm_handle_op_subtract(VM* vm, CallFrame** frame, uint8_t** ip) {
     if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-        quicken_current_binary_opcode(*frame, *ip, OP_QFSUB);
         double b = AS_NUMBER(pop(vm));
         double a = AS_NUMBER(pop(vm));
         push(vm, NUMBER_VAL(a - b));
@@ -219,7 +210,6 @@ int vm_handle_op_subtract(VM* vm, CallFrame** frame, uint8_t** ip) {
 
 int vm_handle_op_multiply(VM* vm, CallFrame** frame, uint8_t** ip) {
     if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-        quicken_current_binary_opcode(*frame, *ip, OP_QFMUL);
         double b = AS_NUMBER(pop(vm));
         double a = AS_NUMBER(pop(vm));
         push(vm, NUMBER_VAL(a * b));
@@ -242,7 +232,6 @@ int vm_handle_op_multiply(VM* vm, CallFrame** frame, uint8_t** ip) {
 
 int vm_handle_op_divide(VM* vm, CallFrame** frame, uint8_t** ip) {
     if (IS_NUMBER(peek(vm, 0)) && IS_NUMBER(peek(vm, 1))) {
-        quicken_current_binary_opcode(*frame, *ip, OP_QFDIV);
         double b = AS_NUMBER(pop(vm));
         double a = AS_NUMBER(pop(vm));
         push(vm, NUMBER_VAL(a / b));
@@ -267,7 +256,6 @@ int vm_handle_op_modulo(VM* vm, CallFrame** frame, uint8_t** ip) {
     Value b = pop(vm);
     Value a = pop(vm);
     if (IS_NUMBER(a) && IS_NUMBER(b)) {
-        quicken_current_binary_opcode(*frame, *ip, OP_QFMOD);
         double ad = AS_NUMBER(a);
         double bd = AS_NUMBER(b);
         int64_t ia, ib;

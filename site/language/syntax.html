@@ -1,0 +1,171 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Language Syntax</title>
+    <link rel="stylesheet" href="../docs.css">
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+</head>
+<body>
+    <aside>
+    <a class="brand" href="../README.html">
+    <img class="brand-logo" src="../logo.svg" alt="Toi logo">
+    <span>Toi Docs</span>
+    </a>
+    <ul class="nav">
+    
+    
+    <li><a href="../README.html">Quick Start</a></li>
+    
+    
+    
+    <li><a href="../benchmarks.html">Benchmarks</a></li>
+    
+    
+    
+    <li><a href="../getting-started.html">Getting Started</a></li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group active" open>
+    <summary>Language</summary>
+    <ul class="subnav">
+    
+    <li><a href="../language/control-flow.html">Control Flow</a></li>
+    
+    <li><a href="../language/functions.html">Functions</a></li>
+    
+    <li><a href="../language/modules.html">Modules</a></li>
+    
+    <li class="active"><a href="../language/syntax.html">Language Syntax</a></li>
+    
+    <li><a href="../language/types-and-values.html">Types And Values</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group">
+    <summary>Standard Library</summary>
+    <ul class="subnav">
+    
+    <li><a href="../stdlib/README.html">Standard Library</a></li>
+    
+    <li><a href="../stdlib/core.html">Core</a></li>
+    
+    <li><a href="../stdlib/files-and-system.html">Files And System</a></li>
+    
+    <li><a href="../stdlib/networking-and-concurrency.html">Networking And Concurrency</a></li>
+    
+    <li><a href="../stdlib/text-and-data.html">Text And Data</a></li>
+    
+    <li><a href="../stdlib/toi-libraries.html">Toi Libraries</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    </ul>
+    </aside>
+    <main><h1 id="language syntax">Language Syntax</h1>
+<h2 id="lexical rules">Lexical Rules</h2>
+<ul>
+<li>Statements are line-oriented.
+</li>
+<li>Blocks are indentation-based.
+</li>
+<li>Comments start with <code>--</code>.
+</li>
+<li>Strings can use single quotes, double quotes, or multiline <code>[[...]]</code>.
+</li>
+<li>Interpolated strings use <code>f&quot;...&quot;</code>.
+</li>
+</ul>
+<h2 id="literals">Literals</h2>
+<pre><code class="language-toi">n <span class="tok op">=</span> <span class="tok num">42</span>
+big <span class="tok op">=</span> <span class="tok num">100_000</span>
+ok <span class="tok op">=</span> <span class="tok key">true</span>
+none <span class="tok op">=</span> <span class="tok key">nil</span>
+name <span class="tok op">=</span> <span class="tok str">&quot;Toi&quot;</span>
+multi <span class="tok op">=</span> <span class="tok pun">[</span><span class="tok pun">[</span>hello
+world<span class="tok pun">]</span><span class="tok pun">]</span>
+items <span class="tok op">=</span> <span class="tok pun">{</span><span class="tok num">1</span><span class="tok pun">,</span> <span class="tok num">2</span><span class="tok pun">,</span> <span class="tok num">3</span><span class="tok pun">}</span>
+user <span class="tok op">=</span> <span class="tok pun">{</span>name <span class="tok op">=</span> <span class="tok str">&quot;Ana&quot;</span><span class="tok pun">,</span> admin <span class="tok op">=</span> <span class="tok key">true</span><span class="tok pun">}</span></code></pre>
+<h2 id="variables and assignment">Variables And Assignment</h2>
+<pre><code class="language-toi">x <span class="tok op">=</span> <span class="tok num">10</span>
+a<span class="tok pun">,</span> b <span class="tok op">=</span> <span class="tok num">1</span><span class="tok pun">,</span> <span class="tok num">2</span>
+a<span class="tok pun">,</span> b <span class="tok op">=</span> <span class="tok pun">{</span><span class="tok num">10</span><span class="tok pun">,</span> <span class="tok num">20</span><span class="tok pun">}</span>
+x <span class="tok op">+=</span> <span class="tok num">1</span></code></pre>
+<p>Expression assignment uses <code>:=</code>:</p>
+<pre><code class="language-toi"><span class="tok key">if</span> <span class="tok pun">(</span>line <span class="tok op">:=</span> <span class="tok fn">input</span><span class="tok pun">(</span><span class="tok str">&quot;&gt; &quot;</span><span class="tok pun">)</span><span class="tok pun">)</span> <span class="tok op">!=</span> <span class="tok str">&quot;&quot;</span>
+  <span class="tok key">print</span> line</code></pre>
+<h2 id="operators">Operators</h2>
+<p>Arithmetic:</p>
+<ul>
+<li><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>%</code>, <code>//</code>, <code>**</code>
+</li>
+</ul>
+<p>Comparison:</p>
+<ul>
+<li><code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>
+</li>
+</ul>
+<p>Boolean:</p>
+<ul>
+<li><code>and</code>, <code>or</code>, <code>not</code>
+</li>
+</ul>
+<p>Other common forms:</p>
+<ul>
+<li>ternary: <code>cond ? yes : no</code>
+</li>
+<li>range: <code>1..10</code>
+</li>
+<li>length: <code>#value</code>
+</li>
+<li>append: <code>items &lt;+ value</code>
+</li>
+<li>membership: <code>value in items</code>, <code>items has value</code>
+</li>
+</ul>
+<h2 id="tables">Tables</h2>
+<p>Tables are the main compound type. They can hold array-style and map-style data at the same time.</p>
+<pre><code class="language-toi">t <span class="tok op">=</span> <span class="tok pun">{</span><span class="tok num">10</span><span class="tok pun">,</span> <span class="tok num">20</span><span class="tok pun">,</span> name <span class="tok op">=</span> <span class="tok str">&quot;toi&quot;</span><span class="tok pun">,</span> <span class="tok pun">[</span><span class="tok num">10</span><span class="tok pun">]</span> <span class="tok op">=</span> <span class="tok str">&quot;x&quot;</span><span class="tok pun">}</span>
+
+<span class="tok key">print</span> t<span class="tok pun">[</span><span class="tok num">1</span><span class="tok pun">]</span>
+<span class="tok key">print</span> t<span class="tok pun">.</span>name
+<span class="tok key">print</span> t<span class="tok pun">[</span><span class="tok str">&quot;name&quot;</span><span class="tok pun">]</span></code></pre>
+<h2 id="strings">Strings</h2>
+<pre><code class="language-toi">name <span class="tok op">=</span> <span class="tok str">&quot;Toi&quot;</span>
+version <span class="tok op">=</span> <span class="tok num">0.1</span>
+msg <span class="tok op">=</span> f<span class="tok str">&quot;hello {name} {version|.1f}&quot;</span></code></pre>
+<p>Interpolation uses normal expression syntax inside <code>{...}</code>. Formatting after <code>|</code> follows <code>string.format</code> conventions.</p>
+<h2 id="indexing and slicing">Indexing And Slicing</h2>
+<pre><code class="language-toi">letters <span class="tok op">=</span> <span class="tok str">&quot;hello&quot;</span>
+nums <span class="tok op">=</span> <span class="tok pun">{</span><span class="tok num">10</span><span class="tok pun">,</span> <span class="tok num">20</span><span class="tok pun">,</span> <span class="tok num">30</span><span class="tok pun">,</span> <span class="tok num">40</span><span class="tok pun">,</span> <span class="tok num">50</span><span class="tok pun">}</span>
+
+first <span class="tok op">=</span> letters<span class="tok pun">[</span><span class="tok num">1</span><span class="tok pun">]</span>
+mid <span class="tok op">=</span> nums<span class="tok pun">[</span><span class="tok num">2</span><span class="tok op">..</span><span class="tok num">4</span><span class="tok pun">]</span>
+head <span class="tok op">=</span> nums<span class="tok pun">[</span><span class="tok op">..</span><span class="tok num">3</span><span class="tok pun">]</span>
+tail <span class="tok op">=</span> nums<span class="tok pun">[</span><span class="tok num">3</span><span class="tok op">..</span><span class="tok pun">]</span>
+drop_last <span class="tok op">=</span> letters<span class="tok pun">[</span><span class="tok op">..</span><span class="tok op">-</span><span class="tok num">1</span><span class="tok pun">]</span></code></pre>
+<p>Negative slice bounds are offsets from the end.</p>
+<h2 id="comprehensions">Comprehensions</h2>
+<pre><code class="language-toi">squares <span class="tok op">=</span> <span class="tok pun">{</span>n <span class="tok op">*</span> n <span class="tok key">for</span> n <span class="tok key">in</span> <span class="tok num">1</span><span class="tok op">..</span><span class="tok num">5</span><span class="tok pun">}</span>
+index <span class="tok op">=</span> <span class="tok pun">{</span><span class="tok fn">str</span><span class="tok pun">(</span>n<span class="tok pun">)</span> <span class="tok op">=</span> n <span class="tok op">*</span> <span class="tok num">10</span> <span class="tok key">for</span> n <span class="tok key">in</span> <span class="tok num">1</span><span class="tok op">..</span><span class="tok num">3</span><span class="tok pun">}</span></code></pre>
+<h2 id="method calls">Method Calls</h2>
+<p>Use method-call style when it reads naturally:</p>
+<pre><code class="language-toi"><span class="tok key">print</span> <span class="tok str">&quot;hello&quot;</span><span class="tok pun">.</span><span class="tok fn">upper</span><span class="tok pun">(</span><span class="tok pun">)</span>
+<span class="tok key">print</span> <span class="tok str">&quot;, &quot;</span><span class="tok pun">.</span><span class="tok fn">join</span><span class="tok pun">(</span><span class="tok pun">{</span><span class="tok str">&quot;a&quot;</span><span class="tok pun">,</span> <span class="tok str">&quot;b&quot;</span><span class="tok pun">,</span> <span class="tok str">&quot;c&quot;</span><span class="tok pun">}</span><span class="tok pun">)</span></code></pre>
+<h2 id="decorators">Decorators</h2>
+<pre><code class="language-toi"><span class="tok dec">@app.command</span>
+<span class="tok key">fn</span> <span class="tok fn">hello</span><span class="tok pun">(</span><span class="tok pun">)</span>
+  <span class="tok key">print</span> <span class="tok str">&quot;hello&quot;</span></code></pre></main>
+</body>
+</html>

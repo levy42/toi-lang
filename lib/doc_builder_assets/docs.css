@@ -1,3 +1,11 @@
+:root {
+    --bg: #fff;
+    --light: #aaa;
+    --subtle: #eee;
+    --bg-light: #f0f0f0;
+    --bg-subtle: #fafafa;
+}
+
 *,
 *::before,
 *::after {
@@ -9,10 +17,9 @@ body {
     min-height: 100vh;
     display: grid;
     grid-template-columns: 260px 1fr;
-    background: var(--bg);
-    color: var(--text);
+    max-width: 100%;
     font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
-    line-height: 1.55;
+    line-height: 1.44;
 }
 
 body > aside {
@@ -56,11 +63,11 @@ body > aside {
 .nav a,
 .nav summary {
     display: block;
-    padding: 7px 8px;
+    padding: 0.4em 0.8em;
     border-radius: 6px;
     text-decoration: none;
-    color: var(--text-muted);
-    font-size: 13px;
+    font-size: 0.9em;
+    margin-bottom: 2px;
 }
 
 .nav li.active a,
@@ -87,12 +94,7 @@ body > aside {
 .subnav {
     margin: 4px 0 8px 10px;
     padding-left: 8px;
-    border-left: 1px solid var(--line-strong);
-}
-
-.subnav li a {
-    font-size: 12px;
-    padding: 6px 8px;
+    border-left: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
 }
 
 body > main {
@@ -109,9 +111,12 @@ h6 {
     margin-top: 1.2em;
     margin-bottom: 0.45em;
     line-height: 1.2;
-    color: #111111;
+    font-weight: 500;
 }
 
+ul {
+    line-height: 1.6;
+}
 p,
 li {
     color: #2c2c2c;
@@ -129,27 +134,69 @@ a:hover {
 
 code {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 0.92em;
+    font-size: 0.85rem;
     background: #f0f0f0;
-    border: 1px solid var(--line);
     border-radius: 6px;
     padding: 0.1em 0.35em;
 }
 
 pre {
     margin: 1em 0;
-    padding: 14px;
-    background: #f3f3f3;
-    border: 1px solid var(--line);
-    border-radius: 10px;
+    padding: 1em 1.2em;
+    border-radius: 1.2em;
     overflow: auto;
+
+    background-color: #fff;
+    background-image: radial-gradient(#eef 1px, #fff 1px);
+    background-size: 10px 10px;
 }
 
 pre code {
     background: transparent;
     border: 0;
     padding: 0;
-    font-size: 0.9em;
+}
+
+pre code .tok.key {
+    color: #83a;
+}
+
+pre code .tok.name,
+pre code .tok.attr {
+    color: #279;
+}
+
+pre code .tok.fn {
+    color: #26c;
+}
+
+pre code .tok.dec {
+    color: #b54;
+}
+
+pre code .tok.str {
+    color: #274;
+}
+
+pre code .tok.num {
+    color: #469;
+}
+
+pre code .tok.com {
+    color: #888;
+    font-style: italic;
+}
+
+pre code .tok.op {
+    color: #973;
+}
+
+pre code .tok.pun {
+    color: #666;
+}
+
+pre code .tok.tag {
+    color: #70a;
 }
 
 blockquote {
@@ -165,16 +212,21 @@ table {
     border-collapse: collapse;
 }
 
+table {
+    overflow-x: auto;
+    max-width: fit-content;
+}
 th,
 td {
     padding: 0.5em 0.7em;
     text-align: left;
+    border-bottom: solid 1px var(--subtle);
 }
 
 hr {
     margin: 24px 0;
     border: 0;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--light);
 }
 
 @media (max-width: 900px) {
@@ -186,6 +238,5 @@ hr {
         position: static;
         height: auto;
         border-right: 0;
-        border-bottom: 1px solid var(--line);
     }
 }

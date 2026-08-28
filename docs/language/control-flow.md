@@ -3,52 +3,57 @@
 ## Conditionals
 
 ```toi
-if cond
-  ...
-elif other
-  ...
+if score >= 90
+  print "A"
+elif score >= 80
+  print "B"
 else
-  ...
+  print "C"
 ```
 
-Walrus (`:=`) can be used in conditions:
+Expression assignment fits naturally in conditions:
 
 ```toi
-k = nil
-if (k := 3) == 3
-  print k
+if (line := input("> ")) != ""
+  print line
 ```
 
-## While Loop
+## Match
+
+Use `match` when branching on a single value:
 
 ```toi
-while cond
-  ...
+match method
+case "GET"
+  handle_get()
+case "POST"
+  handle_post()
+else
+  handle_other()
 ```
+
+## While
 
 ```toi
 i = 0
-while ((i := i + 1) <= 10)
+while i < 10
   print i
+  i += 1
 ```
 
-## For Loop
+## For
 
-Toi supports iterator-style `for ... in ...`.
+Toi favors iterator-style loops.
 
 ```toi
 for v in values
-  ...
+  print v
 
-for k, v in table
-  ...
+for k, v in row
+  print k, v
 ```
 
-Index-loop shorthand (`i#`) is available in specific iterator contexts.
-
-## Break / Continue
-
-`break` and `continue` are supported in loops.
+Use `continue` and `break` when the loop reads better with guard clauses.
 
 ## Exceptions
 
@@ -61,18 +66,21 @@ finally
   cleanup()
 ```
 
-`throw value` raises an exception.
-
-## With Statement
-
-Context-manager style:
+Raise errors with:
 
 ```toi
-with resource() as r
-  r.use()
+throw "boom"
+throw {type = "ConfigError", msg = "missing host"}
 ```
 
-## Return / Yield
+## With
 
-- `return` supports multiple values.
-- `yield` is supported in generator/coroutine flows.
+```toi
+with io.open("tmp.txt", "w") as f
+  f.write("hello")
+```
+
+## Return And Yield
+
+- `return` may return multiple values
+- `yield` is used in generator-style code

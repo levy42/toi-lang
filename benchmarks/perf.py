@@ -14,28 +14,32 @@ def bench(name, func):
 
 def bench_math():
     acc = 0.0
-    for i in range(1, 2_000_000 + 1):
+    for i in range(1, 20_000_000 + 1):
         acc += (i * 3.14159) / ((i % 97) + 1)
     return acc
 
 
 def bench_random():
     acc = 0.0
-    for _ in range(2_000_000):
+    for _ in range(4_000_000):
         acc += random.random()
     return acc
 
 
 def bench_string_concat():
-    s = ""
-    for _ in range(20_000):
-        s += "abc"
-    return len(s)
+    total = 0
+    for _ in range(200):
+        parts = []
+        for _ in range(20_000):
+            parts.append("abc")
+        s = "".join(parts)
+        total += len(s)
+    return total
 
 
 def bench_string_ops():
     total = 0
-    for i in range(20_000):
+    for i in range(140_000):
         s = f"the quick brown fox jumps over the lazy dog {i}"
         x = s.upper()
         y = x.lower()
@@ -52,42 +56,45 @@ def bench_table():
         else:
             t.append(i * 2)
     total = 0
-    for i in range(1, 200_000 + 1):
-        total += t[i]
+    for _ in range(50):
+        for i in range(1, 200_000 + 1):
+            total += t[i]
     return total
 
 def bench_sort():
-    values = []
-    for i in range(1, 120_000 + 1):
-        values.append((i * 1103515245 + 12345) % 1_000_003)
-    values.sort()
     total = 0
-    for v in values:
-        total += v
+    for _ in range(6):
+        values = []
+        for i in range(1, 120_000 + 1):
+            values.append((i * 1103515245 + 12345) % 1_000_003)
+        values.sort()
+        for v in values:
+            total += v
     return total
 
 
 def bench_list_comprehension():
     t = [i * 3 for i in range(1, 200_000 + 1)]
     total = 0
-    for v in t:
-        total += v
+    for _ in range(55):
+        for v in t:
+            total += v
     return total
 
 
 def bench_calls():
-    def add(a: int, b: int):
-        return a + b
+    def add(a: int, b: str):
+        return a
 
     acc = 0
-    for i in range(1, 2_000_000 + 1):
-        acc = add(acc, i)
+    for _ in range(1, 6_000_000 + 1):
+        acc = add(acc, "df")
     return acc
 
 
 def bench_fstring():
     total = 0
-    for i in range(1, 200_000 + 1):
+    for i in range(1, 600_000 + 1):
         s = f"user:{i}-x{i % 10}"
         total += len(s)
     return total
@@ -110,7 +117,7 @@ def bench_app_pipeline():
 
     cache = {}
     total = 0
-    for i in range(1, 300_000 + 1):
+    for i in range(1, 600_000 + 1):
         method = methods[i % 4]
         path = paths[i % 6]
         key = f"{method} {path}"
@@ -176,7 +183,7 @@ def bench_app_handlers():
     }
 
     total = 0
-    for i in range(1, 300_000 + 1):
+    for i in range(1, 600_000 + 1):
         method = methods[i % 8]
         path = paths[i % 8]
         key = f"{method} {path}"
@@ -206,7 +213,7 @@ def bench_memory():
     tracemalloc.start()
     before_current, before_peak = tracemalloc.get_traced_memory()
     t = []
-    for i in range(200_000):
+    for i in range(500_000):
         t.append(f"abc{i}")
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()

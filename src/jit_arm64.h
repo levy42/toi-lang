@@ -73,5 +73,6 @@ ToiJitNativeExecResult toi_jit_arm64_run_native_trace(
     uint8_t end_slot,
     ToiJitNativeExecState* out_state);
 void toi_jit_arm64_free_code(void* code_mem, size_t code_size);
+void toi_jit_arm64_get_chain_stats(uint64_t* attempts, uint64_t* hits, uint64_t* misses);
 
 #endif

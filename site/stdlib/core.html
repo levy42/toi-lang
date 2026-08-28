@@ -1,0 +1,204 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Core</title>
+    <link rel="stylesheet" href="../docs.css">
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+</head>
+<body>
+    <aside>
+    <a class="brand" href="../README.html">
+    <img class="brand-logo" src="../logo.svg" alt="Toi logo">
+    <span>Toi Docs</span>
+    </a>
+    <ul class="nav">
+    
+    
+    <li><a href="../README.html">Quick Start</a></li>
+    
+    
+    
+    <li><a href="../benchmarks.html">Benchmarks</a></li>
+    
+    
+    
+    <li><a href="../getting-started.html">Getting Started</a></li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group">
+    <summary>Language</summary>
+    <ul class="subnav">
+    
+    <li><a href="../language/control-flow.html">Control Flow</a></li>
+    
+    <li><a href="../language/functions.html">Functions</a></li>
+    
+    <li><a href="../language/modules.html">Modules</a></li>
+    
+    <li><a href="../language/syntax.html">Language Syntax</a></li>
+    
+    <li><a href="../language/types-and-values.html">Types And Values</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group active" open>
+    <summary>Standard Library</summary>
+    <ul class="subnav">
+    
+    <li><a href="../stdlib/README.html">Standard Library</a></li>
+    
+    <li class="active"><a href="../stdlib/core.html">Core</a></li>
+    
+    <li><a href="../stdlib/files-and-system.html">Files And System</a></li>
+    
+    <li><a href="../stdlib/networking-and-concurrency.html">Networking And Concurrency</a></li>
+    
+    <li><a href="../stdlib/text-and-data.html">Text And Data</a></li>
+    
+    <li><a href="../stdlib/toi-libraries.html">Toi Libraries</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    </ul>
+    </aside>
+    <main><h1 id="core">Core</h1>
+<p>This page covers the most frequently used built-ins and native modules for everyday language work.</p>
+<h2 id="global built-ins">Global Built-ins</h2>
+<p>Available without importing a module:</p>
+<ul>
+<li><code>print(...)</code>
+</li>
+<li><code>input(prompt=nil)</code>
+</li>
+<li><code>type(value)</code>
+</li>
+<li><code>istype(value, ...)</code>
+</li>
+<li><code>bool(value)</code>, <code>int(value)</code>, <code>float(value)</code>, <code>str(value)</code>
+</li>
+<li><code>range(...)</code>
+</li>
+<li><code>slice(value, start, stop, step=1)</code>
+</li>
+<li><code>min(...)</code>, <code>max(...)</code>, <code>sum(...)</code>, <code>divmod(a, b)</code>
+</li>
+<li><code>next(...)</code>, <code>inext(...)</code>, <code>gen_next(...)</code>
+</li>
+<li><code>setmetatable(table, mt)</code>, <code>getmetatable(value)</code>
+</li>
+<li><code>error(...)</code>
+</li>
+<li><code>exit(code=0)</code>
+</li>
+<li><code>mem()</code>
+</li>
+</ul>
+<h2 id="`math`"><code>math</code></h2>
+<p>For numeric code:</p>
+<ul>
+<li>trig: <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>asin</code>, <code>acos</code>, <code>atan</code>
+</li>
+<li>rounding: <code>floor</code>, <code>ceil</code>, <code>abs</code>, <code>modf</code>
+</li>
+<li>powers and logs: <code>sqrt</code>, <code>exp</code>, <code>log</code>, <code>pow</code>, <code>fmod</code>
+</li>
+<li>angle conversion: <code>deg</code>, <code>rad</code>
+</li>
+<li>random: <code>random</code>, <code>seed</code>
+</li>
+<li>aggregates: <code>min</code>, <code>max</code>, <code>sum</code>
+</li>
+</ul>
+<pre><code class="language-toi"><span class="tok key">import</span> math
+<span class="tok key">print</span> math<span class="tok pun">.</span><span class="tok fn">sqrt</span><span class="tok pun">(</span><span class="tok num">25</span><span class="tok pun">)</span></code></pre>
+<h2 id="`time`"><code>time</code></h2>
+<p>Use <code>time</code> for clocks and elapsed-time measurement:</p>
+<ul>
+<li><code>time.seconds()</code>
+</li>
+<li><code>time.nanos()</code>
+</li>
+<li><code>time.clock()</code>
+</li>
+</ul>
+<p><code>time.clock()</code> is the most common timer for small benchmark scripts.</p>
+<h2 id="`string`"><code>string</code></h2>
+<p>Common string helpers:</p>
+<ul>
+<li>case conversion: <code>upper</code>, <code>lower</code>
+</li>
+<li>cleanup: <code>trim</code>
+</li>
+<li>search and split: <code>find</code>, <code>split</code>
+</li>
+<li>construction: <code>join</code>, <code>format</code>, <code>rep</code>
+</li>
+<li>indexing helpers: <code>sub</code>, <code>byte</code>, <code>char</code>
+</li>
+</ul>
+<p>Method style is usually the nicest form:</p>
+<pre><code class="language-toi"><span class="tok key">print</span> <span class="tok str">&quot;hello&quot;</span><span class="tok pun">.</span><span class="tok fn">upper</span><span class="tok pun">(</span><span class="tok pun">)</span>
+<span class="tok key">print</span> <span class="tok str">&quot;, &quot;</span><span class="tok pun">.</span><span class="tok fn">join</span><span class="tok pun">(</span><span class="tok pun">{</span><span class="tok str">&quot;a&quot;</span><span class="tok pun">,</span> <span class="tok str">&quot;b&quot;</span><span class="tok pun">}</span><span class="tok pun">)</span></code></pre>
+<h2 id="`table`"><code>table</code></h2>
+<p>Core collection helpers:</p>
+<ul>
+<li><code>push</code>
+</li>
+<li><code>insert</code>
+</li>
+<li><code>remove</code>
+</li>
+<li><code>reserve</code>
+</li>
+<li><code>clone</code>
+</li>
+<li><code>concat</code>
+</li>
+<li><code>sort</code>
+</li>
+<li><code>keys</code>
+</li>
+<li><code>values</code>
+</li>
+<li><code>find_index</code>
+</li>
+</ul>
+<pre><code class="language-toi"><span class="tok key">import</span> <span class="tok name">table</span>
+
+items <span class="tok op">=</span> <span class="tok pun">{</span><span class="tok num">3</span><span class="tok pun">,</span> <span class="tok num">1</span><span class="tok pun">,</span> <span class="tok num">2</span><span class="tok pun">}</span>
+<span class="tok name">table</span><span class="tok pun">.</span><span class="tok fn">sort</span><span class="tok pun">(</span>items<span class="tok pun">)</span></code></pre>
+<h2 id="`inspect`"><code>inspect</code></h2>
+<p><code>inspect.signature(fn)</code> is useful for tooling and debugging function shapes.</p>
+<h2 id="`url`"><code>url</code></h2>
+<p>URL helpers:</p>
+<ul>
+<li><code>url.parse(...)</code>
+</li>
+<li><code>url.encode(...)</code>
+</li>
+<li><code>url.decode(...)</code>
+</li>
+</ul>
+<h2 id="`uuid`"><code>uuid</code></h2>
+<p>Use <code>uuid</code> when you need generated identifiers.</p>
+<h2 id="core data structures">Core Data Structures</h2>
+<h3 id="`btree`"><code>btree</code></h3>
+<p>Persistent B-tree storage for ordered key/value workloads.</p>
+<h3 id="`binary`"><code>binary</code></h3>
+<p>Binary encode/decode helpers.</p>
+<h3 id="`struct`"><code>struct</code></h3>
+<p>Structured binary packing and unpacking via format strings.</p></main>
+</body>
+</html>

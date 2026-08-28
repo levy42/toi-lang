@@ -1,0 +1,301 @@
+import time, string, table, math, os
+types = import lib.types
+db_mod = import lib.db
+
+fn bench(name, func, ops)
+  start = time.clock()
+  result = func()
+  elapsed = time.clock() - start
+  if ops != nil
+    rate = ops / elapsed
+    print string.format("%-30s %9.4f sec  %10.0f ops/sec", name, elapsed, rate)
+  else
+    print string.format("%-30s %9.4f sec", name, elapsed)
+  return result
+
+-- Setup: create a model for benchmarking
+User = types.Record {
+  id = types.String,
+  name = types.String,
+  email = types.String,
+  team = types.String,
+  score = types.Integer,
+  active = types.Boolean
+}
+User.__name = "users"
+User.__indexes = {
+  {field = "email", unique = true},
+  "team",
+  "score"
+}
+
+BASE = "benchmarks/tmp_db_bench"
+
+fn cleanup()
+  for suffix in {"_users.db", "_users__idx_email.db", "_users__idx_team.db", "_users__idx_score.db"}
+    os.remove(BASE + suffix)
+
+cleanup()
+
+-- Pre-build sample data offline (no I/O) so insert bench measures DB writes only.
+N_INSERT = 5000
+N_QUERY = 2000
+
+teams = {"red", "blue", "green", "yellow", "purple"}
+names = {"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+         "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
+         "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
+         "X-ray", "Yankee", "Zulu"}
+
+records = {}
+for i in 1..N_INSERT
+  name_idx = (i % #names) + 1
+  records[i] = {
+    name = names[name_idx],
+    email = f"user.{i}@bench.test",
+    team = teams[(i % #teams) + 1],
+    score = (i * 1103515245 + 12345) % 10000,
+    active = i % 3 != 0
+  }
+saved_records = {}
+
+-- Pre-build lookup ids for query bench
+lookup_ids = {}
+
+-- ============= Open & Insert =============
+fn bench_insert()
+  db = db_mod.open(BASE)
+  _ = db.create_table(User)
+
+  for i in 1..N_INSERT
+    rec = records[i]
+    row = db.add(User {
+      name = rec.name,
+      email = rec.email,
+      team = rec.team,
+      score = rec.score,
+      active = rec.active
+    })
+    saved_records[i] = row
+
+  -- build lookup ids from the middle portion
+  start = N_INSERT / 4
+  for j in 1..N_QUERY
+    lookup_ids[j] = saved_records[start + j].id
+
+  db.close()
+  return #saved_records
+
+-- ============= Reopen & Get by PK =============
+fn bench_get()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  found = 0
+  for j in 1..N_QUERY
+    row = db.users.get(lookup_ids[j])
+    if row != nil
+      found = found + 1
+  db.close()
+  return found
+
+-- ============= Filter by indexed field (eq) =============
+fn bench_filter_indexed_eq()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  total = 0
+  for j in 1..500
+    email = f"user.{200 + j * 9}@bench.test"
+    rows = db.users.filter(email = email)
+    total = total + #rows
+  db.close()
+  return total
+
+-- ============= Filter by non-indexed field (full scan) =============
+fn bench_filter_full_scan()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  total = 0
+  for j in 1..30
+    name = names[(j % #names) + 1]
+    rows = db.users.filter(name = name)
+    total = total + #rows
+  db.close()
+  return total
+
+-- ============= Filter range on indexed numeric field =============
+fn bench_filter_range()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  total = 0
+  for j in 1..50
+    rows = db.users.filter(score__gte = 2000, score__lt = 5000)
+    total = total + #rows
+  db.close()
+  return total
+
+-- ============= Filter with order_by =============
+fn bench_filter_ordered()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  total = 0
+  for j in 1..20
+    rows = db.users.filter(team = "red", order_by = "score")
+    total = total + #rows
+  db.close()
+  return total
+
+-- ============= Filter with 'in' =============
+fn bench_filter_in()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  total = 0
+  for j in 1..100
+    rows = db.users.filter(team__in = {"red", "blue", "green"})
+    total = total + #rows
+  db.close()
+  return total
+
+-- ============= Filter with limit =============
+fn bench_filter_limit()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  total = 0
+  for j in 1..100
+    rows = db.users.filter(team = "red", limit = 20)
+    total = total + #rows
+  db.close()
+  return total
+
+-- ============= Count =============
+fn bench_count()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  total = 0
+  for j in 1..30
+    n = db.users.count(team = teams[(j % #teams) + 1])
+    total = total + n
+  db.close()
+  return total
+
+-- ============= Exists  =============
+fn bench_exists()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  total = 0
+  for j in 1..500
+    found = db.users.exists(email = f"user.{100 + j * 9}@bench.test")
+    if found
+      total = total + 1
+  db.close()
+  return total
+
+-- ============= Update =============
+fn bench_update()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  updated = 0
+  for j in 1..10
+    n = db.users.update_where({team = "red"}, {score = j * 100, active = true})
+    updated = updated + n
+  db.close()
+  return updated
+
+-- ============= Delete by PK =============
+fn bench_delete_pk()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  deleted = 0
+  for j in 1..500
+    ok = db.users.delete(lookup_ids[N_QUERY - j + 1])
+    if ok
+      deleted = deleted + 1
+  db.close()
+  return deleted
+
+-- ============= Re-insert =============
+fn bench_reinsert()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  count = 0
+  for j in 1..500
+    row = db.add(User {
+      name = "Reinsert",
+      email = f"re.{j}@bench.test",
+      team = "green",
+      score = j,
+      active = true
+    })
+    count = count + 1
+  db.close()
+  return count
+
+-- ============= Close & reopen persistence =============
+fn bench_persistence()
+  db = db_mod.open(BASE)
+  db.create_table(User)
+
+  row = db.users.first(team = "green")
+  result = row != nil
+  db.close()
+  return result
+
+-- ============= Run =============
+print "db benchmark (clock):"
+print string.format("  %-30s %13s  %18s", "benchmark", "time", "ops/sec")
+print string.format("  %-30s %13s  %18s", string.rep("-", 30), string.rep("-", 13), string.rep("-", 18))
+
+count = bench("insert", bench_insert, N_INSERT)
+print string.format("  -> %d rows inserted", count)
+
+found = bench("get by pk", bench_get, N_QUERY)
+print string.format("  -> %d found", found)
+
+total = bench("filter eq (indexed)", bench_filter_indexed_eq, 500)
+print string.format("  -> %d results", total)
+
+total = bench("filter full scan", bench_filter_full_scan, 30)
+print string.format("  -> %d results", total)
+
+total = bench("filter range (indexed)", bench_filter_range, 50)
+print string.format("  -> %d results", total)
+
+total = bench("filter ordered", bench_filter_ordered, 20)
+print string.format("  -> %d results", total)
+
+total = bench("filter in", bench_filter_in, 100)
+print string.format("  -> %d results", total)
+
+total = bench("filter limit", bench_filter_limit, 100)
+print string.format("  -> %d results", total)
+
+total = bench("count", bench_count, 30)
+print string.format("  -> %d results", total)
+
+total = bench("exists", bench_exists, 500)
+print string.format("  -> %d hits", total)
+
+updated = bench("update", bench_update, 10)
+print string.format("  -> %d updated", updated)
+
+deleted = bench("delete pk", bench_delete_pk, 500)
+print string.format("  -> %d deleted", deleted)
+
+reins = bench("reinsert", bench_reinsert, 500)
+print string.format("  -> %d reinserted", reins)
+
+persisted = bench("persistence", bench_persistence, nil)
+print string.format("  -> %s", persisted ? "ok" : "FAIL")
+
+cleanup()

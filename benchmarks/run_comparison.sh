@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
+export PYTHON_JIT=1
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 CSV_FILE="$ROOT_DIR/benchmarks/perf_results.csv"
 PYA=""

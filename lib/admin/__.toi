@@ -1,0 +1,183 @@
+uuid = import uuid
+html = import lib.html
+h = import lib.admin.helpers
+r = import lib.admin.rendering
+
+fn model_meta_for(admin, model_name)
+    return admin.model_by_name[model_name]
+
+fn register_routes(admin)
+    if admin.routes_registered
+        return nil
+    admin.routes_registered = true
+
+    index_route = admin.app.get(admin.mount_path)
+    index_route(fn()
+        if #admin.models == 0
+            body = html.tag("section", {class = "panel"}, html.tag("h2", nil, "Admin") + html.tag("p", nil, "No models registered."))
+            return r.render_page(admin, "Admin", body)
+        return h.redirect_response(admin.mount_path + "/" + admin.models[1].name)
+    )
+
+    list_route = admin.app.get(admin.mount_path + "/<model>")
+    list_route(fn(model, req)
+        meta = model_meta_for(admin, model)
+        if meta == nil
+            return r.render_not_found(admin, "Unknown model: " + model)
+        return r.render_model_list(admin, meta, req)
+    )
+
+    new_get_route = admin.app.get(admin.mount_path + "/<model>/new")
+    new_get_route(fn(model)
+        meta = model_meta_for(admin, model)
+        if meta == nil
+            return r.render_not_found(admin, "Unknown model: " + model)
+        return r.render_model_form(admin, meta, "new", {})
+    )
+
+    new_post_route = admin.app.post(admin.mount_path + "/<model>/new")
+    new_post_route(fn(model, req)
+        meta = model_meta_for(admin, model)
+        if meta == nil
+            return r.render_not_found(admin, "Unknown model: " + model)
+
+        payload = h.request_data(req)
+        display_payload = h.build_form_values(meta, payload)
+        row = nil
+        try
+            row = h.form_to_row(meta, payload, nil)
+            row.id = uuid.uid()
+            meta.table.put(row)
+        except e
+            return r.render_model_form(admin, meta, "new", display_payload, str(e))
+
+        return h.redirect_response(admin.mount_path + "/" + meta.name)
+    )
+
+    edit_get_route = admin.app.get(admin.mount_path + "/<model>/<id>/edit")
+    edit_get_route(fn(model, id)
+        meta = model_meta_for(admin, model)
+        if meta == nil
+            return r.render_not_found(admin, "Unknown model: " + model)
+
+        row = meta.table.get(id)
+        if row == nil
+            return r.render_not_found(admin, "Unknown id: " + str(id))
+        return r.render_model_form(admin, meta, "edit", row)
+    )
+
+    edit_post_route = admin.app.post(admin.mount_path + "/<model>/<id>/edit")
+    edit_post_route(fn(model, id, req)
+        meta = model_meta_for(admin, model)
+        if meta == nil
+            return r.render_not_found(admin, "Unknown model: " + model)
+
+        current = meta.table.get(id)
+        if current == nil
+            return r.render_not_found(admin, "Unknown id: " + str(id))
+
+        payload = h.request_data(req)
+        display_payload = h.build_form_values(meta, payload, current)
+        try
+            updated = h.form_to_row(meta, payload, current)
+            updated.id = current.id
+            meta.table.put(updated)
+        except e
+            display_payload.id = current.id
+            return r.render_model_form(admin, meta, "edit", display_payload, str(e))
+
+        return h.redirect_response(admin.mount_path + "/" + meta.name)
+    )
+
+    delete_post_route = admin.app.post(admin.mount_path + "/<model>/<id>/delete")
+    delete_post_route(fn(model, id)
+        meta = model_meta_for(admin, model)
+        if meta == nil
+            return r.render_not_found(admin, "Unknown model: " + model)
+
+        meta.table.delete(id)
+        return h.redirect_response(admin.mount_path + "/" + meta.name)
+    )
+
+fn new(app, db, opts = nil)
+    if type(app) != "table"
+        error("admin.new(app, db, opts=nil): app must be http_server app")
+    if type(db) != "table"
+        error("admin.new(app, db, opts=nil): db must be lib.db handle")
+
+    options = opts or {}
+    admin = {
+        app = app,
+        db = db,
+        title = options.title or "Admin",
+        mount_path = h.normalize_mount_path(options.mount_path or "/admin"),
+        models = {},
+        model_by_name = {},
+        routes_registered = false
+    }
+
+    admin.register = fn(schema, model_opts = nil)
+        if type(schema) != "table"
+            error("admin.register(schema, opts=nil): schema must be Record model")
+
+        table_proxy = db.create_table(schema)
+        name = table_proxy.name
+        form_fields = type(model_opts) == "table" and type(model_opts.form_fields) == "table" ? h.copy_list(model_opts.form_fields) : h.build_default_fields(schema)
+        label = h.title_case(name)
+        list_fields_override = nil
+        default_sort = "id"
+        per_page = 20
+        field_types = {}
+        search_fields = h.copy_list(form_fields)
+
+        if type(model_opts) == "table"
+            if type(model_opts.label) == "string" and model_opts.label != ""
+                label = model_opts.label
+            if type(model_opts.list_fields) == "table"
+                list_fields_override = model_opts.list_fields
+            if type(model_opts.search_fields) == "table"
+                search_fields = h.copy_list(model_opts.search_fields)
+            if type(model_opts.default_sort) == "string" and model_opts.default_sort != ""
+                default_sort = model_opts.default_sort
+            if type(model_opts.per_page) == "number"
+                per_page = int(model_opts.per_page)
+            if type(model_opts.field_types) == "table"
+                field_types = model_opts.field_types
+
+        meta = {
+            name = name,
+            label = label,
+            schema = schema,
+            table = table_proxy,
+            form_fields = form_fields,
+            list_fields = h.create_list_fields(form_fields, list_fields_override),
+            search_fields = search_fields,
+            default_sort = default_sort,
+            per_page = per_page,
+            field_types = field_types
+        }
+
+        admin.model_by_name[name] = meta
+
+        replaced = false
+        for i in 1..#admin.models
+            if admin.models[i].name == name
+                admin.models[i] = meta
+                replaced = true
+                break
+
+        if not replaced
+            admin.models <+ meta
+
+        register_routes(admin)
+        return admin
+
+    admin.mount = fn()
+        register_routes(admin)
+        return admin
+
+    return admin
+
+return {
+    new = new
+}

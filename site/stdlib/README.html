@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Standard Library</title>
+    <link rel="stylesheet" href="../docs.css">
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+</head>
+<body>
+    <aside>
+    <a class="brand" href="../README.html">
+    <img class="brand-logo" src="../logo.svg" alt="Toi logo">
+    <span>Toi Docs</span>
+    </a>
+    <ul class="nav">
+    
+    
+    <li><a href="../README.html">Quick Start</a></li>
+    
+    
+    
+    <li><a href="../benchmarks.html">Benchmarks</a></li>
+    
+    
+    
+    <li><a href="../getting-started.html">Getting Started</a></li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group">
+    <summary>Language</summary>
+    <ul class="subnav">
+    
+    <li><a href="../language/control-flow.html">Control Flow</a></li>
+    
+    <li><a href="../language/functions.html">Functions</a></li>
+    
+    <li><a href="../language/modules.html">Modules</a></li>
+    
+    <li><a href="../language/syntax.html">Language Syntax</a></li>
+    
+    <li><a href="../language/types-and-values.html">Types And Values</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    
+    <li class="nav-collapsible">
+    <details class="nav-group active" open>
+    <summary>Standard Library</summary>
+    <ul class="subnav">
+    
+    <li class="active"><a href="../stdlib/README.html">Standard Library</a></li>
+    
+    <li><a href="../stdlib/core.html">Core</a></li>
+    
+    <li><a href="../stdlib/files-and-system.html">Files And System</a></li>
+    
+    <li><a href="../stdlib/networking-and-concurrency.html">Networking And Concurrency</a></li>
+    
+    <li><a href="../stdlib/text-and-data.html">Text And Data</a></li>
+    
+    <li><a href="../stdlib/toi-libraries.html">Toi Libraries</a></li>
+    
+    </ul>
+    </details>
+    </li>
+    
+    
+    </ul>
+    </aside>
+    <main><h1 id="standard library">Standard Library</h1>
+<p>The Toi standard library has two layers:</p>
+<ul>
+<li>native modules implemented in C and imported directly, such as <code>math</code>, <code>json</code>, or <code>socket</code>
+</li>
+<li>shipped Toi libraries under <code>lib.*</code>, such as <code>lib.types</code>, <code>lib.db</code>, or <code>lib.http_server</code>
+</li>
+</ul>
+<p>Import native modules like this:</p>
+<pre><code class="language-toi"><span class="tok key">import</span> math
+json <span class="tok op">=</span> <span class="tok key">import</span> json</code></pre>
+<p>Import Toi libraries like this:</p>
+<pre><code class="language-toi"><span class="tok key">import</span> lib<span class="tok pun">.</span>types
+db <span class="tok op">=</span> <span class="tok key">import</span> lib<span class="tok pun">.</span>db</code></pre>
+<h2 id="module groups">Module Groups</h2>
+<ul>
+<li><a href="core.html">Core</a>: globals, numbers, strings, tables, time, URLs, UUIDs, and basic inspection
+</li>
+<li><a href="files-and-system.html">Files And System</a>: files, directories, OS helpers, mmap, signals, low-level output
+</li>
+<li><a href="text-and-data.html">Text And Data</a>: JSON, TOML, CSV, regex, templates, binary data, B-trees, compression
+</li>
+<li><a href="networking-and-concurrency.html">Networking And Concurrency</a>: sockets, HTTP helpers, polling, coroutines, threads, contexts
+</li>
+<li><a href="toi-libraries.html">Toi Libraries</a>: the higher-level libraries implemented in Toi itself
+</li>
+</ul>
+<h2 id="native module index">Native Module Index</h2>
+<ul>
+<li><code>math</code>
+</li>
+<li><code>time</code>
+</li>
+<li><code>string</code>
+</li>
+<li><code>table</code>
+</li>
+<li><code>io</code>
+</li>
+<li><code>sys</code>
+</li>
+<li><code>os</code>
+</li>
+<li><code>stat</code>
+</li>
+<li><code>dir</code>
+</li>
+<li><code>signal</code>
+</li>
+<li><code>mmap</code>
+</li>
+<li><code>poll</code>
+</li>
+<li><code>coroutine</code>
+</li>
+<li><code>context</code>
+</li>
+<li><code>socket</code>
+</li>
+<li><code>thread</code>
+</li>
+<li><code>json</code>
+</li>
+<li><code>toml</code>
+</li>
+<li><code>csv</code>
+</li>
+<li><code>template</code>
+</li>
+<li><code>http</code>
+</li>
+<li><code>url</code>
+</li>
+<li><code>inspect</code>
+</li>
+<li><code>regex</code>
+</li>
+<li><code>fnmatch</code>
+</li>
+<li><code>glob</code>
+</li>
+<li><code>binary</code>
+</li>
+<li><code>struct</code>
+</li>
+<li><code>btree</code>
+</li>
+<li><code>uuid</code>
+</li>
+<li><code>gzip</code> when built with zlib support
+</li>
+</ul></main>
+</body>
+</html>
