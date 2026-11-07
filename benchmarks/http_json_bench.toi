@@ -1,0 +1,24 @@
+http_server = import lib.http_server
+
+PAYLOAD = {
+  name = "Ada",
+  active = true,
+  score = 98.5,
+  tags = {"toi", "json", "api"},
+  nested = {retries = 3, timeout_ms = 250, ok = true},
+  users = {
+    {id = 1, role = "admin"},
+    {id = 2, role = "staff"},
+    {id = 3, role = "member"}
+  }
+}
+
+app = http_server(host="127.0.0.1", port=8080)
+get = app.get
+
+@get("/api")
+fn api(req)
+  return PAYLOAD
+
+print "Toi JSON API benchmark listening on http://127.0.0.1:8080/api"
+app.run()

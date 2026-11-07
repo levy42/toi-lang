@@ -1,0 +1,57 @@
+from lib.test import assert_eq, assert_true
+
+http_server = import lib.http_server
+socket = import socket
+thread = import thread
+
+app = http_server(host="127.0.0.1", port=0)
+get = app.get
+
+@get("/api")
+fn api(req)
+  return {ok = true}
+
+
+fn read_response(client, elapsed = 0.0)
+  response = ""
+  while elapsed < 2.0 and (response.find("200 OK") == nil or response.find("true") == nil)
+    chunk, err = client.recv(client, 4096)
+    if chunk
+      response = response + chunk
+    elif err == "timeout"
+      thread.sleep(0.001)
+      elapsed = elapsed + 0.001
+    else
+      return response
+  return response
+
+server_thread = thread.spawn(fn() return app.run())
+elapsed = 0.0
+while not app.is_running() and elapsed < 2.0
+  thread.sleep(0.01)
+  elapsed = elapsed + 0.01
+assert_true(app.is_running(), "server did not start")
+
+host, port = app.socket.getsockname(app.socket)
+_ = host
+client = socket.tcp()
+assert_true(client != nil)
+connected = client.connect(client, "127.0.0.1", port)
+assert_true(connected == true)
+client.settimeout(client, 0)
+
+request = "GET /api HTTP/1.1\r\nHost: localhost\r\n\r\n"
+assert_true(type(client.send(client, request)) == "number")
+first = read_response(client)
+assert_true(first has "200 OK")
+assert_true(first has "Connection: keep-alive")
+
+assert_true(type(client.send(client, request)) == "number")
+second = read_response(client)
+assert_true(second has "200 OK", "second request on persistent connection failed")
+assert_true(second has "Connection: keep-alive")
+
+client.close(client)
+assert_true(app.stop(0.1))
+assert_eq(thread.join(server_thread), "stopped")
+print "http server keep-alive ok"

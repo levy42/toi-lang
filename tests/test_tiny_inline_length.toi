@@ -1,0 +1,41 @@
+from lib.test import assert_eq, assert_true
+
+-- Two-argument shims that only read an argument's length are collapsed by the
+-- compiler (`tiny_inline_kind`) and evaluated without a call frame. These cover
+-- the fast shapes and the cases that must fall back to the generic call path.
+fn add_len(a: int, b: str)
+  return a + #b
+
+fn len_of(a: int, b: str)
+  return #b
+
+fn len_first(a: str, b: str)
+  return #a + #b
+
+fn generic_add_len(a, b)
+  return a + #b
+
+assert_eq(add_len(5, "abcd"), 9)
+assert_eq(add_len(0, ""), 0)
+assert_eq(len_of(9, "abc"), 3)
+assert_eq(len_first("xy", "abcd"), 6)
+assert_eq(generic_add_len(3, "ab"), 5)
+
+-- `#` on a table counts entries, so the length fast path must fall back to the
+-- normal call and still produce the right answer.
+items = {1, 2, 3}
+assert_eq(generic_add_len(1, items), 4)
+
+-- Hot loops: the JIT compiles these, so the inlined and non-inlined paths must
+-- agree with the interpreter.
+total = 0
+for i in 1..20000
+  total = add_len(total, "df")
+assert_eq(total, 40000)
+
+widths = 0
+for i in 1..20000
+  widths = widths + len_of(i, "xyzw")
+assert_eq(widths, 80000)
+
+print "tiny inline length ok"

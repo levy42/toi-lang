@@ -1,0 +1,140 @@
+-- Loop semantics that the JIT must preserve exactly.
+--
+-- These cover bugs where the JIT produced plausible timings but wrong answers:
+--   * for-range loops whose induction variable froze at the value it had when
+--     the trace was compiled (arm64 slot-loop lowering)
+--   * an extra loop iteration in the native numeric/slot loops
+--   * generic while/iterator loops livelocking because the trace discarded all
+--     accumulated work when it hit the IR guard
+--   * nested loops mis-executed by the single-induction fast executors
+--   * polymorphic closure call sites inside a loop
+--
+-- Run with `make test` and, more importantly, `make test-jit` (which lowers the
+-- hot threshold so even these small loops get compiled).
+
+string = import string
+
+-- Accumulating the loop variable: the induction value must advance every
+-- iteration (JIT entry happens around the hot threshold, so 2000 is > 1024).
+fn sum_to(n)
+  total = 0
+  for i in 1..n
+    total = total + i
+  return total
+
+assert sum_to(2000) == 2001000 "for-range accumulation must equal n*(n+1)/2"
+
+fn last_value(n)
+  last = 0
+  for i in 1..n
+    last = i
+  return last
+
+assert last_value(2000) == 2000 "loop variable must reach the range end"
+
+fn count_iterations(n)
+  count = 0
+  for i in 1..n
+    count = count + 1
+  return count
+
+assert count_iterations(3000) == 3000 "loop body must run exactly n times"
+
+-- while loops with more iterations than the executor's internal IR budget.
+fn while_sum(n)
+  i = 0
+  total = 0
+  while i < n
+    i = i + 1
+    total = total + 1
+  return total
+
+assert while_sum(1500000) == 1500000 "while loop must run exactly n times"
+
+-- Nested loops: the inner loop keeps its own induction slot.
+fn nested_count(outer, inner)
+  total = 0
+  for i in 1..outer
+    for j in 1..inner
+      total = total + 1
+  return total
+
+assert nested_count(300, 300) == 90000 "nested loop must run outer*inner times"
+assert nested_count(1200, 900) == 1080000 "nested loop must not drop outer iterations"
+
+fn nested_sum(outer, inner)
+  total = 0
+  for i in 1..outer
+    for j in 1..inner
+      total = total + i + j
+  return total
+
+assert nested_sum(200, 300) == 15060000 "nested loop accumulation"
+
+-- continue / break inside a range loop.
+fn sum_odd(n)
+  total = 0
+  for i in 1..n
+    if (i % 2) == 0
+      continue
+    total = total + i
+  return total
+
+assert sum_odd(3000) == 2250000 "continue must skip exactly the even values"
+
+fn sum_until(limit)
+  total = 0
+  for i in 1..3000
+    if i == limit
+      break
+    total = total + 1
+  return total
+
+assert sum_until(1500) == 1499 "break must stop before the limit"
+
+-- Iterating a table yields every element exactly once.
+fn table_total(n)
+  t = {}
+  for i in 1..n
+    t <+ i
+  total = 0
+  for v in t
+    total = total + v
+  return total
+
+assert table_total(300000) == 45000150000 "table iteration must visit every element"
+
+-- Polymorphic call sites: the callee alternates between two functions.
+fn ones(a, b)
+  return 1
+
+fn zeros(a, b)
+  return 0
+
+fn alternating_calls(n)
+  total = 0
+  for i in 1..n
+    h = (i % 2) == 0 ? zeros : ones
+    total = total + h(i, i)
+  return total
+
+assert alternating_calls(300000) == 150000 "alternating callees must not be mixed up"
+
+-- Table-indirected handlers, as used by request-dispatch style code.
+fn h_double(x)
+  return x * 2
+
+fn h_negate(x)
+  return 0 - x
+
+fn dispatch_total(n)
+  handlers = {h_double, h_negate}
+  total = 0
+  for i in 1..n
+    h = handlers[(i % 2) + 1]
+    total = total + h(i)
+  return total
+
+assert dispatch_total(200000) == 10000200000 "table-indirected handlers must dispatch correctly"
+
+print "jit loop semantics ok"

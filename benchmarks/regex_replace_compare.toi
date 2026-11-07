@@ -1,0 +1,32 @@
+regex = import regex
+time = import time
+string = import string
+
+ITERS = 100000
+LONG_ITERS = 5000
+PATTERN = "[0-9]+"
+COMPILED = regex.compile(PATTERN)
+ONE_MATCH = "order-123 shipped"
+MANY_MATCHES = "order-123 shipped, order-456 pending, order-789 shipped"
+many_parts = {}
+for i in 1..100
+  many_parts <+ f"order-{i} shipped"
+LONG_TEXT = ", ".join(many_parts)
+LONG_REPL = "replacement-text-that-is-longer-than-the-match"
+
+fn bench(name, text, repl, use_compiled, iters)
+  -- Warm the module-level pattern cache outside the timed loop.
+  expected = use_compiled ? COMPILED.replace(text, repl) : regex.replace(PATTERN, text, repl)
+  start = time.clock()
+  out = ""
+  for i in 1..iters
+    out = use_compiled ? COMPILED.replace(text, repl) : regex.replace(PATTERN, text, repl)
+  elapsed = time.clock() - start
+  print string.format("%s: %.6fs (result_bytes=%d)", name, elapsed, #out)
+  assert out == expected
+
+print string.format("Toi regex replace: short_iterations=%d long_iterations=%d", ITERS, LONG_ITERS)
+bench("one match (compiled)", ONE_MATCH, "#", true, ITERS)
+bench("three matches (compiled)", MANY_MATCHES, "#", true, ITERS)
+bench("100 matches (compiled)", LONG_TEXT, "#", true, LONG_ITERS)
+bench("100 matches, long replacement", LONG_TEXT, LONG_REPL, true, LONG_ITERS)
