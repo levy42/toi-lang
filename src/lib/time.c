@@ -66,6 +66,23 @@ static int time_sleep(VM* vm, int arg_count, Value* args) {
         return 0;
     }
 
+    /* A blocking sleep inside a coroutine stalls its entire OS thread. Yield
+       the same timer event as coroutine.sleep() instead; callers that are not
+       running in a coroutine retain the traditional blocking behavior. */
+    ObjThread* thread = vm_current_thread(vm);
+    if (thread != NULL && thread->caller != NULL) {
+        ObjThread* caller = thread->caller;
+        *caller->stack_top = BOOL_VAL(1);
+        caller->stack_top++;
+        *caller->stack_top = OBJ_VAL(copy_string("sleep", 5));
+        caller->stack_top++;
+        *caller->stack_top = NUMBER_VAL(seconds);
+        caller->stack_top++;
+        thread->caller = NULL;
+        vm_set_current_thread(vm, caller);
+        return 1;
+    }
+
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L
     struct timespec ts;
     ts.tv_sec = (time_t)seconds;

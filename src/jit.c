@@ -100,6 +100,12 @@ int execute_program(
     JitProgram* program,
     Value* args,
     Value* out);
+// In-trace callee inlining (see jit_inline_call_program).
+#define JIT_INLINE_MAX_SLOTS 10
+#define JIT_INLINE_MAX_STACK 24
+#define JIT_INLINE_MAX_OPS 24
+static int jit_inline_call_program(ObjFunction* fn, JitProgram* program, const Value* args, int argc, Value* out);
+static int jit_try_inline_trace_call(JitLoopTrace* trace, int pc, Value callee, const Value* args, int argc, Value* out);
 static JitLoopTrace* jit_find_loop(ToiJitState* st, ObjFunction* function, int opcode_offset, uint8_t opcode);
 int jit_eval_tiny_inline2_local(ObjFunction* function, Value arg0, Value arg1, Value* out);
 static Value numeric_binop(JitOpCode op, double a, double b);
@@ -212,6 +218,12 @@ enum {
 #ifndef TOI_JIT_DEBUG_NATIVE_TRACE_SANDBOX
 #define TOI_JIT_DEBUG_NATIVE_TRACE_SANDBOX 0
 #endif
+
+// Number of interpreter-executed (IR) calls inside a single traced loop
+// execution before the trace is abandoned for the plain VM. Per-call IR
+// execution (~execute_program) is far slower than the VM's quickened call
+// path, so dense call loops must not stay in the mixed/typed trace executors.
+#define TOI_JIT_IR_CALL_BAIL 64
 
 static const char* loop_fail_reason_name(uint8_t reason) {
     switch (reason) {
@@ -406,6 +418,93 @@ static uint32_t jit_typed_hot_exit_threshold(void) {
     if (parsed > 100000ul) return 100000u;
     return (uint32_t)parsed;
 }
+
+// Whole-function JIT execution (execute_program driven from call sites) is not
+// validated yet and can return wrong values for some shapes; it stays off by
+// default. TOI_JIT_FUNC=1 enables it for development.
+#ifndef TOI_JIT_FUNC_DEFAULT
+#define TOI_JIT_FUNC_DEFAULT 0
+#endif
+
+static int jit_function_jit_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("TOI_JIT_FUNC");
+        if (v == NULL || v[0] == '\0') cached = TOI_JIT_FUNC_DEFAULT;
+        else cached = (strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return cached;
+}
+
+// Retire a compiled loop trace: it is never probed again, and the VM's per-backedge
+// JIT check is skipped once no live traces remain for the whole program.
+static void jit_retire_loop_trace(ToiJitState* st, JitLoopTrace* trace) {
+    if (st == NULL || trace == NULL) return;
+    if (trace->runtime_disabled) return;
+    trace->runtime_disabled = 1;
+    if (st->loop_live_count > 0) st->loop_live_count--;
+    st->loop_runtime_disabled++;
+}
+
+// Loop traces containing dynamic call sites go through the per-site call cache
+// plus the closure-call helper. Set TOI_JIT_CALL_TRACES=0 to retire such traces
+// instead (useful when bisecting a call-site miscompile).
+#ifndef TOI_JIT_CALL_TRACES_DEFAULT
+#define TOI_JIT_CALL_TRACES_DEFAULT 1
+#endif
+
+static int jit_call_traces_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("TOI_JIT_CALL_TRACES");
+        if (v == NULL || v[0] == '\0') cached = TOI_JIT_CALL_TRACES_DEFAULT;
+        else cached = (strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return cached;
+}
+
+// The arm64 slot-loop lowering is currently a miscompiler: the generated loop
+// does not advance the induction slot per iteration, so loop bodies observe the
+// value the slot had when the trace was compiled (and run one extra iteration).
+// It stays off by default until the codegen is fixed; TOI_JIT_SLOT_LOOP=1
+// re-enables it for development.
+#ifndef TOI_JIT_SLOT_LOOP_DEFAULT
+#define TOI_JIT_SLOT_LOOP_DEFAULT 0
+#endif
+
+static int jit_slot_loop_lowering_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("TOI_JIT_SLOT_LOOP");
+        if (v == NULL || v[0] == '\0') cached = TOI_JIT_SLOT_LOOP_DEFAULT;
+        else cached = (strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return cached;
+}
+
+static void jit_discard_compiled_slot_loop(ToiJitState* st, JitLoopTrace* trace) {
+    if (trace == NULL) return;
+    if (st != NULL && trace->native_code_mem != NULL && trace->native_code_size != 0) {
+        toi_jit_backend_free_code(st->backend_kind, trace->native_code_mem, trace->native_code_size);
+    }
+    trace->native_code_mem = NULL;
+    trace->native_code_size = 0;
+    trace->native_slot_loop_fn = NULL;
+    trace->native_slot_loop_slot_count = 0;
+    trace->native_slot_loop_used_count = 0;
+    trace->native_slot_loop_written_count = 0;
+    trace->native_slot_loop_upvalue_const_count = 0;
+}
+
+// Returns 1 when a freshly compiled slot loop may be used. When the lowering is
+// disabled the code is discarded and 0 is returned so callers fall through to
+// the (correct) IR/native-trace executors.
+static int jit_accept_compiled_slot_loop(ToiJitState* st, JitLoopTrace* trace) {
+    if (jit_slot_loop_lowering_enabled()) return 1;
+    jit_discard_compiled_slot_loop(st, trace);
+    return 0;
+}
+
 
 static const char* jit_op_name(JitOpCode op) {
     switch (op) {
@@ -789,10 +888,40 @@ static void jit_update_get_table_ic(Chunk* chunk, int site, ObjTable* t, ObjStri
         version);
 }
 
+// Equality must match the interpreter (vm/ops_compare.c vm_handle_op_equal), which
+// compares strings by value: strings produced at runtime are not interned, so
+// pointer identity alone would report them as unequal.
+static int jit_values_equal(Value a, Value b) {
+    if (a.type != b.type) return 0;
+    if (IS_NIL(a)) return 1;
+    if (IS_BOOL(a)) return AS_BOOL(a) == AS_BOOL(b);
+    if (IS_NUMBER(a)) return AS_NUMBER(a) == AS_NUMBER(b);
+    if (IS_STRING(a) && IS_STRING(b)) {
+        ObjString* sa = AS_STRING(a);
+        ObjString* sb = AS_STRING(b);
+        if (sa == sb) return 1;
+        return sa->length == sb->length &&
+               memcmp(sa->chars, sb->chars, (size_t)sa->length) == 0;
+    }
+    if (IS_OBJ(a)) return AS_OBJ(a) == AS_OBJ(b);
+    return 0;
+}
+
+// Must match the interpreter's truthiness (vm/ops_control.c is_falsey_local):
+// nil, false, 0, "" and empty tables are falsey.
 static int is_falsey_jit(Value v) {
     if (IS_NIL(v)) return 1;
     if (IS_BOOL(v)) return AS_BOOL(v) == 0;
     if (IS_NUMBER(v)) return AS_NUMBER(v) == 0;
+    if (IS_STRING(v)) return AS_STRING(v)->length == 0;
+    if (IS_TABLE(v)) {
+        ObjTable* t = AS_TABLE(v);
+        if (t->table.count > 0) return 0;
+        for (int i = 0; i < t->table.array_capacity; i++) {
+            if (!IS_NIL(t->table.array[i])) return 0;
+        }
+        return 1;
+    }
     return 0;
 }
 
@@ -918,6 +1047,38 @@ static JitLoopTrace* jit_find_or_add_loop(VM* vm, ObjFunction* function, int opc
     st->loop_cache[h].loop_index_plus1 = (uint32_t)(st->loop_count - 1) + 1u;
 
     return entry;
+}
+
+// Direct per-opcode-offset lookup through the chunk's JIT backedge table, so the
+// interpreter's per-iteration backedge probes do not re-hash (function, offset,
+// opcode) on every iteration. The table stores indices into st->loops, whose
+// entries are stable once created (st->loops only grows via realloc).
+static JitLoopTrace* jit_loop_from_offset(ToiJitState* st, ObjFunction* function, int opcode_offset) {
+    if (st == NULL || function == NULL) return NULL;
+    Chunk* chunk = &function->chunk;
+    if (chunk->jit_loop_indexes == NULL) return NULL;
+    if (opcode_offset < 0 || opcode_offset >= chunk->count) return NULL;
+    uint32_t idx_plus1 = chunk->jit_loop_indexes[opcode_offset];
+    if (idx_plus1 == 0u) return NULL;
+    uint32_t idx = idx_plus1 - 1u;
+    if ((int)idx >= st->loop_count) return NULL;
+    JitLoopTrace* trace = &st->loops[idx];
+    if (trace->function != function || (int)trace->opcode_offset != opcode_offset) return NULL;
+    return trace;
+}
+
+static void jit_loop_store_offset(ToiJitState* st, ObjFunction* function, int opcode_offset, JitLoopTrace* trace) {
+    if (st == NULL || function == NULL || trace == NULL) return;
+    Chunk* chunk = &function->chunk;
+    if (opcode_offset < 0 || opcode_offset >= chunk->count) return;
+    if (chunk->jit_loop_indexes == NULL) {
+        uint32_t* table = (uint32_t*)calloc((size_t)chunk->count, sizeof(uint32_t));
+        if (table == NULL) return; // OOM: fall back to hash-based lookups
+        chunk->jit_loop_indexes = table;
+    }
+    int idx = (int)(trace - st->loops);
+    if (idx < 0 || idx >= st->loop_count) return;
+    chunk->jit_loop_indexes[opcode_offset] = (uint32_t)idx + 1u;
 }
 
 static int compile_qfor_loop_trace(ObjFunction* function, JitLoopTrace* trace, int loop_start, int loop_end) {
@@ -1420,8 +1581,25 @@ uint16_t program_runtime_probe_limit(const JitProgram* program) {
     return 4096;
 }
 
+// True when the trace body contains a nested loop (an induction pair other than
+// the trace's own prep/backedge). The numeric and typed fast executors model a
+// single induction pair and would mis-execute the inner loop, so those traces
+// must fall back to the generic IR executor.
+static int trace_has_nested_loop(const JitLoopTrace* trace) {
+    if (trace == NULL || !trace->has_program || trace->ops == NULL) return 1;
+    if (trace->op_count < 2) return 1;
+    for (int i = 1; i < trace->op_count - 1; i++) {
+        JitOpCode op = trace->ops[i].op;
+        if (op == JOP_QFOR_PREP_NUM || op == JOP_QFOR_LOOP_NUM) return 1;
+    }
+    return 0;
+}
+
 static int trace_is_numeric_fast_eligible(const JitLoopTrace* trace) {
     if (trace == NULL || !trace->has_program || trace->ops == NULL) return 0;
+    if (trace_has_nested_loop(trace)) return 0;
+    if (trace->ops[0].op != JOP_QFOR_PREP_NUM) return 0;
+    if (trace->ops[trace->op_count - 1].op != JOP_QFOR_LOOP_NUM) return 0;
     for (int i = 0; i < trace->op_count; i++) {
         JitOpCode op = trace->ops[i].op;
         switch (op) {
@@ -1464,6 +1642,7 @@ static int trace_is_numeric_fast_eligible(const JitLoopTrace* trace) {
 static int trace_is_typed_fast_eligible(const JitLoopTrace* trace) {
     if (trace == NULL || !trace->has_program || trace->ops == NULL) return 0;
     if (trace->op_count > 96) return 0;
+    if (trace_has_nested_loop(trace)) return 0;
     for (int i = 0; i < trace->op_count; i++) {
         JitOpCode op = trace->ops[i].op;
         switch (op) {
@@ -2485,6 +2664,7 @@ static int native_trace_is_exec_safe(const JitLoopTrace* trace, uint8_t* out_rej
     if (!is_numeric_for_loop_opcode(trace->opcode) && trace->opcode != OP_LOOP) return 0;
 
     int instr_count = (int)trace->native_trace_instr_count;
+    int call_sites = 0;
     for (int i = 0; i < instr_count; i++) {
         const ToiJitNativeTraceInstr* in = &trace->native_trace_instrs[i];
         switch (in->op) {
@@ -2506,16 +2686,54 @@ static int native_trace_is_exec_safe(const JitLoopTrace* trace, uint8_t* out_rej
             case TOI_JIT_NATIVE_OP_CMP_LT:
             case TOI_JIT_NATIVE_OP_CMP_GT:
             case TOI_JIT_NATIVE_OP_NOT:
-            case TOI_JIT_NATIVE_OP_JUMP:
-            case TOI_JIT_NATIVE_OP_JUMP_IF_FALSE:
-            case TOI_JIT_NATIVE_OP_JUMP_IF_TRUE:
             case TOI_JIT_NATIVE_OP_APPEND:
             case TOI_JIT_NATIVE_OP_GET_TABLE:
             case TOI_JIT_NATIVE_OP_GET_TABLE_NUM:
             case TOI_JIT_NATIVE_OP_SET_TABLE:
             case TOI_JIT_NATIVE_OP_SET_TABLE_NUM:
+                break;
+            case TOI_JIT_NATIVE_OP_JUMP_IF_FALSE:
+            case TOI_JIT_NATIVE_OP_JUMP_IF_TRUE:
+            case TOI_JIT_NATIVE_OP_JUMP:
+                // In-trace merges (if/else, and/or short-circuits) need the pending
+                // operand stack materialized on both edges. The emitter implements
+                // that (write-through + merge fixup), but a spilling trace is still
+                // slower than the IR executor for merged loops (measured: app
+                // pipeline 0.43 s vs 0.24 s) and one elif shape still diverges, so
+                // merges stay on the IR path. Jumps to the end of the body
+                // (continue) run in machine code.
+                // TODO(jit-native-trace): keep fast paths for unspilled entries and
+                // fix the elif merge, then enable merged traces.
+                if ((int)in->target != (int)trace->native_trace_instr_count) {
+                    if (out_reject_op != NULL) *out_reject_op = in->op;
+                    return 0;
+                }
+                break;
             case TOI_JIT_NATIVE_OP_CALL:
+                // Only a call whose callee is a compile-time closure is safe: the
+                // emitter then has an identity-guarded entry for it. For a dynamic
+                // callee the direct-core path stages arguments/emits deopt state
+                // that is not validated yet (it mis-stages operands and crashed the
+                // suite in testing), so those loops stay on the IR executor.
+                // TODO(jit-native-trace): validate dynamic-call staging + deopt
+                // state, then drop this gate.
+                if (!IS_CLOSURE(in->constant)) {
+                    if (out_reject_op != NULL) *out_reject_op = in->op;
+                    return 0;
+                }
+                if (++call_sites > 1) {
+                    if (out_reject_op != NULL) *out_reject_op = in->op;
+                    return 0;
+                }
+                break;
             case TOI_JIT_NATIVE_OP_INVOKE:
+                // Method invokes are guarded by an invoke-target guard, so a
+                // single invoke site is safe to emit.
+                if (++call_sites > 1) {
+                    if (out_reject_op != NULL) *out_reject_op = in->op;
+                    return 0;
+                }
+                break;
             case TOI_JIT_NATIVE_OP_BUILD_STRING2:
             case TOI_JIT_NATIVE_OP_BUILD_STRING3:
             case TOI_JIT_NATIVE_OP_BUILD_STRING4:
@@ -2848,6 +3066,26 @@ static int native_trace_is_profitable(const JitLoopTrace* trace) {
     return 1;
 }
 
+static void commit_numeric_loop_state(
+    ToiJitState* st,
+    JitLoopTrace* trace,
+    CallFrame* frame,
+    ObjThread* thread,
+    uint8_t** ip,
+    const double* work,
+    const uint8_t* is_number,
+    int frame_window,
+    int sp,
+    uint32_t next_offset) {
+    for (int j = 0; j < frame_window; j++) {
+        if (is_number[j]) frame->slots[j] = NUMBER_VAL(work[j]);
+    }
+    thread->stack_top = frame->slots + sp;
+    *ip = frame->closure->function->chunk.code + next_offset;
+    st->loop_exec_hits++;
+    trace->exec_hits++;
+}
+
 static int execute_numeric_trace_fast(
     ToiJitState* st,
     JitLoopTrace* trace,
@@ -2865,8 +3103,11 @@ static int execute_numeric_trace_fast(
     if (frame_window < 0 || frame_window > 8192) return 0;
     if (trace->max_stack <= 0 || trace->max_stack > 8192) return 0;
 
-    double work[8192];
-    uint8_t is_number[8192];
+    int work_cap = trace->max_stack;
+    if (frame_window > work_cap) work_cap = frame_window;
+    if (work_cap <= 0) return 0;
+    double work[work_cap];
+    uint8_t is_number[work_cap];
     for (int j = 0; j < frame_window; j++) {
         Value v = frame->slots[j];
         if (IS_NUMBER(v)) {
@@ -2883,7 +3124,14 @@ static int execute_numeric_trace_fast(
     uint32_t loop_chunk_iters = 0;
     const uint32_t loop_chunk_budget = 4096;
     while (pc >= 0 && pc < trace->op_count) {
-        if (++iter_guard > 20000000u) return 0;
+        if (++iter_guard > 20000000u) {
+            // Never drop accumulated work: commit and let the VM resume at the
+            // current bytecode offset so every entry makes progress.
+            uint32_t resume = trace->ops[pc].byte_offset;
+            commit_numeric_loop_state(
+                st, trace, frame, thread, ip, work, is_number, frame_window, sp, resume);
+            return 1;
+        }
         JitOp* op = &trace->ops[pc];
         switch (op->op) {
             case JOP_CONSTANT:
@@ -2959,13 +3207,8 @@ static int execute_numeric_trace_fast(
                 if (!is_number[op->a] || !is_number[op->b]) return 0;
                 if (work[op->a] > work[op->b]) {
                     if (op->target != JIT_TARGET_EXIT) return 0;
-                    for (int j = 0; j < frame_window; j++) {
-                        if (is_number[j]) frame->slots[j] = NUMBER_VAL(work[j]);
-                    }
-                    thread->stack_top = frame->slots + sp;
-                    *ip = frame->closure->function->chunk.code + trace->after_offset;
-                    st->loop_exec_hits++;
-                    trace->exec_hits++;
+                    commit_numeric_loop_state(
+                        st, trace, frame, thread, ip, work, is_number, frame_window, sp, trace->after_offset);
                     return 1;
                 }
                 pc++;
@@ -2978,23 +3221,13 @@ static int execute_numeric_trace_fast(
                 if (next <= work[op->b]) {
                     pc = (int)op->target;
                     if (++loop_chunk_iters >= loop_chunk_budget) {
-                        for (int j = 0; j < frame_window; j++) {
-                            if (is_number[j]) frame->slots[j] = NUMBER_VAL(work[j]);
-                        }
-                        thread->stack_top = frame->slots + sp;
-                        *ip = frame->closure->function->chunk.code + trace->loop_start_offset;
-                        st->loop_exec_hits++;
-                        trace->exec_hits++;
+                        commit_numeric_loop_state(
+                            st, trace, frame, thread, ip, work, is_number, frame_window, sp, trace->loop_start_offset);
                         return 1;
                     }
                 } else {
-                    for (int j = 0; j < frame_window; j++) {
-                        if (is_number[j]) frame->slots[j] = NUMBER_VAL(work[j]);
-                    }
-                    thread->stack_top = frame->slots + sp;
-                    *ip = frame->closure->function->chunk.code + trace->after_offset;
-                    st->loop_exec_hits++;
-                    trace->exec_hits++;
+                    commit_numeric_loop_state(
+                        st, trace, frame, thread, ip, work, is_number, frame_window, sp, trace->after_offset);
                     return 1;
                 }
                 break;
@@ -3048,9 +3281,13 @@ static int execute_typed_trace_fast(
     if (frame_window < 0 || frame_window > 8192) return 0;
     if (trace->max_stack <= 0 || trace->max_stack > 8192) return 0;
 
-    Value work[8192];
-    double num_cache[8192];
-    uint8_t num_valid[8192];
+    int work_cap = trace->max_stack;
+    if (frame_window > work_cap) work_cap = frame_window;
+    if (work_cap <= 0) return 0;
+
+    Value work[work_cap];
+    double num_cache[work_cap];
+    uint8_t num_valid[work_cap];
     for (int j = 0; j < frame_window; j++) {
         Value v = (j < sp) ? frame->slots[j] : NIL_VAL;
         work[j] = v;
@@ -3099,7 +3336,9 @@ static int execute_typed_trace_fast(
                     sp,                                                                                                 \
                     reason);                                                                                            \
         }                                                                                                               \
-        return 0;                                                                                                       \
+        /* Commit accumulated state instead of dropping it. */                                                          \
+        return commit_loop_state(                                                                                       \
+            st, trace, frame, thread, ip, work, sp, frame_window, trace->ops[pc].byte_offset);                          \
     } while (0)
 #define WORK_GET_NUM(idx, out_num)                                                                                      \
     do {                                                                                                                \
@@ -3119,8 +3358,11 @@ static int execute_typed_trace_fast(
     const uint32_t loop_chunk_budget = 4096;
     while (pc >= 0 && pc < trace->op_count) {
         if (++iter_guard > 20000000u) {
+            // Commit instead of dropping the work done so far; the VM resumes at
+            // the current bytecode offset and the loop can be re-entered later.
             jit_record_typed_exit(st, trace, pc, TYPED_EXIT_REASON_CONTROL);
-            return 0;
+            return commit_loop_state(
+                st, trace, frame, thread, ip, work, sp, frame_window, trace->ops[pc].byte_offset);
         }
         JitOp* op = &trace->ops[pc];
         switch (op->op) {
@@ -3256,13 +3498,7 @@ static int execute_typed_trace_fast(
                 if (sp < 2) TYPED_FAIL("equal-stack");
                 Value b = work[sp - 1];
                 Value a = work[sp - 2];
-                int eq = 0;
-                if (a.type == b.type) {
-                    if (IS_NIL(a)) eq = 1;
-                    else if (IS_BOOL(a)) eq = (AS_BOOL(a) == AS_BOOL(b));
-                    else if (IS_NUMBER(a)) eq = (AS_NUMBER(a) == AS_NUMBER(b));
-                    else if (IS_OBJ(a)) eq = (AS_OBJ(a) == AS_OBJ(b));
-                }
+                int eq = jit_values_equal(a, b);
                 WORK_SET(sp - 2, BOOL_VAL(eq));
                 sp--;
                 pc++;
@@ -3284,6 +3520,13 @@ static int execute_typed_trace_fast(
             case JOP_JUMP:
                 if (op->target == JIT_TARGET_EXIT) {
                     return commit_loop_state(st, trace, frame, thread, ip, work, sp, frame_window, trace->after_offset);
+                }
+                // Generic backedge (while / iterator loops) has no induction slot
+                // to budget against, so chunk on the backedge itself. Without this
+                // a very long generic loop can hit the IR guard and livelock.
+                if ((int)op->target < pc && ++loop_chunk_iters >= loop_chunk_budget) {
+                    return commit_loop_state(
+                        st, trace, frame, thread, ip, work, sp, frame_window, trace->loop_start_offset);
                 }
                 pc = (int)op->target;
                 break;
@@ -3542,6 +3785,33 @@ static int execute_typed_trace_fast(
 #undef TYPED_FAIL
 }
 
+// Structural validation for a built native trace. Checks are derived only from
+// build-time data (trace metadata + chunk size), so they run once at compile
+// time instead of being re-validated on every loop entry.
+static int jit_native_trace_validate(const JitLoopTrace* trace, const ObjFunction* function) {
+    if (trace == NULL || function == NULL) return 0;
+    int frame_window = (int)trace->max_slot + 1;
+    if (frame_window <= 0 || frame_window > 1024) return 0;
+    if (trace->native_trace_instr_count == 0 || trace->native_trace_instr_count > 256) return 0;
+    if (trace->native_trace_guard_count > 256) return 0;
+    if ((int)trace->native_value_var_slot >= frame_window ||
+        (int)trace->native_value_end_slot >= frame_window) {
+        return 0;
+    }
+    int chunk_count = function->chunk.count;
+    for (int i = 0; i < (int)trace->native_trace_instr_count; i++) {
+        const ToiJitNativeTraceInstr* in = &trace->native_trace_instrs[i];
+        if (in->deopt_offset >= (uint32_t)chunk_count) return 0;
+        if ((in->op == TOI_JIT_NATIVE_OP_JUMP ||
+             in->op == TOI_JIT_NATIVE_OP_JUMP_IF_FALSE ||
+             in->op == TOI_JIT_NATIVE_OP_JUMP_IF_TRUE) &&
+            (int)in->a > (int)trace->native_trace_instr_count) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace) {
     if (vm == NULL || function == NULL || trace == NULL) return 0;
     ToiJitState* st = jit_state(vm);
@@ -3605,6 +3875,9 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
     trace->native_trace_deopts = 0;
     trace->native_trace_sandbox_runs = 0;
     trace->native_trace_sandbox_disabled = 0;
+    trace->native_trace_sandbox_ok = 0;
+    trace->mixed_call_heavy = 0;
+    trace->call_stall_runs = 0;
     trace->native_numeric_loop_fn = NULL;
     trace->native_qfor_empty_fn = NULL;
     trace->native_slot_loop_upvalue_const_count = 0;
@@ -3666,7 +3939,8 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
                     &trace->native_code_mem,
                     &trace->native_code_size,
                     err_buf,
-                    sizeof(err_buf))) {
+                    sizeof(err_buf)) &&
+                jit_accept_compiled_slot_loop(st, trace)) {
                 trace->native_loop_var_slot = slot_var;
                 trace->native_loop_end_slot = slot_end;
                 trace->native_slot_loop_slot_count = slot_count;
@@ -3726,11 +4000,13 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
                     trace->native_trace_guard_count = (uint16_t)native_trace_guard_count;
                     native_trace_analyze_shape(trace);
                     native_trace_seed_call_program_hints(vm, trace);
+                    trace->native_trace_sandbox_ok = (uint8_t)jit_native_trace_validate(trace, function);
                     st->native_trace_build_success++;
                 } else {
                     trace->native_trace_ready = 0;
                     trace->native_trace_instr_count = 0;
                     trace->native_trace_guard_count = 0;
+                    trace->native_trace_sandbox_ok = 0;
                     trace->native_trace_has_call = 0;
                     trace->native_trace_has_invoke = 0;
                     trace->native_trace_has_build_string = 0;
@@ -3783,7 +4059,8 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
                                 &trace->native_code_mem,
                                 &trace->native_code_size,
                                 err_buf,
-                                sizeof(err_buf))) {
+                                sizeof(err_buf)) &&
+                            jit_accept_compiled_slot_loop(st, trace)) {
                             trace->native_loop_var_slot = value_var;
                             trace->native_loop_end_slot = value_end;
                             trace->native_slot_loop_slot_count = (uint8_t)native_trace_slot_count;
@@ -3886,7 +4163,8 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
                             &trace->native_code_mem,
                             &trace->native_code_size,
                             err_buf,
-                            sizeof(err_buf))) {
+                            sizeof(err_buf)) &&
+                        jit_accept_compiled_slot_loop(st, trace)) {
                         trace->native_loop_var_slot = value_var;
                         trace->native_loop_end_slot = value_end;
                         trace->native_slot_loop_slot_count = (uint8_t)value_slot_count;
@@ -3986,10 +4264,25 @@ skip_value_loop_compile:;
     }
     trace->runtime_probe_limit = trace_runtime_probe_limit(trace);
     if (trace->runtime_probe_limit == 0) {
-        trace->runtime_disabled = 1;
-        st->loop_runtime_disabled++;
+        jit_retire_loop_trace(st, trace);
+    }
+    // Loops with dynamic call sites are not executed by the loop JIT: the
+    // per-site call cache is not reliable when the callee changes between
+    // iterations, and a wrong callee silently corrupts results. The VM's
+    // quickened call path (with its own inline cache) handles these loops.
+    // TODO(jit-call-path): fix the trace call cache, then flip the default.
+    if (!jit_call_traces_enabled()) {
+        for (int i = 0; i < trace->op_count; i++) {
+            JitOpCode op = trace->ops[i].op;
+            if (op == JOP_CALL || op == JOP_QCALL2) {
+                trace->mixed_call_heavy = 1;
+                jit_retire_loop_trace(st, trace);
+                break;
+            }
+        }
     }
     trace->compiled = 1;
+    if (!trace->runtime_disabled) st->loop_live_count++;
     return 1;
 }
 
@@ -4057,9 +4350,200 @@ int jit_eval_tiny_inline2_local(ObjFunction* function, Value arg0, Value arg1, V
         case TINY_INLINE_RET1_2:
             *out = arg1;
             return 1;
+        case TINY_INLINE_LEN_ADD2:
+            if (!IS_NUMBER(arg0) || !IS_STRING(arg1)) return 0;
+            *out = NUMBER_VAL(AS_NUMBER(arg0) + (double)AS_STRING(arg1)->length);
+            return 1;
+        case TINY_INLINE_LEN_ARG0_2:
+            if (!IS_STRING(arg0)) return 0;
+            *out = NUMBER_VAL((double)AS_STRING(arg0)->length);
+            return 1;
+        case TINY_INLINE_LEN_ARG1_2:
+            if (!IS_STRING(arg1)) return 0;
+            *out = NUMBER_VAL((double)AS_STRING(arg1)->length);
+            return 1;
         default:
             return 0;
     }
+}
+
+// Evaluating a small, straight-line callee body in place is much cheaper than
+// re-entering execute_program(): for a loop that calls a function every
+// iteration, the nested-interpreter prologue (frame setup, stack probe, argument
+// copies, program checks) costs more than the callee body itself. Only opcodes
+// whose semantics are shared with execute_program() are modelled here; anything
+// else returns 0 so the caller falls back to the normal call path.
+static int jit_inline_call_program(
+    ObjFunction* fn,
+    JitProgram* program,
+    const Value* args,
+    int argc,
+    Value* out) {
+    if (fn == NULL || program == NULL || args == NULL || out == NULL) return 0;
+    if (program->ops == NULL || program->op_count <= 0 || program->op_count > JIT_INLINE_MAX_OPS) return 0;
+    if (program->max_slot < 0 || program->max_slot >= JIT_INLINE_MAX_SLOTS) return 0;
+    if (program->max_stack <= 0 || program->max_stack > JIT_INLINE_MAX_STACK) return 0;
+    if (argc < 0 || argc + 1 > JIT_INLINE_MAX_SLOTS) return 0;
+    if (fn->param_types_count > 0 && fn->param_types != NULL) {
+        int check_count = (fn->param_types_count < fn->arity) ? fn->param_types_count : fn->arity;
+        if (check_count > argc) return 0;
+        for (int i = 0; i < check_count; i++) {
+            if (!jit_value_matches_type(args[i], fn->param_types[i])) return 0;
+        }
+    }
+
+    // A two-argument shim compiles to a single JOP_TINY_INLINE op; evaluate it
+    // directly instead of walking a one-op program.
+    if (program->op_count == 1 && program->ops[0].op == JOP_TINY_INLINE) {
+        if (argc != 2) return 0;
+        if (fn->is_variadic || fn->defaults_count != 0) return 0;
+        return jit_eval_tiny_inline2_local(fn, args[0], args[1], out);
+    }
+
+    Value slots[JIT_INLINE_MAX_SLOTS];
+    Value stack[JIT_INLINE_MAX_STACK];
+    for (int i = 0; i <= program->max_slot; i++) slots[i] = NIL_VAL;
+    for (int i = 0; i < argc; i++) slots[i + 1] = args[i];
+    int sp = argc + 1;
+    for (int i = 0; i < sp; i++) stack[i] = slots[i];
+
+    for (int pc = 0; pc < program->op_count; pc++) {
+        const JitOp* op = &program->ops[pc];
+        switch (op->op) {
+            case JOP_GET_LOCAL:
+                if ((int)op->a > program->max_slot || sp >= program->max_stack) return 0;
+                stack[sp++] = slots[op->a];
+                break;
+            case JOP_GET2_LOCAL:
+                if ((int)op->a > program->max_slot || (int)op->b > program->max_slot) return 0;
+                if (sp + 1 >= program->max_stack) return 0;
+                stack[sp++] = slots[op->a];
+                stack[sp++] = slots[op->b];
+                break;
+            case JOP_CONSTANT:
+                if (sp >= program->max_stack) return 0;
+                stack[sp++] = op->constant;
+                break;
+            case JOP_NIL:
+            case JOP_TRUE:
+            case JOP_FALSE:
+                if (sp >= program->max_stack) return 0;
+                stack[sp++] = (op->op == JOP_NIL) ? NIL_VAL : ((op->op == JOP_TRUE) ? BOOL_VAL(1) : BOOL_VAL(0));
+                break;
+            case JOP_SET_LOCAL:
+            case JOP_SET_LOCAL_POP:
+                if ((int)op->a > program->max_slot || sp <= 0) return 0;
+                slots[op->a] = stack[sp - 1];
+                if (op->op == JOP_SET_LOCAL_POP) sp--;
+                break;
+            case JOP_POP:
+                if (sp <= 0) return 0;
+                sp--;
+                break;
+            case JOP_ADD:
+            case JOP_ADD_INPLACE:
+            case JOP_SUBTRACT:
+            case JOP_MULTIPLY:
+            case JOP_DIVIDE:
+            case JOP_MODULO:
+            case JOP_IADD:
+            case JOP_ISUB:
+            case JOP_IMUL:
+            case JOP_IDIV:
+            case JOP_IMOD:
+            case JOP_FADD:
+            case JOP_FSUB:
+            case JOP_FMUL:
+            case JOP_FDIV:
+            case JOP_FMOD:
+            case JOP_QFADD:
+            case JOP_QFSUB:
+            case JOP_QFMUL:
+            case JOP_QFDIV:
+            case JOP_QFMOD:
+                if (sp < 2) return 0;
+                if (!IS_NUMBER(stack[sp - 1]) || !IS_NUMBER(stack[sp - 2])) return 0;
+                stack[sp - 2] = numeric_binop(op->op, AS_NUMBER(stack[sp - 2]), AS_NUMBER(stack[sp - 1]));
+                sp--;
+                break;
+            case JOP_NEGATE:
+                if (sp <= 0 || !IS_NUMBER(stack[sp - 1])) return 0;
+                stack[sp - 1] = NUMBER_VAL(-AS_NUMBER(stack[sp - 1]));
+                break;
+            case JOP_NOT:
+                if (sp <= 0) return 0;
+                stack[sp - 1] = BOOL_VAL(is_falsey_jit(stack[sp - 1]));
+                break;
+            case JOP_EQUAL:
+                if (sp < 2) return 0;
+                stack[sp - 2] = BOOL_VAL(jit_values_equal(stack[sp - 2], stack[sp - 1]));
+                sp--;
+                break;
+            case JOP_QGREATER_NUM:
+            case JOP_QLESS_NUM:
+                if (sp < 2) return 0;
+                if (!IS_NUMBER(stack[sp - 1]) || !IS_NUMBER(stack[sp - 2])) return 0;
+                stack[sp - 2] = BOOL_VAL((op->op == JOP_QGREATER_NUM)
+                                             ? (AS_NUMBER(stack[sp - 2]) > AS_NUMBER(stack[sp - 1]))
+                                             : (AS_NUMBER(stack[sp - 2]) < AS_NUMBER(stack[sp - 1])));
+                sp--;
+                break;
+            case JOP_LENGTH: {
+                if (sp <= 0) return 0;
+                Value len = NIL_VAL;
+                if (!jit_length_primitive(stack[sp - 1], &len)) return 0;
+                stack[sp - 1] = len;
+                break;
+            }
+            case JOP_RETURN:
+                if (sp <= 0) return 0;
+                *out = stack[sp - 1];
+                return 1;
+            default:
+                return 0;
+        }
+    }
+    return 0;
+}
+
+// Reuses the trace call cache to find this call site's callee program and
+// evaluates it in place. Misses fall through to the normal call path, which also
+// populates the cache for the next iteration.
+static int jit_try_inline_trace_call(
+    JitLoopTrace* trace,
+    int pc,
+    Value callee,
+    const Value* args,
+    int argc,
+    Value* out) {
+    if (trace == NULL || args == NULL || out == NULL) return 0;
+    if (pc < 0 || pc >= trace->op_count) return 0;
+    if (!IS_CLOSURE(callee)) return 0;
+    if (trace->call_ic_closures == NULL || trace->call_ic_programs == NULL) return 0;
+    ObjClosure* closure = AS_CLOSURE(callee);
+    if (closure == NULL || closure->function == NULL) return 0;
+    if (closure->function->arity != argc) return 0;
+
+    JitProgram* program = NULL;
+    if (trace->call_ic_closures[pc] == closure) {
+        program = trace->call_ic_programs[pc];
+    } else if (trace->call_ic2_closures != NULL && trace->call_ic2_programs != NULL &&
+               trace->call_ic2_closures[pc] == closure) {
+        program = trace->call_ic2_programs[pc];
+    } else if (trace->call_ic3_closures != NULL && trace->call_ic3_programs != NULL &&
+               trace->call_ic3_closures[pc] == closure) {
+        program = trace->call_ic3_programs[pc];
+    } else if (trace->call_ic4_closures != NULL && trace->call_ic4_programs != NULL &&
+               trace->call_ic4_closures[pc] == closure) {
+        program = trace->call_ic4_programs[pc];
+    } else if (trace->call_ic5_closures != NULL && trace->call_ic5_programs != NULL &&
+               trace->call_ic5_closures[pc] == closure) {
+        program = trace->call_ic5_programs[pc];
+    } else {
+        return 0;
+    }
+    if (program == NULL || program->function != closure->function) return 0;
+    return jit_inline_call_program(closure->function, program, args, argc, out);
 }
 
 int execute_program(
@@ -4129,6 +4613,18 @@ int execute_program(
             case TINY_INLINE_RET1_2:
                 tiny_out = arg1;
                 break;
+            case TINY_INLINE_LEN_ADD2:
+                if (!IS_NUMBER(arg0) || !IS_STRING(arg1)) return 0;
+                tiny_out = NUMBER_VAL(AS_NUMBER(arg0) + (double)AS_STRING(arg1)->length);
+                break;
+            case TINY_INLINE_LEN_ARG0_2:
+                if (!IS_STRING(arg0)) return 0;
+                tiny_out = NUMBER_VAL((double)AS_STRING(arg0)->length);
+                break;
+            case TINY_INLINE_LEN_ARG1_2:
+                if (!IS_STRING(arg1)) return 0;
+                tiny_out = NUMBER_VAL((double)AS_STRING(arg1)->length);
+                break;
             default:
                 return 0;
         }
@@ -4142,8 +4638,12 @@ int execute_program(
     }
     if (program->max_slot >= 1024 || program->max_stack >= 2048) return 0;
 
-    Value locals[1024];
-    Value stack[2048];
+    int locals_cap = program->max_slot + 1;
+    int stack_cap = program->max_stack;
+    if (stack_cap < arg_count + 1) stack_cap = arg_count + 1;
+    if (locals_cap <= 0 || stack_cap <= 0) return 0;
+    Value locals[locals_cap];
+    Value stack[stack_cap];
     for (int i = 0; i <= program->max_slot; i++) locals[i] = NIL_VAL;
     locals[0] = OBJ_VAL(closure);
     for (int i = 0; i < arg_count; i++) {
@@ -4325,13 +4825,7 @@ op_hot_equal: {
     if (sp < 2) return 0;
     Value b = stack[sp - 1];
     Value a = stack[sp - 2];
-    int eq = 0;
-    if (a.type == b.type) {
-        if (IS_NIL(a)) eq = 1;
-        else if (IS_BOOL(a)) eq = (AS_BOOL(a) == AS_BOOL(b));
-        else if (IS_NUMBER(a)) eq = (AS_NUMBER(a) == AS_NUMBER(b));
-        else if (IS_OBJ(a)) eq = (AS_OBJ(a) == AS_OBJ(b));
-    }
+    int eq = jit_values_equal(a, b);
     stack[sp - 2] = BOOL_VAL(eq);
     sp--;
     pc++;
@@ -4642,13 +5136,7 @@ op_cold:
                 if (sp < 2) return 0;
                 Value b = stack[sp - 1];
                 Value a = stack[sp - 2];
-                int eq = 0;
-                if (a.type == b.type) {
-                    if (IS_NIL(a)) eq = 1;
-                    else if (IS_BOOL(a)) eq = (AS_BOOL(a) == AS_BOOL(b));
-                    else if (IS_NUMBER(a)) eq = (AS_NUMBER(a) == AS_NUMBER(b));
-                    else if (IS_OBJ(a)) eq = (AS_OBJ(a) == AS_OBJ(b));
-                }
+                int eq = jit_values_equal(a, b);
                 stack[sp - 2] = BOOL_VAL(eq);
                 sp--;
                 pc++;
@@ -4825,10 +5313,16 @@ void toi_jit_init(VM* vm) {
     st->loop_exec_enabled = 1;
     st->loop_numeric_fast_enabled = 1;
     st->loop_value_fast_enabled = 1;
+    st->hot_loop_threshold = jit_loop_hot_threshold();
     st->native_trace_exec_enabled = (uint8_t)TOI_JIT_DEBUG_NATIVE_TRACE_EXEC;
     st->native_trace_sandbox_enabled = (uint8_t)TOI_JIT_DEBUG_NATIVE_TRACE_SANDBOX;
     st->native_trace_compiled_exec_enabled = (uint8_t)jit_pipeline_native_trace_compiled_exec_enabled();
-    st->backend_kind = toi_jit_backend_select("auto");
+    // Backend selection is overridable for bisecting JIT behaviour:
+    //   TOI_JIT_BACKEND=none  -> no native code (IR/typed executors only)
+    //   TOI_JIT_BACKEND=arm64 / x64 -> force a specific backend
+    const char* backend_env = getenv("TOI_JIT_BACKEND");
+    const char* backend_name = (backend_env != NULL && backend_env[0] != '\0') ? backend_env : "auto";
+    st->backend_kind = toi_jit_backend_select(backend_name);
     st->backend_enabled = (uint8_t)(st->backend_kind != TOI_JIT_BACKEND_NONE);
     st->backend_host_supported = 0;
     st->backend_host_supported = (uint8_t)toi_jit_backend_host_supported(st->backend_kind);
@@ -4995,6 +5489,7 @@ static int jit_try_execute_entry_stack(
     ObjClosure* closure,
     int arg_count) {
     if (vm == NULL || st == NULL || entry == NULL || closure == NULL) return 0;
+    if (!jit_function_jit_enabled()) return 0;
     if (!entry->compiled || entry->program == NULL || entry->runtime_disabled) return 0;
     if (entry->function != closure->function) return 0;
     vm->native_jit_exec_attempts++;
@@ -5077,6 +5572,7 @@ static int jit_try_linked_hot_retry(
 }
 
 int toi_jit_try_execute(VM* vm, ObjClosure* closure, int arg_count) {
+    if (!jit_function_jit_enabled()) return 0;
     if (vm == NULL || !vm->native_jit_enabled || closure == NULL) return 0;
 
     ToiJitState* st = jit_state(vm);
@@ -5182,6 +5678,7 @@ int toi_jit_execute_program_direct_with_args(
     int arg_count,
     Value* args,
     Value* out) {
+    if (!jit_function_jit_enabled()) return 0;
     if (vm == NULL || !vm->native_jit_enabled || closure == NULL || program_ptr == NULL ||
         args == NULL || out == NULL) {
         return 0;
@@ -5227,6 +5724,7 @@ static int jit_try_execute_entry_with_args(
 }
 
 int toi_jit_try_execute_with_args(VM* vm, ObjClosure* closure, int arg_count, Value* args, Value* out) {
+    if (!jit_function_jit_enabled()) return 0;
     if (vm == NULL || !vm->native_jit_enabled || closure == NULL || args == NULL || out == NULL) return 0;
     ToiJitState* st = jit_state(vm);
     if (st == NULL) return 0;
@@ -5242,6 +5740,7 @@ int toi_jit_try_execute_with_args(VM* vm, ObjClosure* closure, int arg_count, Va
 }
 
 int toi_jit_try_execute_compiled_with_args(VM* vm, ObjClosure* closure, int arg_count, Value* args, Value* out) {
+    if (!jit_function_jit_enabled()) return 0;
     if (vm == NULL || !vm->native_jit_enabled || closure == NULL || args == NULL || out == NULL) return 0;
     ToiJitState* st = jit_state(vm);
     if (st == NULL) return 0;
@@ -5260,6 +5759,7 @@ int toi_jit_try_execute_compiled_at_callsite_with_args(
     int arg_count,
     Value* args,
     Value* out) {
+    if (!jit_function_jit_enabled()) return 0;
     if (vm == NULL || !vm->native_jit_enabled || caller == NULL || callee == NULL ||
         args == NULL || out == NULL) {
         return 0;
@@ -5299,6 +5799,7 @@ int toi_jit_get_compiled_program_ptr_at_callsite(
     uint32_t opcode_offset,
     ObjClosure* callee,
     void** out_program_ptr) {
+    if (!jit_function_jit_enabled()) return 0;
     if (out_program_ptr == NULL) return 0;
     *out_program_ptr = NULL;
     if (vm == NULL || !vm->native_jit_enabled || caller == NULL || callee == NULL) return 0;
@@ -5331,6 +5832,7 @@ int toi_jit_get_compiled_program_ptr_at_callsite(
 }
 
 int toi_jit_try_execute_linked_with_args(VM* vm, ObjClosure* closure, int arg_count, Value* args, Value* out) {
+    if (!jit_function_jit_enabled()) return 0;
     if (vm == NULL || !vm->native_jit_enabled || closure == NULL || args == NULL || out == NULL) return 0;
     ToiJitState* st = jit_state(vm);
     if (!jit_linked_pipeline_active(st)) return 0;
@@ -5344,27 +5846,11 @@ int toi_jit_try_execute_linked_with_args(VM* vm, ObjClosure* closure, int arg_co
         vm, st->next_pipeline, function, closure, arg_count, args, out, jit_exec_compiled_with_args_dispatch, 1, 0, 0);
 }
 
-void toi_jit_notify_loop_backedge(VM* vm, CallFrame* frame, int opcode_offset, uint8_t opcode) {
-    if (vm == NULL || !vm->native_jit_enabled || frame == NULL || frame->closure == NULL) return;
-    if (!is_numeric_for_loop_opcode(opcode) && opcode != OP_LOOP) return;
-
-    ToiJitState* st = jit_state(vm);
-    if (st == NULL) return;
-    if (!st->loop_exec_enabled) return;
-    st->loop_backedge_events++;
-
-    ObjFunction* function = frame->closure->function;
-    if (st->next_pipeline_enabled && st->next_pipeline != NULL) {
-        jit_pipeline_note_hot_function(st->next_pipeline, function);
-        (void)jit_pipeline_try_compile_stub(st->next_pipeline, function);
-    }
-    JitLoopTrace* trace = jit_find_or_add_loop(vm, function, opcode_offset, opcode);
-    if (trace == NULL || trace->compiled || trace->failed) return;
-
-    trace->hot_count++;
-    uint32_t hot_threshold = jit_loop_hot_threshold();
-    if (trace->hot_count < hot_threshold) return;
-
+// Shared tail of loop compilation: attempt compile_loop_trace once and record
+// the outcome. Invoked from toi_jit_notify_loop_backedge when a loop crosses its
+// hot threshold; afterwards the loop is assessed (compiled or failed) and the
+// per-backedge fast path skips straight past this.
+static void jit_compile_loop_trace_full(ToiJitState* st, VM* vm, ObjFunction* function, JitLoopTrace* trace) {
     trace->compile_attempts++;
     st->loop_compile_attempts++;
     if (!compile_loop_trace(vm, function, trace)) {
@@ -5381,7 +5867,7 @@ void toi_jit_notify_loop_backedge(VM* vm, CallFrame* frame, int opcode_offset, u
         if (jit_dump_loops_enabled()) {
             fprintf(stderr, "[jit-loop-fail] fn=%s at=%d reason=%s op=%u off=%u\n",
                     (function->name != NULL) ? function->name->chars : "<script>",
-                    opcode_offset,
+                    trace->opcode_offset,
                     loop_fail_reason_name(trace->fail_reason),
                     (unsigned)trace->fail_opcode,
                     (unsigned)trace->fail_offset);
@@ -5392,7 +5878,7 @@ void toi_jit_notify_loop_backedge(VM* vm, CallFrame* frame, int opcode_offset, u
     if (jit_dump_loops_enabled()) {
         fprintf(stderr, "[jit-loop-compiled] fn=%s at=%d ops=%d entry=%u typed=%u numeric=%u value=%u\n",
                 (function->name != NULL) ? function->name->chars : "<script>",
-                opcode_offset,
+                trace->opcode_offset,
                 trace->op_count,
                 (unsigned)trace->entry_pc,
                 (unsigned)trace->typed_fast_eligible,
@@ -5406,11 +5892,51 @@ void toi_jit_notify_loop_backedge(VM* vm, CallFrame* frame, int opcode_offset, u
     }
 }
 
+void toi_jit_notify_loop_backedge(VM* vm, CallFrame* frame, int opcode_offset, uint8_t opcode) {
+    if (vm == NULL || !vm->native_jit_enabled || frame == NULL || frame->closure == NULL) return;
+    if (!is_numeric_for_loop_opcode(opcode) && opcode != OP_LOOP) return;
+
+    ToiJitState* st = jit_state(vm);
+    if (st == NULL) return;
+    if (!st->loop_exec_enabled) return;
+    st->loop_backedge_events++;
+
+    ObjFunction* function = frame->closure->function;
+
+    // Fast path: this backedge was already tracked. Assessed loops (compiled,
+    // failed, or runtime-disabled) never need re-probing; unassessed loops only
+    // need to accumulate heat toward the compile threshold.
+    JitLoopTrace* trace = jit_loop_from_offset(st, function, opcode_offset);
+    if (trace != NULL) {
+        if (trace->compiled || trace->failed || trace->runtime_disabled) return;
+        trace->hot_count++;
+        if (trace->hot_count < st->hot_loop_threshold) return;
+        jit_compile_loop_trace_full(st, vm, function, trace);
+        return;
+    }
+
+    // Slow path: first sighting of this backedge. Warm up the whole-function
+    // pipeline once and register the trace in the per-chunk backedge table so
+    // every later iteration skips the hash-based lookup entirely.
+    if (st->next_pipeline_enabled && st->next_pipeline != NULL) {
+        jit_pipeline_note_hot_function(st->next_pipeline, function);
+        (void)jit_pipeline_try_compile_stub(st->next_pipeline, function);
+    }
+    trace = jit_find_or_add_loop(vm, function, opcode_offset, opcode);
+    if (trace == NULL) return;
+    jit_loop_store_offset(st, function, opcode_offset, trace);
+    if (trace->compiled || trace->failed || trace->runtime_disabled) return;
+
+    trace->hot_count++;
+    if (trace->hot_count < st->hot_loop_threshold) return;
+    jit_compile_loop_trace_full(st, vm, function, trace);
+}
+
 int toi_jit_has_compiled_loops(VM* vm) {
     if (vm == NULL || !vm->native_jit_enabled) return 0;
     ToiJitState* st = jit_state(vm);
     if (st == NULL) return 0;
-    return st->loop_compiled_count != 0;
+    return st->loop_live_count != 0;
 }
 
 int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_offset, uint8_t opcode) {
@@ -5423,16 +5949,40 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
     if (st->loop_compiled_count == 0) return 0;
 
     ObjFunction* function = frame->closure->function;
-    JitLoopTrace* trace = jit_find_loop(st, function, opcode_offset, opcode);
-    if (trace == NULL || !trace->compiled) return 0;
-    if (trace->runtime_disabled) return 0;
+    JitLoopTrace* trace = jit_loop_from_offset(st, function, opcode_offset);
+    if (trace == NULL) {
+        // Fallback for backedges not yet in the per-chunk table (e.g. the table
+        // could not be allocated, or the loop compiled on an earlier path).
+        trace = jit_find_loop(st, function, opcode_offset, opcode);
+        if (trace == NULL) return 0;
+    }
+    if (!trace->compiled || trace->runtime_disabled) return 0;
+    // Traces that were retired because their call sites are polymorphic must not
+    // be re-probed on every backedge; the VM handles the loop from here on.
+    if (trace->mixed_call_heavy) {
+        jit_retire_loop_trace(st, trace);
+        return 0;
+    }
+    // A trace whose in-trace call bails every iteration never gets past the call:
+    // each backedge pays a trace entry plus a state commit, which is slower than
+    // the plain VM (measured 2.7x on a call loop with a non-inlinable callee).
+    // Retire it and let the VM run the loop with its own call path.
+    if (trace->call_stall_runs >= 32u) {
+        jit_retire_loop_trace(st, trace);
+        if (jit_dump_loops_enabled()) {
+            fprintf(stderr, "[jit-loop-runtime-disabled] fn=%s at=%d stalls=%u reason=call-stall\n",
+                    (function->name != NULL) ? function->name->chars : "<script>",
+                    opcode_offset,
+                    (unsigned)trace->call_stall_runs);
+        }
+        return 0;
+    }
 
     st->loop_exec_attempts++;
     trace->exec_attempts++;
     uint32_t probe_limit = (trace->runtime_probe_limit != 0) ? (uint32_t)trace->runtime_probe_limit : 128u;
     if (trace->exec_attempts >= probe_limit && trace->exec_hits == 0) {
-        trace->runtime_disabled = 1;
-        st->loop_runtime_disabled++;
+        jit_retire_loop_trace(st, trace);
         if (jit_dump_loops_enabled()) {
             fprintf(stderr, "[jit-loop-runtime-disabled] fn=%s at=%d attempts=%u hits=%u reason=no-hits\n",
                     (function->name != NULL) ? function->name->chars : "<script>",
@@ -5445,8 +5995,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
     uint32_t low_hit_limit = probe_limit * 4u;
     if (trace->exec_attempts >= low_hit_limit &&
         ((double)trace->exec_hits / (double)trace->exec_attempts) < 0.01) {
-        trace->runtime_disabled = 1;
-        st->loop_runtime_disabled++;
+        jit_retire_loop_trace(st, trace);
         if (jit_dump_loops_enabled()) {
             fprintf(stderr, "[jit-loop-runtime-disabled] fn=%s at=%d attempts=%u hits=%u reason=low-hit-rate\n",
                     (function->name != NULL) ? function->name->chars : "<script>",
@@ -5464,31 +6013,10 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
         !trace->native_trace_sandbox_disabled) {
         st->native_trace_sandbox_attempts++;
         trace->native_trace_sandbox_runs++;
-        int frame_window = (int)trace->max_slot + 1;
-        int ok = 1;
-        if (frame_window <= 0 || frame_window > 1024) ok = 0;
-        if (trace->native_trace_instr_count == 0 || trace->native_trace_instr_count > 256) ok = 0;
-        if (trace->native_trace_guard_count > 256) ok = 0;
-        if ((int)trace->native_value_var_slot >= frame_window || (int)trace->native_value_end_slot >= frame_window) ok = 0;
-        if (ok) {
-            int chunk_count = frame->closure->function->chunk.count;
-            for (int i = 0; i < (int)trace->native_trace_instr_count; i++) {
-                const ToiJitNativeTraceInstr* in = &trace->native_trace_instrs[i];
-                if (in->deopt_offset >= (uint32_t)chunk_count) {
-                    ok = 0;
-                    break;
-                }
-                if (in->op == TOI_JIT_NATIVE_OP_JUMP ||
-                    in->op == TOI_JIT_NATIVE_OP_JUMP_IF_FALSE ||
-                    in->op == TOI_JIT_NATIVE_OP_JUMP_IF_TRUE) {
-                    if ((int)in->a > (int)trace->native_trace_instr_count) {
-                        ok = 0;
-                        break;
-                    }
-                }
-            }
-        }
-        if (ok) {
+        // Trace structural validity is verified once at build time
+        // (jit_native_trace_validate sets native_trace_sandbox_ok); the per-entry
+        // cost here is a single flag test instead of an O(n) instruction scan.
+        if (trace->native_trace_sandbox_ok) {
             st->native_trace_sandbox_success++;
         } else {
             st->native_trace_sandbox_fail++;
@@ -5882,7 +6410,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
             return 1;
         }
     }
-    if (trace->typed_fast_eligible && !trace->typed_fast_disabled) {
+    if (trace->typed_fast_eligible && !trace->typed_fast_disabled && !trace->mixed_call_heavy) {
         trace->typed_fast_attempts++;
         st->loop_typed_fast_attempts++;
         if (execute_typed_trace_fast(vm, st, function, trace, frame, thread, ip)) {
@@ -5924,6 +6452,10 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
         }
     }
     if (!trace->has_program || trace->ops == NULL || trace->op_count <= 0) return 0;
+    // Loops whose bodies perform an interpreter-executed (IR) call every iteration
+    // are much slower inside this mixed executor than in the plain VM, where the
+    // call can use the quickened/OP_CALL1 path. Once detected, fall back for good.
+    if (trace->mixed_call_heavy) return 0;
 
     ptrdiff_t depth = thread->stack_top - frame->slots;
     if (depth < 0) return 0;
@@ -5967,10 +6499,25 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                     sp,                                                                                                 \
                     reason);                                                                                            \
         }                                                                                                               \
-        return 0;                                                                                                       \
+        /* Never drop accumulated locals: commit them and resume in the VM at */                                        \
+        /* the current operation. Silently discarding `work` loses loop state. */                                       \
+        return commit_loop_state(                                                                                       \
+            st, trace, frame, thread, ip, work, sp, frame_window, trace->ops[pc].byte_offset);                          \
+    } while (0)
+#define LOOP_FAIL_CALL(reason)                                                                                          \
+    do {                                                                                                                \
+        if (trace->call_stall_runs < 0xFFFFu) trace->call_stall_runs++;                                                 \
+        LOOP_FAIL(reason);                                                                                              \
     } while (0)
     while (pc >= 0 && pc < trace->op_count) {
+        // Too many interpreter-executed (IR) calls in this loop body: hand the
+        // loop back to the VM. The switch happens at the next loop backedge so a
+        // partially executed iteration is never replayed (which would duplicate
+        // its side effects).
         if (++iter_guard > 20000000u) {
+            // Never discard work: commit what we have and let the VM continue at
+            // the current bytecode offset. Guarantees one iteration of progress
+            // per JIT entry instead of a full-loop livelock.
             if (jit_dump_loops_enabled()) {
                 fprintf(stderr,
                         "[jit-loop-exec-fail] fn=%s at=%d pc=%d op=<guard> sp=%d reason=iter-guard\n",
@@ -5979,7 +6526,8 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         pc,
                         sp);
             }
-            return 0;
+            return commit_loop_state(
+                st, trace, frame, thread, ip, work, sp, frame_window, trace->ops[pc].byte_offset);
         }
         JitOp* op = &trace->ops[pc];
         switch (op->op) {
@@ -6098,13 +6646,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         if (sp < 2) return 0;
                         Value b = work[sp - 1];
                         Value a = work[sp - 2];
-                        int eq = 0;
-                        if (a.type == b.type) {
-                            if (IS_NIL(a)) eq = 1;
-                            else if (IS_BOOL(a)) eq = (AS_BOOL(a) == AS_BOOL(b));
-                            else if (IS_NUMBER(a)) eq = (AS_NUMBER(a) == AS_NUMBER(b));
-                            else if (IS_OBJ(a)) eq = (AS_OBJ(a) == AS_OBJ(b));
-                        }
+                        int eq = jit_values_equal(a, b);
                         work[sp - 2] = BOOL_VAL(eq);
                         sp--;
                         pc++;
@@ -6135,6 +6677,30 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                                 sp,
                                 frame_window,
                                 trace->after_offset);
+                        }
+                        // Generic backedge (while / iterator loops): chunk already
+                        // executed iterations so a long loop cannot hit the IR
+                        // guard and livelock against the VM.
+                        if ((int)op->target < pc &&
+                            (trace->mixed_call_heavy || ++loop_chunk_iters >= loop_chunk_budget)) {
+                            trace->call_stall_runs = 0;
+                            if (jit_dump_loops_enabled() && trace->exec_hits == 0 && trace->exec_attempts <= 1) {
+                                fprintf(stderr,
+                                        "[jit-loop-chunk] fn=%s at=%d iters=%u reason=backedge-budget\n",
+                                        (function->name != NULL) ? function->name->chars : "<script>",
+                                        opcode_offset,
+                                        (unsigned)loop_chunk_iters);
+                            }
+                            return commit_loop_state(
+                                st,
+                                trace,
+                                frame,
+                                thread,
+                                ip,
+                                work,
+                                sp,
+                                frame_window,
+                                trace->loop_start_offset);
                         }
                         pc = (int)op->target;
                         break;
@@ -6194,7 +6760,13 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                             (argc > 0) ? jit_value_kind_name(work[callee_idx + 1]) : "-",
                             (argc > 1) ? jit_value_kind_name(work[callee_idx + 2]) : "-");
                         Value out = NIL_VAL;
-                        int ic_hit = jit_try_trace_call_ic(
+                        // Closure calls inside a trace go through the IR call
+                        // cache, which is not yet reliable for every shape.
+                        // Finish this iteration, then hand the loop back to the
+                        // VM's (correct) quickened call path.
+                        // TODO(jit-call-path): drop this once the call cache is
+                        // validated by tests/ with the JIT forced hot.
+                                int ic_hit = jit_try_trace_call_ic(
                                 vm,
                                 function,
                                 trace,
@@ -6205,7 +6777,14 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                                 argc,
                                 &out);
                         if (!ic_hit &&
+                            IS_CLOSURE(callee) &&
+                            jit_try_inline_trace_call(trace, pc, callee, &work[callee_idx + 1], argc, &out)) {
+                            work[callee_idx] = out;
+                            sp = callee_idx + 1;
+                        } else if (!ic_hit &&
                             IS_CLOSURE(callee)) {
+                            // A closure executed through the whole-function IR
+                            // interpreter: track it so we can bail to the VM.
                             if (!jit_try_safe_loop_closure_call(
                                     vm,
                                     AS_CLOSURE(callee),
@@ -6213,8 +6792,13 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                                     argc,
                                     &out,
                                     NULL)) {
-                                LOOP_FAIL("call-closure-unsupported");
+                                LOOP_FAIL_CALL("call-closure-unsupported");
                             }
+                            // The call consumed the callee and its arguments;
+                            // leave exactly one result on the stack like every
+                            // other call path does.
+                            work[callee_idx] = out;
+                            sp = callee_idx + 1;
                         } else if (!ic_hit &&
                                    1) {
                             int out_count = 0;
@@ -6226,10 +6810,10 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                                     &work[callee_idx],
                                     trace->max_stack - callee_idx,
                                     &out_count)) {
-                                LOOP_FAIL("call-primitive-miss");
+                                LOOP_FAIL_CALL("call-primitive-miss");
                             }
                             if (out_count <= 0) {
-                                LOOP_FAIL("call-zero-return");
+                                LOOP_FAIL_CALL("call-zero-return");
                             }
                             out = work[callee_idx];
                             sp = callee_idx + out_count;
@@ -6238,6 +6822,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                             jit_update_trace_call_ic(vm, trace, pc, callee, argc);
                         }
                         if (ic_hit) {
+                            // IC hit means the callee ran via execute_program (IR).
                             work[callee_idx] = out;
                             sp = callee_idx + 1;
                         }
@@ -6267,7 +6852,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                             jit_value_kind_name(receiver));
                         Value out = NIL_VAL;
                         if (!jit_invoke_primitive(vm, receiver, op->constant, &work[recv_idx + 1], argc, &out)) {
-                            LOOP_FAIL("invoke-unsupported");
+                            LOOP_FAIL_CALL("invoke-unsupported");
                         }
                         work[recv_idx] = out;
                         sp = recv_idx + 1;
@@ -6324,7 +6909,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         Value arg0 = work[sp - 2];
                         Value arg1 = work[sp - 1];
                         Value out = NIL_VAL;
-                        if (IS_CLOSURE(callee)) {
+                                if (IS_CLOSURE(callee)) {
                             ObjClosure* c = AS_CLOSURE(callee);
                             ObjFunction* fn = c->function;
                             if (fn != NULL &&
@@ -6335,8 +6920,22 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                                 pc++;
                                 break;
                             }
-                            if (!jit_try_safe_loop_closure_call(vm, c, &work[sp - 2], 2, &out, NULL)) {
-                                LOOP_FAIL("qcall2-closure-unsupported");
+                            // Small straight-line callees run in place; otherwise
+                            // fall back to the per-site call cache and finally to
+                            // the whole-program IR interpreter.
+                            if (jit_try_inline_trace_call(trace, pc, callee, &work[sp - 2], 2, &out)) {
+                                work[sp - 3] = out;
+                                sp -= 2;
+                                pc++;
+                                break;
+                            }
+                            int ic_hit = jit_try_trace_call_ic(
+                                vm, function, trace, op, pc, callee, &work[sp - 2], 2, &out);
+                            if (!ic_hit) {
+                                if (!jit_try_safe_loop_closure_call(vm, c, &work[sp - 2], 2, &out, NULL)) {
+                                    LOOP_FAIL_CALL("qcall2-closure-unsupported");
+                                }
+                                jit_update_trace_call_ic(vm, trace, pc, callee, 2);
                             }
                             work[sp - 3] = out;
                             sp -= 2;
@@ -6344,7 +6943,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                             break;
                         }
                         if (!jit_call_primitive(vm, callee, &work[sp - 2], 2, &out)) {
-                            LOOP_FAIL("qcall2-call-miss");
+                            LOOP_FAIL_CALL("qcall2-call-miss");
                         }
                         work[sp - 3] = out;
                         sp -= 2;
@@ -6358,9 +6957,12 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                         if (!IS_NUMBER(v) || !IS_NUMBER(end)) return 0;
                         double next = AS_NUMBER(v) + 1.0;
                         work[op->a] = NUMBER_VAL(next);
+                        int is_trace_backedge = (pc == trace->op_count - 1);
                         if (next <= AS_NUMBER(end)) {
                             pc = (int)op->target;
-                            if (++loop_chunk_iters >= loop_chunk_budget) {
+                            if (is_trace_backedge &&
+                                (trace->mixed_call_heavy || ++loop_chunk_iters >= loop_chunk_budget)) {
+                                trace->call_stall_runs = 0;
                                 return commit_loop_state(
                                     st,
                                     trace,
@@ -6372,7 +6974,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                                     frame_window,
                                     trace->loop_start_offset);
                             }
-                        } else {
+                        } else if (is_trace_backedge) {
                             return commit_loop_state(
                                 st,
                                 trace,
@@ -6383,6 +6985,10 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                                 sp,
                                 frame_window,
                                 trace->after_offset);
+                        } else {
+                            // Inner loop of a nested trace: fall through to the
+                            // rest of the body instead of leaving the trace.
+                            pc++;
                         }
                         break;
                     }

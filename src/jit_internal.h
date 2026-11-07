@@ -84,6 +84,11 @@ typedef struct {
     uint8_t* typed_exit_hot;
     uint8_t value_fast_eligible;
     uint8_t value_fast_disabled;
+    uint8_t mixed_call_heavy;
+    // Runs that had to bail at an in-trace call without finishing an iteration.
+    // A trace that keeps doing that costs more than the plain VM (entry + commit
+    // per iteration), so it is retired once the count gets high enough.
+    uint32_t call_stall_runs;
     uint32_t value_fast_attempts;
     uint32_t value_fast_hits;
     uint8_t runtime_disabled;
@@ -122,6 +127,7 @@ typedef struct {
     uint64_t native_trace_deopts;
     uint32_t native_trace_sandbox_runs;
     uint8_t native_trace_sandbox_disabled;
+    uint8_t native_trace_sandbox_ok;
     uint8_t native_loop_acc_slot;
     uint8_t native_loop_var_slot;
     uint8_t native_loop_end_slot;
@@ -188,9 +194,11 @@ typedef struct ToiJitState {
     uint8_t loop_exec_enabled;
     uint8_t loop_numeric_fast_enabled;
     uint8_t loop_value_fast_enabled;
+    uint32_t hot_loop_threshold;
     uint64_t loop_backedge_events;
     uint64_t loop_compile_attempts;
     uint64_t loop_compiled_count;
+    uint32_t loop_live_count; /* compiled traces still worth probing */
     uint64_t loop_compile_fail_count;
     uint64_t loop_fail_reason_unsupported;
     uint64_t loop_fail_reason_decode;

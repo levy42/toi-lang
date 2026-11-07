@@ -5,8 +5,8 @@ export PYTHON_JIT=1
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 CSV_FILE="$ROOT_DIR/benchmarks/perf_results.csv"
 PYA=""
-if command -v python3.14 >/dev/null 2>&1; then
-  PYA="python3.14"
+if command -v python3.15 >/dev/null 2>&1; then
+  PYA="python3.15"
 elif command -v python3 >/dev/null 2>&1; then
   PYA="python3"
 elif command -v python >/dev/null 2>&1; then
@@ -52,7 +52,14 @@ fi
 metric_sec() {
   file="$1"
   key="$2"
-  awk -v k="$key" '$0 ~ ("^" k " ") && $NF == "sec" { print $(NF-1); exit }' "$file"
+  # Timed lines look like "<key> <seconds> sec" and may carry extra trailing
+  # fields (e.g. "result=..."), so locate the "sec" token by position.
+  awk -v k="$key" '
+    index($0, k " ") == 1 {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "sec") { print $(i - 1); exit }
+      }
+    }' "$file"
 }
 
 toi_memory_bytes() {

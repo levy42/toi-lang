@@ -97,9 +97,14 @@ typedef struct ObjThread {
     int pending_set_local_count;
     int pending_set_local_slots[8];
     int pending_set_local_frames[8];
+    struct Obj* pending_native;
+    int pending_native_arg_count;
+    Value pending_native_args[8];
 } ObjThread;
 
 typedef int (*NativeFn)(struct VM* vm, int arg_count, Value* args);
+
+#define NATIVE_WAIT (-2)
 
 typedef enum {
     NATIVE_FAST_NONE = 0,
@@ -150,7 +155,12 @@ typedef enum {
     TINY_INLINE_LT2 = 14,
     TINY_INLINE_EQ2 = 15,
     TINY_INLINE_RET0_2 = 16,
-    TINY_INLINE_RET1_2 = 17
+    TINY_INLINE_RET1_2 = 17,
+    // Two-argument shims whose body length-checks an argument. `#` on a string is
+    // a field read, so these still collapse to a single add in the caller.
+    TINY_INLINE_LEN_ADD2 = 18,  // return a + #b
+    TINY_INLINE_LEN_ARG0_2 = 19, // return #a
+    TINY_INLINE_LEN_ARG1_2 = 20  // return #b
 } TinyInlineKind;
 
 typedef enum {
@@ -165,6 +175,7 @@ typedef struct {
     ObjString* name;
     uint8_t is_self;
     uint8_t fast_kind;
+    uint8_t can_yield;
 } ObjNative;
 
 typedef struct {
@@ -192,6 +203,8 @@ typedef struct {
     uint8_t exec_tier;
     uint8_t tier1_patched;
     uint32_t hot_count;
+    const char* source_base;  /* Pointer into original source for error display */
+    int source_len;
 } ObjFunction;
 
 typedef struct ObjUpvalue {

@@ -63,6 +63,7 @@ void init_chunk(Chunk* chunk) {
     chunk->call_ic5_native_argc = NULL;
     chunk->call2_ic_closures = NULL;
     chunk->call2_ic_kind = NULL;
+    chunk->jit_loop_indexes = NULL;
     init_value_array(&chunk->constants);
 }
 
@@ -125,6 +126,7 @@ void free_chunk(Chunk* chunk) {
     free(chunk->call_ic5_native_argc);
     free(chunk->call2_ic_closures);
     free(chunk->call2_ic_kind);
+    free(chunk->jit_loop_indexes);
     free_value_array(&chunk->constants);
     init_chunk(chunk);
 }

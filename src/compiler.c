@@ -64,6 +64,36 @@ static void error_at(Token* token, const char* message) {
     }
 
     fprintf(stderr, ": %s\n", message);
+
+    // Show the source line with a caret marker, if we have source context
+    if (token->type != TOKEN_EOF && token->type != TOKEN_ERROR && token->start != NULL) {
+        const char* line_start = token->start;
+        // Scan backward to find start of the line
+        while (line_start > lexer.source_start && line_start[-1] != '\n') {
+            line_start--;
+        }
+        const char* line_end = token->start;
+        // Scan forward to find end of the line
+        while (*line_end != '\0' && *line_end != '\n') {
+            line_end++;
+        }
+        // Print the source line
+        fprintf(stderr, "    %.*s\n", (int)(line_end - line_start), line_start);
+        // Print caret marker under the token
+        int before = (int)(token->start - line_start);
+        int caret_len = token->length > 0 ? token->length : 1;
+        if (caret_len > (int)(line_end - token->start)) {
+            caret_len = (int)(line_end - token->start);
+        }
+        // Build caret string of appropriate length
+        char caret[256];
+        int clen = caret_len < 255 ? caret_len : 255;
+        memset(caret, '~', (size_t)clen);
+        caret[clen] = '\0';
+        fprintf(stderr, "    %*s", before, "");
+        fprintf(stderr, COLOR_RED "%s" COLOR_RESET "\n", caret);
+    }
+
     parser.had_error = 1;
 }
 
@@ -249,6 +279,8 @@ static ObjFunction* end_compiler() {
     ObjFunction* function = current->function;
     function->upvalue_count = current->upvalue_count;
     function->tiny_inline_kind = TINY_INLINE_NONE;
+    function->source_base = lexer.source_start;
+    function->source_len = (int)(lexer.source_start ? strlen(lexer.source_start) : 0);
     if (function->upvalue_count == 0 &&
         !function->is_variadic &&
         function->defaults_count == 0 &&
@@ -262,6 +294,31 @@ static ObjFunction* end_compiler() {
                     function->tiny_inline_kind = TINY_INLINE_RET0_2;
                 } else if (code[1] == 2) {
                     function->tiny_inline_kind = TINY_INLINE_RET1_2;
+                }
+            }
+        }
+        if (function->tiny_inline_kind != TINY_INLINE_NONE) goto tiny_inline_done;
+        // Two-parameter shims that only read an argument's length:
+        //   return a + #b  -> [GET_LOCAL 1, GET_LOCAL 2, LENGTH, <add>, RETURN...]
+        //   return #a/#b   -> [GET_LOCAL n, LENGTH, RETURN...]
+        // Trailing OP_RETURN bytes are stripped: emit_return may append one and the
+        // optimiser folds OP_ADD into OP_IADD/OP_FADD for typed arguments.
+        {
+            uint8_t* code = chunk->code;
+            int n = chunk->count;
+            while (n > 0 && code[n - 1] == OP_RETURN) n--;
+            if (n == 6 &&
+                code[0] == OP_GET_LOCAL && code[1] == 1 &&
+                code[2] == OP_GET_LOCAL && code[3] == 2 &&
+                code[4] == OP_LENGTH &&
+                (code[5] == OP_ADD || code[5] == OP_IADD ||
+                 code[5] == OP_FADD || code[5] == OP_QFADD)) {
+                function->tiny_inline_kind = TINY_INLINE_LEN_ADD2;
+            } else if (n == 3 && code[0] == OP_GET_LOCAL && code[2] == OP_LENGTH) {
+                if (code[1] == 1) {
+                    function->tiny_inline_kind = TINY_INLINE_LEN_ARG0_2;
+                } else if (code[1] == 2) {
+                    function->tiny_inline_kind = TINY_INLINE_LEN_ARG1_2;
                 }
             }
         }
@@ -1604,6 +1661,59 @@ static int find_comprehension_for_until(TokenType end_token, const char** for_st
     for (;;) {
         Token tok = scan_token(&peek);
         switch (tok.type) {
+            case TOKEN_FN:
+                // Skip function literal: fn(params) body.
+                // The body creates a new scope; 'for' inside it should not be
+                // treated as a generator comprehension at the outer level.
+                // 1. Skip fn( params )
+                {
+                    int fn_paren = 1;  // Expect '(' next
+                    for (;;) {
+                        Token t = scan_token(&peek);
+                        if (t.type == TOKEN_LEFT_PAREN) {
+                            fn_paren++;
+                        } else if (t.type == TOKEN_RIGHT_PAREN) {
+                            fn_paren--;
+                            if (fn_paren == 0) break;
+                        } else if (t.type == TOKEN_EOF) {
+                            return 0;
+                        }
+                    }
+                }
+                // 2. Skip function body (indented block or same-line expression)
+                {
+                    int body_depth = 0;
+                    for (;;) {
+                        Token t = scan_token(&peek);
+                        switch (t.type) {
+                            case TOKEN_EOF:
+                                return 0;
+                            case TOKEN_INDENT:
+                                body_depth++;
+                                break;
+                            case TOKEN_DEDENT:
+                                if (body_depth > 0) {
+                                    body_depth--;
+                                    if (body_depth == 0) goto after_fn_body;
+                                } else {
+                                    // DEDENT without matching INDENT means we've
+                                    // left the function's scope entirely
+                                    goto after_fn_body;
+                                }
+                                break;
+                            default:
+                                if (body_depth == 0) {
+                                    // Same-line expression body; first token read.
+                                    // Stop and let the outer loop continue scanning.
+                                    goto after_fn_body;
+                                }
+                                break;
+                        }
+                    }
+                }
+                after_fn_body:
+                // Fall through to outer loop; next iteration calls scan_token.
+                break;
             case TOKEN_LEFT_PAREN: paren++; break;
             case TOKEN_LEFT_BRACKET: bracket++; break;
             case TOKEN_RIGHT_BRACKET: if (bracket > 0) bracket--; break;

@@ -7,7 +7,9 @@ fn bench(name, func)
   start = time.clock()
   result = func()
   elapsed = time.clock() - start
-  print string.format("%s %f sec", name, elapsed)
+  -- The result is printed so interpreter/JIT output can be diffed for
+  -- correctness. Timing alone hides miscompiled (but fast) loops.
+  print string.format("%s %f sec result=%.17g", name, elapsed, result)
   return result
 
 fn bench_math()
@@ -76,8 +78,11 @@ fn bench_list_comprehension()
   return sum
 
 fn bench_calls()
+  -- `return a + #b` (not `return a`): a callee that ignores its work can be
+  -- miscompiled without changing the reported result, so the value here has to
+  -- depend on both arguments for the interpreter/JIT diff to mean anything.
   fn add(a: int, b: str)
-    return a
+    return a + #b
   acc = 0
   for i in 1..6000000
     acc = add(acc, "df")

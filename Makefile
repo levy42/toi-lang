@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -g
+CFLAGS = -Wall -Wextra -std=c99 -O2 -g
 LDFLAGS =
 LDLIBS ?=
 EXTRA_CFLAGS = -D_POSIX_C_SOURCE=200809L
@@ -135,7 +135,54 @@ test: $(TARGET)
 	printf "Timeout: $$timedout\n"; \
 	[ $$failed -eq 0 ] && [ $$timedout -eq 0 ]
 
-.PHONY: all clean release release-perf test docs wasm wasm-release pi stats perf perf-audit peft peft-comp perf-comp benchmark-comp
+.PHONY: all clean release release-perf test test-jit verify docs wasm wasm-release pi stats perf perf-audit peft peft-comp perf-comp benchmark-comp
+
+# Differential JIT check: every test must produce identical stdout with the JIT
+# on (aggressively lowered hot threshold, so small loops get compiled too) and
+# off. Tests that print timings, memory statistics or time-based progress bars
+# are skipped because their output is not deterministic.
+JIT_DIFF_SKIP = test_gc_soak_mmap_io_iter test_json_poll_csv test_package_import_db_perf test_template_glob_table_clone test_cli_framework_walrus
+
+test-jit: $(TARGET)
+	@passed=0; failed=0; skipped=0; \
+	for f in tests/test_*.toi; do \
+		base=$$(basename $$f .toi); \
+		skip=0; \
+		for s in $(JIT_DIFF_SKIP); do \
+			if [ "$$base" = "$$s" ]; then skip=1; fi; \
+		done; \
+		if [ $$skip -eq 1 ]; then \
+			printf "Verifying $$f... SKIP (non-deterministic output)\n"; \
+			skipped=$$((skipped + 1)); \
+			continue; \
+		fi; \
+		printf "Verifying $$f... "; \
+		base_out=$$($(TIMEOUT) 30s ./$(TARGET) "$$f" < /dev/null 2>/dev/null); base_rc=$$?; \
+		if [ $$base_rc -ne 0 ]; then \
+			printf "SKIP (fails without JIT)\n"; \
+			skipped=$$((skipped + 1)); \
+			continue; \
+		fi; \
+		jit_out=$$(TOI_JIT_LOOP_HOT=8 $(TIMEOUT) 30s ./$(TARGET) "$$f" < /dev/null 2>/dev/null); jit_rc=$$?; \
+		if [ $$jit_rc -ne 0 ]; then \
+			printf "FAIL (jit exit %s)\n" "$$jit_rc"; \
+			failed=$$((failed + 1)); \
+		elif [ "$$base_out" != "$$jit_out" ]; then \
+			printf "FAIL (output differs)\n"; \
+			failed=$$((failed + 1)); \
+		else \
+			printf "PASS\n"; \
+			passed=$$((passed + 1)); \
+		fi; \
+	done; \
+	printf "\n=== JIT diff results ===\n"; \
+	printf "Passed: $$passed\n"; \
+	printf "Failed: $$failed\n"; \
+	printf "Skipped: $$skipped\n"; \
+	[ $$failed -eq 0 ]
+
+verify: $(TARGET)
+	@./benchmarks/verify_results.sh
 
 perf: $(TARGET)
 	@for f in tests/peft/*.toi; do \

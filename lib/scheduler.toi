@@ -1,5 +1,6 @@
 time = import time
 coroutine = import coroutine
+selector = import selector
 
 Scheduler = {}
 Scheduler.tasks = {}
@@ -11,17 +12,7 @@ Scheduler.add = fn(f)
 
 Scheduler.run = fn()
   while #Scheduler.tasks > 0 or #Scheduler.waiting > 0
-    now = time.clock()
-
-    still_waiting = {}
-    for item in Scheduler.waiting
-      if item[2] <= now
-        Scheduler.tasks <+ item[1]
-      else
-        still_waiting <+ item
-
-    Scheduler.waiting = still_waiting
-
+    now = time.nanos() / 1000000000
     next_tasks = {}
     for co in Scheduler.tasks
       if coroutine.status(co) != "dead"
@@ -29,11 +20,43 @@ Scheduler.run = fn()
 
         if coroutine.status(co) != "dead"
           if cmd == "sleep"
-            wake = now + arg
-            Scheduler.waiting <+ {co, wake}
+            wake = now + (arg > 0 ? arg : 0)
+            Scheduler.waiting <+ {co = co, command = cmd, resource = wake}
+          elif cmd == "io_read" or cmd == "io_write"
+            Scheduler.waiting <+ {co = co, command = cmd, resource = arg}
           else
             next_tasks <+ co
 
     Scheduler.tasks = next_tasks
+
+    if #Scheduler.waiting > 0
+      now = time.nanos() / 1000000000
+      sel = selector.new()
+      wait_timeout = #Scheduler.tasks > 0 ? 0 : 0.05
+      for item in Scheduler.waiting
+        if item.command == "io_read"
+          selector.add_read(sel, item.resource)
+        elif item.command == "io_write"
+          selector.add_write(sel, item.resource)
+        elif item.command == "sleep"
+          until_wake = item.resource - now
+          if until_wake < wait_timeout
+            wait_timeout = until_wake
+      if wait_timeout < 0
+        wait_timeout = 0
+      ready_read, ready_write = selector.wait(sel, wait_timeout)
+      still_waiting = {}
+      now = time.nanos() / 1000000000
+      for item in Scheduler.waiting
+        is_ready = item.command == "sleep" and item.resource <= now
+        if item.command == "io_read"
+          is_ready = ready_read has item.resource
+        elif item.command == "io_write"
+          is_ready = ready_write has item.resource
+        if is_ready
+          Scheduler.tasks <+ item.co
+        else
+          still_waiting <+ item
+      Scheduler.waiting = still_waiting
 
 return Scheduler

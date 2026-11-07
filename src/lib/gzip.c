@@ -207,7 +207,7 @@ static int gzip_decompress(VM* vm, int arg_count, Value* args) {
         out.data[0] = '\0';
     }
 
-    RETURN_OBJ(take_string(out.data, (int)out.len));
+    RETURN_OBJ(take_string_unhashed(out.data, (int)out.len));
 }
 
 void register_gzip(VM* vm) {

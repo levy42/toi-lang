@@ -53,6 +53,7 @@ assert_eq(iters[3].match, "ccc")
 
 assert_eq(regex.replace("[0-9]+", "a1b22c333", "#"), "a#b#c#")
 assert_eq(regex.replace("[0-9]+", "a1b22c333", "#", 2), "a#b#c333")
+assert_eq(regex.replace("^x", "xax", "#"), "#ax")
 
 for i in 1..2000
   hit = regex.search("a([0-9]+)b", "xa42by")
@@ -72,6 +73,8 @@ assert_eq(parts[4], "d")
 re = regex.compile("a([0-9]+)b")
 assert_true(re.match("a12b"))
 assert_true(not re.match("xa12b"))
+assert_eq(re.replace("a12b a34b", "#"), "# #")
+assert_eq(re.replace("a12b a34b", "#", 1), "# a34b")
 cm = re.search("xxa789bzz")
 assert_true(cm != nil)
 assert_eq(cm.groups[1], "789")

@@ -1499,6 +1499,25 @@ void vm_runtime_error(VM* vm, const char* format, ...) {
     vm_current_thread(vm)->last_error = vm_current_thread(vm)->exception;
 }
 
+// Print one line from source with a caret marker.
+static void print_source_line(const char* source, int source_len, int target_line) {
+    if (source == NULL || source_len <= 0) return;
+    // Find the start of the target line
+    int line = 1;
+    int pos = 0;
+    while (pos < source_len && line < target_line) {
+        if (source[pos] == '\n') line++;
+        pos++;
+    }
+    if (line != target_line || pos >= source_len) return;
+    int line_start = pos;
+    // Find end of line
+    while (pos < source_len && source[pos] != '\n') pos++;
+    int line_len = pos - line_start;
+    if (line_len > 120) line_len = 120;
+    fprintf(stderr, "    %.*s\n", line_len, &source[line_start]);
+}
+
 static void report_exception(VM* vm) {
     if (!vm_current_thread(vm)->has_exception) return;
     Value ex = vm_current_thread(vm)->exception;
@@ -1523,12 +1542,27 @@ static void report_exception(VM* vm) {
     for (int i = vm_current_thread(vm)->frame_count - 1; i >= 0; i--) {
         CallFrame* frame = &vm_current_thread(vm)->frames[i];
         ObjFunction* function = frame->closure->function;
-        size_t instruction = frame->ip - function->chunk.code - 1;
-        fprintf(stderr, "[line %d] in ", function->chunk.lines[instruction]);
+        int ip_offset = (int)(frame->ip - function->chunk.code);
+        int instruction = ip_offset - 1;
+        if (instruction < 0 || instruction >= function->chunk.count) {
+            fprintf(stderr, "[unknown] in ");
+        } else {
+            int line_no = function->chunk.lines[instruction];
+            fprintf(stderr, "[line %d] in ", line_no);
+        }
         if (function->name == NULL) {
             fprintf(stderr, "script\n");
         } else {
             fprintf(stderr, "%s()\n", function->name->chars);
+        }
+        // Show source line if we have source
+        if (instruction >= 0 && instruction < function->chunk.count &&
+            function->source_base && function->source_len > 0) {
+            int line_no = function->chunk.lines[instruction];
+            if (line_no > 0) {
+                fprintf(stderr, "    ");
+                print_source_line(function->source_base, function->source_len, line_no);
+            }
         }
     }
 }
@@ -1855,6 +1889,18 @@ static int try_eval_tiny_inline2(ObjFunction* function, Value arg0, Value arg1, 
         case TINY_INLINE_RET1_2:
             *out = arg1;
             return 1;
+        case TINY_INLINE_LEN_ADD2:
+            if (!IS_NUMBER(arg0) || !IS_STRING(arg1)) return 0;
+            *out = NUMBER_VAL(AS_NUMBER(arg0) + (double)AS_STRING(arg1)->length);
+            return 1;
+        case TINY_INLINE_LEN_ARG0_2:
+            if (!IS_STRING(arg0)) return 0;
+            *out = NUMBER_VAL((double)AS_STRING(arg0)->length);
+            return 1;
+        case TINY_INLINE_LEN_ARG1_2:
+            if (!IS_STRING(arg1)) return 0;
+            *out = NUMBER_VAL((double)AS_STRING(arg1)->length);
+            return 1;
         default:
             return 0;
     }
@@ -1892,8 +1938,62 @@ static int try_execute_tier2_template(VM* vm, ObjClosure* closure, int arg_count
     return 1;
 }
 
+static void clear_pending_native(ObjThread* thread) {
+    thread->pending_native = NULL;
+    thread->pending_native_arg_count = 0;
+}
+
+static int invoke_native_continuable(VM* vm, ObjNative* native_obj, int arg_count, Value* args) {
+    ObjThread* thread = vm_current_thread(vm);
+    int can_suspend = native_obj->can_yield && thread != NULL && thread->caller != NULL;
+    if (can_suspend) {
+        if (arg_count > 8) {
+            vm_runtime_error(vm, "Yieldable native call has too many arguments.");
+            return 0;
+        }
+        thread->pending_native = (struct Obj*)native_obj;
+        thread->pending_native_arg_count = arg_count;
+        for (int i = 0; i < arg_count; i++) thread->pending_native_args[i] = args[i];
+    }
+
+    int result = native_obj->function(vm, arg_count, args);
+    if (result == NATIVE_WAIT) return 1;
+    if (result <= 0) {
+        if (can_suspend) clear_pending_native(thread);
+        return 0;
+    }
+    if (can_suspend) clear_pending_native(thread);
+
+    /* Resuming a coroutine that was suspended inside a yieldable native call
+       retries that syscall before execution continues at the next opcode. */
+    ObjThread* resumed = vm_current_thread(vm);
+    if (resumed != thread && resumed != NULL && resumed->pending_native != NULL) {
+        ObjNative* pending = (ObjNative*)resumed->pending_native;
+        int pending_arg_count = resumed->pending_native_arg_count;
+        int retry_result = pending->function(vm, pending_arg_count, resumed->pending_native_args);
+        if (retry_result == NATIVE_WAIT) return 1;
+        if (retry_result <= 0) return 0;
+        clear_pending_native(resumed);
+    }
+    return 1;
+}
+
+int vm_native_wait(VM* vm, const char* command, Value resource) {
+    ObjThread* thread = vm_current_thread(vm);
+    if (thread == NULL || thread->caller == NULL || thread->pending_native == NULL) return 0;
+    ObjThread* caller = thread->caller;
+    *caller->stack_top = BOOL_VAL(1);
+    caller->stack_top++;
+    *caller->stack_top = OBJ_VAL(copy_string(command, (int)strlen(command)));
+    caller->stack_top++;
+    *caller->stack_top = resource;
+    caller->stack_top++;
+    thread->caller = NULL;
+    vm_set_current_thread(vm, caller);
+    return 1;
+}
+
 static int call_native_direct(VM* vm, ObjNative* native_obj, int arg_count, Value* args, CallFrame** frame, uint8_t** ip) {
-    NativeFn native = native_obj->function;
     (*frame)->ip = *ip;
 
     int fast = try_fast_native_call(vm, native_obj, arg_count, args);
@@ -1905,9 +2005,7 @@ static int call_native_direct(VM* vm, ObjNative* native_obj, int arg_count, Valu
     }
 
     ObjThread* current = vm_current_thread(vm);
-    if (!native(vm, arg_count, args)) {
-        return 0;
-    }
+    if (!invoke_native_continuable(vm, native_obj, arg_count, args)) return 0;
 
     ObjThread* after = vm_current_thread(vm);
     if (after != current) {
@@ -1958,7 +2056,6 @@ int call_value(VM* vm, Value callee, int arg_count, CallFrame** frame, uint8_t**
         ObjThread* thread = vm_current_thread(vm);
         ObjNative* native_obj = AS_NATIVE_OBJ(callee);
         NativeFastKind fast_kind = (NativeFastKind)native_obj->fast_kind;
-        NativeFn native = native_obj->function;
         Value* args = thread->stack_top - arg_count;
         thread->stack_top -= arg_count + 1; // Pop args and callee
 
@@ -2005,7 +2102,7 @@ int call_value(VM* vm, Value callee, int arg_count, CallFrame** frame, uint8_t**
             if (fast_kind != NATIVE_FAST_NONE) vm->call_prof_native_fast_miss_count++;
         }
         ObjThread* current = thread;
-        if (!native(vm, arg_count, args)) {
+        if (!invoke_native_continuable(vm, native_obj, arg_count, args)) {
             if (vm->call_prof_enabled) {
                 uint64_t slow_elapsed = vm_prof_now_ns() - slow_start_ns;
                 vm->call_prof_call_value_native_slow_ns += slow_elapsed;
@@ -4313,7 +4410,6 @@ op_invalid:
                     if (vm->call_prof_enabled) vm->call_prof_call0_native_count++;
                     ObjNative* native_obj = AS_NATIVE_OBJ(callee);
                     NativeFastKind fast_kind = (NativeFastKind)native_obj->fast_kind;
-                    NativeFn native = native_obj->function;
                     Value* args = thread->stack_top; // 0-arg native call
                     thread->stack_top -= 1; // pop callee
 
@@ -4334,7 +4430,7 @@ op_invalid:
                             vm->call_prof_native_fast_miss_count++;
                         }
                         ObjThread* current = thread;
-                        if (!native(vm, 0, args)) {
+                        if (!invoke_native_continuable(vm, native_obj, 0, args)) {
                             goto runtime_error;
                         }
                         ObjThread* after = vm_current_thread(vm);
@@ -5698,6 +5794,7 @@ op_invalid:
         continue;
 runtime_error:
         OP_PROF_FLUSH();
+        frame->ip = ip;  // sync ip before reporting so stack trace shows correct line
         if (handle_exception(vm, &frame, &ip)) {
             continue;
         }

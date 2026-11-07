@@ -58,6 +58,12 @@ Coroutine helpers:
 - `sleep`
 - `status`
 
+Plain HTTP servers can opt into coroutine route handlers with
+`http_server(coroutine_handlers=true)`. A handler can call
+`coroutine.sleep(seconds)` to yield while other connections run. This uses the
+selector-based server path; TLS and worker-thread server modes keep their
+existing execution path.
+
 ## `thread`
 
 OS-thread based concurrency:

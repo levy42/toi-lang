@@ -1,3 +1,6 @@
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#endif
 #include <regex.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +13,7 @@
 typedef struct {
     uint32_t magic;
     regex_t re;
+    int has_start_anchor;
 } CompiledRegex;
 
 #define COMPILED_REGEX_MAGIC 0x52454758u
@@ -359,32 +363,11 @@ static int regex_search(VM* vm, int arg_count, Value* args) {
     RETURN_OBJ(out);
 }
 
-// regex.replace(pattern, text, repl, count?, flags?) -> string
-static int regex_replace(VM* vm, int arg_count, Value* args) {
-    ASSERT_ARGC_GE(3);
-    ASSERT_STRING(0);
-    ASSERT_STRING(1);
-    ASSERT_STRING(2);
-
-    int count = 0;
-    if (arg_count >= 4) {
-        ASSERT_NUMBER(3);
-        count = (int)GET_NUMBER(3);
-        if (count < 0) count = 0;
-    }
-    if (arg_count >= 5 && !IS_STRING(args[4]) && !IS_NIL(args[4])) {
-        vm_runtime_error(vm, "Argument 5 must be a string.");
-        return 0;
-    }
-
-    ObjString* pattern = GET_STRING(0);
-    ObjString* text = GET_STRING(1);
-    ObjString* repl = GET_STRING(2);
-    Value flags_val = (arg_count >= 5) ? args[4] : NIL_VAL;
-
-    regex_t* re = NULL;
-    if (!regex_cache_get(vm, pattern, flags_val, &re)) return 0;
-
+static int regex_replace_with_re(VM* vm, regex_t* re, ObjString* text, ObjString* repl,
+                                 int count, int has_start_anchor) {
+#ifndef REG_STARTEND
+    (void)has_start_anchor;
+#endif
     StrBuf out;
     if (!sb_init(&out, (size_t)text->length + 16)) {
         vm_runtime_error(vm, "regex.replace out of memory.");
@@ -398,11 +381,26 @@ static int regex_replace(VM* vm, int arg_count, Value* args) {
 
     while (pos <= src_len) {
         regmatch_t m;
+#ifdef REG_STARTEND
+        int use_startend = !has_start_anchor;
+        if (use_startend) {
+            m.rm_so = (regoff_t)pos;
+            m.rm_eo = (regoff_t)src_len;
+        }
+        int rc = regexec(re, use_startend ? src : src + pos, 1, &m,
+                         use_startend ? REG_STARTEND : 0);
+#else
         int rc = regexec(re, src + pos, 1, &m, 0);
+#endif
         if (rc != 0 || m.rm_so < 0) break;
 
+#ifdef REG_STARTEND
+        size_t ms = use_startend ? (size_t)m.rm_so : pos + (size_t)m.rm_so;
+        size_t me = use_startend ? (size_t)m.rm_eo : pos + (size_t)m.rm_eo;
+#else
         size_t ms = pos + (size_t)m.rm_so;
         size_t me = pos + (size_t)m.rm_eo;
+#endif
         if (!sb_append(&out, src + pos, ms - pos) ||
             !sb_append(&out, repl->chars, (size_t)repl->length)) {
             sb_free(&out);
@@ -436,6 +434,51 @@ static int regex_replace(VM* vm, int arg_count, Value* args) {
     }
     out.data[out.len] = '\0';
     RETURN_OBJ(take_string(out.data, (int)out.len));
+}
+
+// regex.replace(pattern, text, repl, count?, flags?) -> string
+static int regex_replace(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(3);
+    ASSERT_STRING(0);
+    ASSERT_STRING(1);
+    ASSERT_STRING(2);
+
+    int count = 0;
+    if (arg_count >= 4) {
+        ASSERT_NUMBER(3);
+        count = (int)GET_NUMBER(3);
+        if (count < 0) count = 0;
+    }
+    if (arg_count >= 5 && !IS_STRING(args[4]) && !IS_NIL(args[4])) {
+        vm_runtime_error(vm, "Argument 5 must be a string.");
+        return 0;
+    }
+
+    regex_t* re = NULL;
+    if (!regex_cache_get(vm, GET_STRING(0), (arg_count >= 5) ? args[4] : NIL_VAL, &re)) return 0;
+    ObjString* pattern = GET_STRING(0);
+    int has_start_anchor = memchr(pattern->chars, '^', (size_t)pattern->length) != NULL;
+    return regex_replace_with_re(vm, re, GET_STRING(1), GET_STRING(2), count, has_start_anchor);
+}
+
+// compiled.replace(text, repl, count?) -> string
+static int cregex_replace(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_GE(3);
+    ASSERT_USERDATA(0);
+    ASSERT_STRING(1);
+    ASSERT_STRING(2);
+
+    int count = 0;
+    if (arg_count >= 4) {
+        ASSERT_NUMBER(3);
+        count = (int)GET_NUMBER(3);
+        if (count < 0) count = 0;
+    }
+
+    CompiledRegex* cr = compiled_regex_from_userdata(vm, GET_USERDATA(0));
+    if (cr == NULL) return 0;
+    return regex_replace_with_re(vm, &cr->re, GET_STRING(1), GET_STRING(2), count,
+                                 cr->has_start_anchor);
 }
 
 // regex.split(pattern, text, maxsplit?, flags?) -> table
@@ -560,6 +603,7 @@ static int regex_compile(VM* vm, int arg_count, Value* args) {
         return 0;
     }
     cr->magic = COMPILED_REGEX_MAGIC;
+    cr->has_start_anchor = memchr(pattern->chars, '^', (size_t)pattern->length) != NULL;
     if (!compile_or_error(vm, &cr->re, pattern, flags_val)) {
         free(cr);
         return 0;
@@ -745,6 +789,7 @@ void register_regex(VM* vm) {
         {"match", cregex_match},
         {"search", cregex_search},
         {"finditer", cregex_finditer},
+        {"replace", cregex_replace},
         {NULL, NULL}
     };
 

@@ -420,6 +420,7 @@ fn _new_http_server_app(cls, opts = nil)
   app.worker_threads = actual_opts.worker_threads or 0
   app.worker_select_timeout = actual_opts.worker_select_timeout or 0.05
   app.worker_queue_capacity = actual_opts.worker_queue_capacity or 0
+  app.coroutine_handlers = actual_opts.coroutine_handlers or false
   app.keep_alive = actual_opts.keep_alive
   if app.keep_alive == nil
     app.keep_alive = true

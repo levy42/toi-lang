@@ -285,7 +285,21 @@ static int jit_native_callee_entry_eligible(ObjClosure* callee, int argc) {
 }
 
 static int jit_value_falsey(Value v) {
-    return IS_NIL(v) || (IS_BOOL(v) && !AS_BOOL(v));
+    // Must match the interpreter (vm/ops_control.c is_falsey_local): nil, false,
+    // 0, "" and empty tables are falsey. Machine-code branches depend on this.
+    if (IS_NIL(v)) return 1;
+    if (IS_BOOL(v)) return AS_BOOL(v) == 0;
+    if (IS_NUMBER(v)) return AS_NUMBER(v) == 0;
+    if (IS_STRING(v)) return AS_STRING(v)->length == 0;
+    if (IS_TABLE(v)) {
+        ObjTable* t = AS_TABLE(v);
+        if (t->table.count > 0) return 0;
+        for (int i = 0; i < t->table.array_capacity; i++) {
+            if (!IS_NIL(t->table.array[i])) return 0;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 static int jit_value_to_string_primitive_arm(Value in, Value* out) {
@@ -3684,6 +3698,57 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
     int deopt_branches[256];
     int deopt_branch_count = 0;
 
+    uint8_t is_merge_label[257];
+    memset(is_merge_label, 0, sizeof(is_merge_label));
+    // Merge points (if/else, and/or short-circuits) require both incoming edges to
+    // agree on where each pending value lives. When the trace has any, every pushed
+    // value is also written to its canonical scratch slot, so a merge label can
+    // simply treat the pending entries as scratch refs without emitting fixups.
+    int has_merge_points = 0;
+    for (int _mp = 0; _mp < instr_count; _mp++) {
+        if ((instrs[_mp].op == TOI_JIT_NATIVE_OP_JUMP ||
+             instrs[_mp].op == TOI_JIT_NATIVE_OP_JUMP_IF_FALSE ||
+             instrs[_mp].op == TOI_JIT_NATIVE_OP_JUMP_IF_TRUE) &&
+            (int)instrs[_mp].target != instr_count) {
+            has_merge_points = 1;
+            break;
+        }
+    }
+    if (has_merge_points) {
+        for (int _lt = 0; _lt < instr_count; _lt++) {
+            if ((instrs[_lt].op == TOI_JIT_NATIVE_OP_JUMP ||
+                 instrs[_lt].op == TOI_JIT_NATIVE_OP_JUMP_IF_FALSE ||
+                 instrs[_lt].op == TOI_JIT_NATIVE_OP_JUMP_IF_TRUE) &&
+                (int)instrs[_lt].target < instr_count) {
+                is_merge_label[instrs[_lt].target] = 1;
+            }
+        }
+    }
+#define SPILL_TRACE_VALUE(_sv, _dst)                                                                                     do {                                                                                                                     switch ((_sv)->kind) {                                                                                                   case 0:                                                                                                                  if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)VAL_NUMBER)) goto emit_fail;                                               if (!a64_emit(&buf, a64_str_x_imm(9, 31, (_dst)))) goto emit_fail;                                                    if (!a64_emit(&buf, a64_str_d_imm((_sv)->reg, 31, (uint16_t)((_dst) + 8u)))) goto emit_fail;                          break;                                                                                                           case 1:                                                                                                              case 3:                                                                                                              case 4: {                                                                                                                uint16_t _src = (uint16_t)((uint16_t)(_sv)->slot * 16u);                                                              if (!a64_emit(&buf, a64_ldr_x_imm(2, 31, 240))) goto emit_fail;                                                       if (!a64_emit(&buf, a64_ldr_x_imm(9, 2, _src))) goto emit_fail;                                                       if (!a64_emit(&buf, a64_str_x_imm(9, 31, (_dst)))) goto emit_fail;                                                    if (!a64_emit(&buf, a64_ldr_x_imm(9, 2, (uint16_t)(_src + 8u)))) goto emit_fail;                                      if (!a64_emit(&buf, a64_str_x_imm(9, 31, (uint16_t)((_dst) + 8u)))) goto emit_fail;                                   break;                                                                                                           }                                                                                                                    case 2:                                                                                                                  if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)VAL_OBJ)) goto emit_fail;                                                   if (!a64_emit(&buf, a64_str_x_imm(9, 31, (_dst)))) goto emit_fail;                                                    if (!a64_emit_mov_imm64(&buf, 9, (uint64_t)(uintptr_t)AS_STRING((_sv)->constant))) goto emit_fail;                     if (!a64_emit(&buf, a64_str_x_imm(9, 31, (uint16_t)((_dst) + 8u)))) goto emit_fail;                                   break;                                                                                                           case 5: {                                                                                                                uint64_t _tag = (uint64_t)(_sv)->constant.type;                                                                       uint64_t _pay = 0u;                                                                                                   if (IS_BOOL((_sv)->constant)) _pay = (uint64_t)AS_BOOL((_sv)->constant);                                              else if (IS_OBJ((_sv)->constant)) _pay = (uint64_t)(uintptr_t)AS_OBJ((_sv)->constant);                                else if (IS_NUMBER((_sv)->constant)) {                                                                                    double _cd = AS_NUMBER((_sv)->constant);                                                                              uint64_t _bits = 0u;                                                                                                  memcpy(&_bits, &_cd, sizeof(_bits));                                                                                  _pay = _bits;                                                                                                     }                                                                                                                     if (!a64_emit_mov_imm64(&buf, 9, _tag)) goto emit_fail;                                                               if (!a64_emit(&buf, a64_str_x_imm(9, 31, (_dst)))) goto emit_fail;                                                    if (!a64_emit_mov_imm64(&buf, 9, _pay)) goto emit_fail;                                                               if (!a64_emit(&buf, a64_str_x_imm(9, 31, (uint16_t)((_dst) + 8u)))) goto emit_fail;                                   break;                                                                                                           }                                                                                                                    case 9: {                                                                                                                uint16_t _src = (uint16_t)(256u + (uint16_t)(_sv)->slot * 16u);                                                        if (!a64_emit(&buf, a64_ldr_x_imm(9, 31, _src))) goto emit_fail;                                                      if (!a64_emit(&buf, a64_str_x_imm(9, 31, (_dst)))) goto emit_fail;                                                    if (!a64_emit(&buf, a64_ldr_x_imm(9, 31, (uint16_t)(_src + 8u)))) goto emit_fail;                                     if (!a64_emit(&buf, a64_str_x_imm(9, 31, (uint16_t)((_dst) + 8u)))) goto emit_fail;                                   break;                                                                                                           }                                                                                                                    default:                                                                                                                 goto emit_fail; /* upvalue refs: leave those traces to the IR path */                                         }                                                                                                                } while (0)
+#define WRITE_THROUGH_PENDING()                                                                                      \
+    do {                                                                                                             \
+        if (has_merge_points) {                                                                                      \
+            for (int _wi = 0; _wi < vsp; _wi++) {                                                                    \
+                SPILL_TRACE_VALUE(&tstack[_wi], (uint16_t)(256u + (uint16_t)_wi * 16u));                              \
+            }                                                                                                        \
+        }                                                                                                            \
+    } while (0)
+#define MERGE_TO_SCRATCH()                                                                                           \
+    do {                                                                                                             \
+        if (has_merge_points) {                                                                                      \
+            for (int _mi = 0; _mi < vsp; _mi++) {                                                                    \
+                if (tstack[_mi].kind == 0 && tstack[_mi].is_temp) {                                                   \
+                    a64_free_temp(&temp_used, tstack[_mi].reg);                                                      \
+                    tstack[_mi].is_temp = 0;                                                                         \
+                }                                                                                                    \
+                if (tstack[_mi].kind != 5) {                                                                         \
+                    tstack[_mi].kind = 9;                                                                            \
+                    tstack[_mi].slot = (uint8_t)_mi;                                                                 \
+                }                                                                                                    \
+            }                                                                                                        \
+        }                                                                                                            \
+    } while (0)
+
     uint16_t var_off = (uint16_t)((uint16_t)var_slot * (uint16_t)sizeof(Value) + (uint16_t)offsetof(Value, as.number));
     uint16_t end_off = (uint16_t)((uint16_t)end_slot * (uint16_t)sizeof(Value) + (uint16_t)offsetof(Value, as.number));
     uint16_t need_slots = (uint16_t)(((uint16_t)((var_slot > end_slot) ? var_slot : end_slot)) + 1u);
@@ -3738,9 +3803,18 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
     int b_var_gt_end = buf.count;
     if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.gt exit
 
+    if (debug_direct_core) {
+        for (int _di = 0; _di < instr_count; _di++) {
+            fprintf(stderr, "[dc] %3d op=%2u a=%u b=%u target=%u depth=%d\n",
+                    _di, (unsigned)instrs[_di].op, (unsigned)instrs[_di].a,
+                    (unsigned)instrs[_di].b, (unsigned)instrs[_di].target, entry_depth[_di]);
+        }
+    }
     for (int i = 0; i < instr_count; i++) {
         const ToiJitNativeTraceInstr* in = &instrs[i];
-        insn_labels[i] = buf.count;
+        // Keep the canonical slots in sync for this (fallthrough) edge; the fixup
+        // must sit before the label so a jumping edge skips it.
+        WRITE_THROUGH_PENDING();
         int target_vsp = entry_depth[i];
         if (target_vsp < 0) {
             // Unreachable in CFG; keep current state.
@@ -3754,6 +3828,12 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
             if (vsp >= 256) goto emit_fail;
             tstack[vsp++] = (A64TraceVal){5, 0, 0, 0, NIL_VAL};
         }
+        if (is_merge_label[i]) {
+            // Both edges have their pending values in the canonical slots now; the
+            // merged code can read them from there.
+            MERGE_TO_SCRATCH();
+        }
+        insn_labels[i] = buf.count;
         fail_index = i;
 
         switch (in->op) {
@@ -4066,17 +4146,23 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
                 uint8_t rd = a64_alloc_temp(&temp_used);
                 if (rd == 0) goto emit_fail;
                 if (a.kind == 0 && b.kind == 0) {
+                    // Skip the "true" assignment when the comparison does not hold.
+                    // (EQ -> ne, LT -> ge, GT -> le; ge/le also cover unordered,
+                    // which is correct because lt/gt are false for NaN.)
+                    uint32_t skip_cond = (in->op == TOI_JIT_NATIVE_OP_CMP_EQ) ? 0x1u
+                                       : (in->op == TOI_JIT_NATIVE_OP_CMP_LT) ? 0xAu
+                                                                             : 0xDu;
                     if (!a64_emit(&buf, a64_fsub(rd, rd, rd))) goto emit_fail; // rd = 0.0
                     if (!a64_emit(&buf, a64_fcmp(a.reg, b.reg))) goto emit_fail;
                     int bfalse = buf.count;
                     if (!a64_emit(&buf, 0x54000000u)) goto emit_fail;
                     if (!a64_emit(&buf, 0x1e6e1000u | rd)) goto emit_fail; // rd = 1.0
-                    int bend = buf.count;
-                    if (!a64_emit(&buf, 0x14000000u)) goto emit_fail;
                     int false_label = buf.count;
-                    if (!a64_patch_b_cond(&buf, bfalse, false_label, 0x1u)) goto emit_fail; // b.ne false
-                    int end_label = buf.count;
-                    if (!a64_patch_b(&buf, bend, end_label)) goto emit_fail;
+                    if (!a64_patch_b_cond(&buf, bfalse, false_label, skip_cond)) goto emit_fail;
+                } else if (in->op != TOI_JIT_NATIVE_OP_CMP_EQ) {
+                    // The slot/const and generic Value paths below only implement
+                    // equality; leave ordering comparisons on the IR path.
+                    goto emit_fail;
                 } else if (a.kind == 4 && b.kind == 0 && IS_NUMBER(b.constant)) {
                     if (!a64_emit(&buf, a64_mov_x(0, 2))) goto emit_fail;
                     if (!a64_emit(&buf, a64_ldr_x_imm(1, 31, 224))) goto emit_fail;
@@ -5917,16 +6003,15 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
         int target = (int)jump_patches[i].target_insn;
         int target_pos;
         if (target == 0) target_pos = loop_header;
-        else if (target == instr_count) target_pos = -1; // patched below to exit label
+        // Jumping past the last instruction is a `continue`: it must run the
+        // loop increment (the next-iteration transition), not leave the loop.
+        else if (target == instr_count) target_pos = insn_labels[instr_count];
         else target_pos = insn_labels[target];
-        if (target != instr_count && target_pos < 0) goto emit_fail;
-        jump_patches[i].target_insn = (uint16_t)target;
-        if (target != instr_count) {
-            if (jump_patches[i].is_cond) {
-                if (!a64_patch_b_cond(&buf, jump_patches[i].branch_pos, target_pos, jump_patches[i].cond)) goto emit_fail;
-            } else {
-                if (!a64_patch_b(&buf, jump_patches[i].branch_pos, target_pos)) goto emit_fail;
-            }
+        if (target_pos < 0) goto emit_fail;
+        if (jump_patches[i].is_cond) {
+            if (!a64_patch_b_cond(&buf, jump_patches[i].branch_pos, target_pos, jump_patches[i].cond)) goto emit_fail;
+        } else {
+            if (!a64_patch_b(&buf, jump_patches[i].branch_pos, target_pos)) goto emit_fail;
         }
     }
 
@@ -5959,15 +6044,6 @@ static int toi_jit_arm64_compile_native_trace_direct_core(
     }
     for (int i = 0; i < continue_branch_count; i++) {
         if (!a64_patch_b(&buf, continue_branches[i], continue_label)) goto emit_fail;
-    }
-    for (int i = 0; i < jump_patch_count; i++) {
-        if ((int)jump_patches[i].target_insn == instr_count) {
-            if (jump_patches[i].is_cond) {
-                if (!a64_patch_b_cond(&buf, jump_patches[i].branch_pos, exit_label, jump_patches[i].cond)) goto emit_fail;
-            } else {
-                if (!a64_patch_b(&buf, jump_patches[i].branch_pos, exit_label)) goto emit_fail;
-            }
-        }
     }
 
     size_t code_size = (size_t)buf.count * sizeof(uint32_t);
@@ -6316,8 +6392,15 @@ int toi_jit_arm64_compile_numeric_loop(
     if (!a64_emit(&buf, a64_ldr_d_imm(5, 2, 0))) goto emit_fail;
     if (!a64_emit(&buf, 0x1e6e1006u)) goto emit_fail; // fmov d6, #1.0
 
+    // Entry semantics: the VM enters this helper from the loop backedge, so the
+    // induction variable still holds the value of the last executed iteration.
+    // Advance first and bail out when the range is exhausted: checking the bound
+    // only at the tail would execute one extra iteration.
     int loop_label = buf.count;
     if (!a64_emit(&buf, a64_fadd(4, 4, 6))) goto emit_fail; // var += 1
+    if (!a64_emit(&buf, a64_fcmp(4, 5))) goto emit_fail;    // fcmp d4, d5
+    int b_skip = buf.count;
+    if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.cond (gt -> exit)
 
     A64ValReg vstack[64];
     int vsp = 0;
@@ -6399,10 +6482,12 @@ int toi_jit_arm64_compile_numeric_loop(
         }
     }
 
-    if (!a64_emit(&buf, 0x1e652080u)) goto emit_fail; // fcmp d4, d5
+    if (!a64_emit(&buf, a64_fadd(4, 4, 6))) goto emit_fail; // var += 1
+    if (!a64_emit(&buf, a64_fcmp(4, 5))) goto emit_fail;    // fcmp d4, d5
     int bpos = buf.count;
     if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.cond
-    if (!a64_patch_b_cond(&buf, bpos, loop_label, 0xDu)) goto emit_fail; // le
+    if (!a64_patch_b_cond(&buf, bpos, loop_label + 3, 0xDu)) goto emit_fail; // le body
+    if (!a64_patch_b_cond(&buf, b_skip, buf.count, 0xCu)) goto emit_fail;   // gt exit
 
     if (!a64_emit(&buf, a64_str_d_imm(3, 0, 0))) goto emit_fail;
     if (!a64_emit(&buf, a64_str_d_imm(4, 1, 0))) goto emit_fail;
@@ -6475,8 +6560,17 @@ int toi_jit_arm64_compile_slot_loop(
     if (!a64_emit(&buf, a64_ldr_d_imm(5, 0, end_off))) goto emit_fail; // d5 = end
     if (!a64_emit(&buf, 0x1e6e1006u)) goto emit_fail;                   // d6 = 1.0
 
+    // The body reads induction/accumulator values out of the slot array, so the
+    // array must be the source of truth: store the advanced induction value
+    // before every body execution and re-read it afterwards (the body may have
+    // written it). Bound checks happen before each body, otherwise the helper
+    // runs one extra iteration.
+    if (!a64_emit(&buf, a64_fadd(4, 4, 6))) goto emit_fail;            // var += 1
+    if (!a64_emit(&buf, a64_str_d_imm(4, 0, var_off))) goto emit_fail; // slots[var] = var
+    if (!a64_emit(&buf, a64_fcmp(4, 5))) goto emit_fail;               // fcmp d4, d5
+    int b_skip = buf.count;
+    if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.cond (gt -> exit)
     int loop_label = buf.count;
-    if (!a64_emit(&buf, a64_fadd(4, 4, 6))) goto emit_fail; // var += 1
 
     typedef struct {
         int branch_pos;
@@ -6639,13 +6733,16 @@ int toi_jit_arm64_compile_slot_loop(
         }
     }
 
-    if (!a64_emit(&buf, a64_fcmp(4, 5))) goto emit_fail; // fcmp d4, d5
+    if (!a64_emit(&buf, a64_ldr_d_imm(4, 0, var_off))) goto emit_fail; // reload var
+    if (!a64_emit(&buf, a64_fadd(4, 4, 6))) goto emit_fail;            // var += 1
+    if (!a64_emit(&buf, a64_str_d_imm(4, 0, var_off))) goto emit_fail; // slots[var] = var
+    if (!a64_emit(&buf, a64_fcmp(4, 5))) goto emit_fail;               // fcmp d4, d5
     int bpos = buf.count;
     if (!a64_emit(&buf, 0x54000000u)) goto emit_fail; // b.cond
-    if (!a64_patch_b_cond(&buf, bpos, loop_label, 0xDu)) goto emit_fail; // le
+    if (!a64_patch_b_cond(&buf, bpos, loop_label, 0xDu)) goto emit_fail;   // le body
+    if (!a64_patch_b_cond(&buf, b_skip, buf.count, 0xCu)) goto emit_fail; // gt exit
 
-    if (!a64_emit(&buf, a64_str_d_imm(4, 0, var_off))) goto emit_fail; // write var back
-    if (!a64_emit(&buf, 0xd65f03c0u)) goto emit_fail;                   // ret
+    if (!a64_emit(&buf, 0xd65f03c0u)) goto emit_fail; // ret
 
     size_t code_size = (size_t)buf.count * sizeof(uint32_t);
     long page_size = sysconf(_SC_PAGESIZE);

@@ -220,6 +220,8 @@ ObjFunction* new_function() {
     function->exec_tier = FUNCTION_TIER0_INTERPRET;
     function->tier1_patched = 0;
     function->hot_count = 0;
+    function->source_base = NULL;
+    function->source_len = 0;
     init_chunk(&function->chunk);
     return function;
 }
@@ -230,6 +232,7 @@ ObjNative* new_native(NativeFn function, ObjString* name) {
     native->name = name;
     native->is_self = 0;
     native->fast_kind = NATIVE_FAST_NONE;
+    native->can_yield = 0;
     return native;
 }
 
@@ -288,6 +291,8 @@ ObjThread* new_thread_with_caps(int stack_cap, int frame_cap, int handler_cap) {
     thread->last_error = NIL_VAL;
     thread->context_locals = NULL;
     thread->pending_set_local_count = 0;
+    thread->pending_native = NULL;
+    thread->pending_native_arg_count = 0;
     bytes_allocated += sizeof(Value) * (size_t)stack_cap;
     bytes_allocated += sizeof(CallFrame) * (size_t)frame_cap;
     bytes_allocated += sizeof(ExceptionHandler) * (size_t)handler_cap;
@@ -613,6 +618,12 @@ void mark_object(struct Obj* object) {
         }
         if (thread->context_locals != NULL) {
             mark_object((struct Obj*)thread->context_locals);
+        }
+        if (thread->pending_native != NULL) {
+            mark_object(thread->pending_native);
+            for (int i = 0; i < thread->pending_native_arg_count; i++) {
+                mark_value(thread->pending_native_args[i]);
+            }
         }
         for (int i = 0; i < thread->frame_count; i++) {
             mark_object((struct Obj*)thread->frames[i].closure);

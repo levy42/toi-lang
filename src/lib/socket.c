@@ -25,11 +25,33 @@
 typedef struct {
     int fd;
     int timeout_ms; // -1 = blocking, 0 = non-blocking, >0 = timeout in ms
+    int coroutine_nonblocking;
+    int saved_flags;
+    int connect_pending;
 #ifdef TOI_HAVE_TLS
     SSL_CTX* tls_ctx;
     SSL* tls;
 #endif
 } SocketData;
+
+static int socket_prepare_coroutine_io(VM* vm, SocketData* sock) {
+    ObjThread* thread = vm_current_thread(vm);
+    if (thread == NULL || thread->caller == NULL || sock->timeout_ms > 0) return 0;
+    if (!sock->coroutine_nonblocking) {
+        int flags = fcntl(sock->fd, F_GETFL, 0);
+        if (flags < 0 || fcntl(sock->fd, F_SETFL, flags | O_NONBLOCK) < 0) return 0;
+        sock->saved_flags = flags;
+        sock->coroutine_nonblocking = 1;
+    }
+    return 1;
+}
+
+static void socket_finish_coroutine_io(SocketData* sock) {
+    if (sock->coroutine_nonblocking) {
+        fcntl(sock->fd, F_SETFL, sock->saved_flags);
+        sock->coroutine_nonblocking = 0;
+    }
+}
 
 #ifdef TOI_HAVE_TLS
 static int tls_global_initialized = 0;
@@ -127,6 +149,9 @@ static int socket_tcp(VM* vm, int arg_count, Value* args) {
     }
     data->fd = fd;
     data->timeout_ms = -1; // blocking by default
+    data->coroutine_nonblocking = 0;
+    data->saved_flags = 0;
+    data->connect_pending = 0;
 #ifdef TOI_HAVE_TLS
     data->tls_ctx = NULL;
     data->tls = NULL;
@@ -157,6 +182,9 @@ static int socket_udp(VM* vm, int arg_count, Value* args) {
     }
     data->fd = fd;
     data->timeout_ms = -1;
+    data->coroutine_nonblocking = 0;
+    data->saved_flags = 0;
+    data->connect_pending = 0;
 #ifdef TOI_HAVE_TLS
     data->tls_ctx = NULL;
     data->tls = NULL;
@@ -201,12 +229,40 @@ static int sock_connect(VM* vm, int arg_count, Value* args) {
         memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
     }
 
-    if (connect(sock->fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    int coroutine_io = socket_prepare_coroutine_io(vm, sock);
+    if (sock->connect_pending) {
+        int so_error = 0;
+        socklen_t so_error_len = sizeof(so_error);
+        if (getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len) == 0 && so_error == 0) {
+            sock->connect_pending = 0;
+            socket_finish_coroutine_io(sock);
+            RETURN_TRUE;
+        }
+        if (so_error == EINPROGRESS || so_error == EALREADY || so_error == EWOULDBLOCK) {
+            if (vm_native_wait(vm, "io_write", args[0])) return NATIVE_WAIT;
+        }
+        sock->connect_pending = 0;
+        socket_finish_coroutine_io(sock);
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
+        const char* message = strerror(so_error ? so_error : errno);
+        push(vm, OBJ_VAL(copy_string(message, (int)strlen(message))));
         return 2;
     }
 
+    if (connect(sock->fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        int err = errno;
+        if (coroutine_io && (err == EINPROGRESS || err == EALREADY || err == EWOULDBLOCK)) {
+            sock->connect_pending = 1;
+            if (vm_native_wait(vm, "io_write", args[0])) return NATIVE_WAIT;
+        }
+        socket_finish_coroutine_io(sock);
+        push(vm, NIL_VAL);
+        const char* message = strerror(err);
+        push(vm, OBJ_VAL(copy_string(message, (int)strlen(message))));
+        return 2;
+    }
+
+    socket_finish_coroutine_io(sock);
     RETURN_TRUE;
 }
 
@@ -296,13 +352,17 @@ static int sock_accept(VM* vm, int arg_count, Value* args) {
     struct sockaddr_in client_addr;
     socklen_t addr_len = sizeof(client_addr);
 
+    socket_prepare_coroutine_io(vm, sock);
     int client_fd = accept(sock->fd, (struct sockaddr*)&client_addr, &addr_len);
     if (client_fd < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (vm_native_wait(vm, "io_read", args[0])) return NATIVE_WAIT;
+            socket_finish_coroutine_io(sock);
             push(vm, NIL_VAL);
             push(vm, OBJ_VAL(copy_string("timeout", 7)));
             return 2;
         }
+        socket_finish_coroutine_io(sock);
         push(vm, NIL_VAL);
         push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
         return 2;
@@ -311,18 +371,23 @@ static int sock_accept(VM* vm, int arg_count, Value* args) {
     SocketData* client_data = (SocketData*)malloc(sizeof(SocketData));
     if (client_data == NULL) {
         close(client_fd);
+        socket_finish_coroutine_io(sock);
         push(vm, NIL_VAL);
         push(vm, OBJ_VAL(copy_string("out of memory", 13)));
         return 2;
     }
     client_data->fd = client_fd;
     client_data->timeout_ms = -1;
+    client_data->coroutine_nonblocking = 0;
+    client_data->saved_flags = 0;
+    client_data->connect_pending = 0;
 #ifdef TOI_HAVE_TLS
     client_data->tls_ctx = NULL;
     client_data->tls = NULL;
 #endif
 
     ObjUserdata* udata = new_userdata_with_finalizer(client_data, socket_userdata_finalizer);
+    socket_finish_coroutine_io(sock);
     set_socket_metatable(vm, udata);
 
     // Return socket and client IP
@@ -347,29 +412,40 @@ static int sock_send(VM* vm, int arg_count, Value* args) {
     }
 
     ObjString* data = GET_STRING(1);
+    int coroutine_io = socket_prepare_coroutine_io(vm, sock);
 #ifdef TOI_HAVE_TLS
     if (sock->tls != NULL) {
         int sent = SSL_write(sock->tls, data->chars, data->length);
         if (sent <= 0) {
             int err = SSL_get_error(sock->tls, sent);
             if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                if (coroutine_io && vm_native_wait(vm, err == SSL_ERROR_WANT_READ ? "io_read" : "io_write", args[0])) return NATIVE_WAIT;
+                socket_finish_coroutine_io(sock);
                 push(vm, NIL_VAL);
                 push(vm, OBJ_VAL(copy_string("timeout", 7)));
                 return 2;
             }
+            socket_finish_coroutine_io(sock);
             return push_tls_error(vm, "tls write failed");
         }
+        socket_finish_coroutine_io(sock);
         RETURN_NUMBER((double)sent);
     }
 #endif
     ssize_t sent = send(sock->fd, data->chars, data->length, 0);
 
     if (sent < 0) {
+        int err = errno;
+        if (coroutine_io && (err == EAGAIN || err == EWOULDBLOCK || err == EINTR) &&
+            vm_native_wait(vm, "io_write", args[0])) return NATIVE_WAIT;
+        socket_finish_coroutine_io(sock);
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
+        const char* message = strerror(err);
+        push(vm, OBJ_VAL(copy_string(message, (int)strlen(message))));
         return 2;
     }
 
+    socket_finish_coroutine_io(sock);
     RETURN_NUMBER((double)sent);
 }
 
@@ -392,43 +468,57 @@ static int sock_recv(VM* vm, int arg_count, Value* args) {
     }
 
     char* buffer = (char*)malloc(size + 1);
+    int coroutine_io = socket_prepare_coroutine_io(vm, sock);
 #ifdef TOI_HAVE_TLS
     if (sock->tls != NULL) {
         int received = SSL_read(sock->tls, buffer, size);
         if (received <= 0) {
             free(buffer);
             if (received == 0) {
+                socket_finish_coroutine_io(sock);
                 push(vm, NIL_VAL);
                 push(vm, OBJ_VAL(copy_string("closed", 6)));
                 return 2;
             }
             int err = SSL_get_error(sock->tls, received);
             if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                free(buffer);
+                if (coroutine_io && vm_native_wait(vm, err == SSL_ERROR_WANT_READ ? "io_read" : "io_write", args[0])) return NATIVE_WAIT;
+                socket_finish_coroutine_io(sock);
                 push(vm, NIL_VAL);
                 push(vm, OBJ_VAL(copy_string("timeout", 7)));
                 return 2;
             }
+            socket_finish_coroutine_io(sock);
             return push_tls_error(vm, "tls read failed");
         }
         buffer[received] = '\0';
         push(vm, OBJ_VAL(copy_string(buffer, received)));
         free(buffer);
+        socket_finish_coroutine_io(sock);
         return 1;
     }
 #endif
     ssize_t received = recv(sock->fd, buffer, size, 0);
 
     if (received < 0) {
+        int err = errno;
         free(buffer);
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (coroutine_io && (err == EAGAIN || err == EWOULDBLOCK || err == EINTR) &&
+            vm_native_wait(vm, "io_read", args[0])) return NATIVE_WAIT;
+        socket_finish_coroutine_io(sock);
+        if (err == EAGAIN || err == EWOULDBLOCK) {
             push(vm, NIL_VAL);
             push(vm, OBJ_VAL(copy_string("timeout", 7)));
             return 2;
         }
         push(vm, NIL_VAL);
-        push(vm, OBJ_VAL(copy_string(strerror(errno), strlen(strerror(errno)))));
+        const char* message = strerror(err);
+        push(vm, OBJ_VAL(copy_string(message, (int)strlen(message))));
         return 2;
     }
+
+    socket_finish_coroutine_io(sock);
 
     if (received == 0) {
         free(buffer);
@@ -878,7 +968,12 @@ void register_socket(VM* vm) {
     for (int i = 0; socket_methods[i].name != NULL; i++) {
         ObjString* name_str = copy_string(socket_methods[i].name, (int)strlen(socket_methods[i].name));
         push(vm, OBJ_VAL(name_str));
-        push(vm, OBJ_VAL(new_native(socket_methods[i].function, name_str)));
+        ObjNative* method = new_native(socket_methods[i].function, name_str);
+        method->can_yield = socket_methods[i].function == sock_connect ||
+                            socket_methods[i].function == sock_accept ||
+                            socket_methods[i].function == sock_send ||
+                            socket_methods[i].function == sock_recv;
+        push(vm, OBJ_VAL(method));
         table_set(&socket_mt->table, AS_STRING(peek(vm, 1)), peek(vm, 0));
         pop(vm);
         pop(vm);

@@ -355,54 +355,6 @@ static int jit_execute_compiled_program_with_args(
     return execute_program(vm, closure, argc, program, args, out);
 }
 
-static int jit_seed_trace_call_ic(
-    ObjFunction* function,
-    const JitOp* op,
-    int argc,
-    ObjClosure** out_closure,
-    JitProgram** out_program) {
-    if (out_closure == NULL || out_program == NULL) return 0;
-    *out_closure = NULL;
-    *out_program = NULL;
-    if (function == NULL || op == NULL) return 0;
-    Chunk* chunk = &function->chunk;
-    int off = (int)op->byte_offset;
-    if (off < 0 || off >= chunk->capacity) return 0;
-    if (chunk->call_ic_closures == NULL || chunk->call_ic_argc == NULL) return 0;
-    ObjClosure* c = chunk->call_ic_closures[off];
-    if (c != NULL && (int)chunk->call_ic_argc[off] == argc) {
-        *out_closure = c;
-        return 1;
-    }
-    if (chunk->call_ic2_closures == NULL || chunk->call_ic2_argc == NULL) return 0;
-    c = chunk->call_ic2_closures[off];
-    if (c != NULL && (int)chunk->call_ic2_argc[off] == argc) {
-        *out_closure = c;
-        return 1;
-    }
-    if (chunk->call_ic3_closures != NULL && chunk->call_ic3_argc != NULL) {
-        c = chunk->call_ic3_closures[off];
-        if (c != NULL && (int)chunk->call_ic3_argc[off] == argc) {
-            *out_closure = c;
-            return 1;
-        }
-    }
-    if (chunk->call_ic4_closures != NULL && chunk->call_ic4_argc != NULL) {
-        c = chunk->call_ic4_closures[off];
-        if (c != NULL && (int)chunk->call_ic4_argc[off] == argc) {
-            *out_closure = c;
-            return 1;
-        }
-    }
-    if (chunk->call_ic5_closures != NULL && chunk->call_ic5_argc != NULL) {
-        c = chunk->call_ic5_closures[off];
-        if (c != NULL && (int)chunk->call_ic5_argc[off] == argc) {
-            *out_closure = c;
-            return 1;
-        }
-    }
-    return 0;
-}
 
 static int jit_program_loop_call_safe(const JitProgram* program) {
     if (program == NULL || program->ops == NULL || program->op_count <= 0) return 0;
@@ -458,6 +410,7 @@ static int jit_program_loop_call_safe(const JitProgram* program) {
             case JOP_JUMP_IF_FALSE:
             case JOP_JUMP_IF_TRUE:
             case JOP_ADJUST_STACK:
+            case JOP_LENGTH:
             case JOP_RETURN:
             case JOP_TINY_INLINE:
                 break;
@@ -579,6 +532,7 @@ int jit_try_trace_call_ic(
     Value* args,
     int argc,
     Value* out) {
+    (void)function;
     if (vm == NULL || trace == NULL || op == NULL || out == NULL) return 0;
     if (pc < 0 || pc >= trace->op_count) return 0;
     if (trace->call_ic_closures == NULL || trace->call_ic_programs == NULL ||
@@ -598,14 +552,12 @@ int jit_try_trace_call_ic(
     JitProgram* program4 = trace->call_ic4_programs[pc];
     ObjClosure* closure5 = trace->call_ic5_closures[pc];
     JitProgram* program5 = trace->call_ic5_programs[pc];
+    // No speculative seeding here: an empty lane set means "this site has not been
+    // called through the trace yet". Seeding from the interpreter's per-opcode
+    // cache made the first real call look like a polymorphic miss (the seeded
+    // callee differs), which retired perfectly monomorphic traces.
     if (closure1 == NULL && closure2 == NULL && closure3 == NULL && closure4 == NULL && closure5 == NULL) {
-        ObjClosure* seed_closure = NULL;
-        JitProgram* seed_program = NULL;
-        if (!jit_seed_trace_call_ic(function, op, argc, &seed_closure, &seed_program)) return 0;
-        trace->call_ic_closures[pc] = seed_closure;
-        trace->call_ic_programs[pc] = seed_program;
-        closure1 = seed_closure;
-        program1 = seed_program;
+        return 0;
     }
     if (!IS_CLOSURE(callee)) return 0;
     ObjClosure* callee_closure = AS_CLOSURE(callee);
@@ -633,6 +585,32 @@ int jit_try_trace_call_ic(
         closure = closure5;
         program = program5;
     } else {
+        // A callee that is not in any IC lane means this call site has become
+        // polymorphic. Mark the trace so the executors hand the loop back to the
+        // VM at the next iteration boundary instead of mixing up call targets.
+        if (closure1 != NULL || closure2 != NULL || closure3 != NULL || closure4 != NULL || closure5 != NULL) {
+            trace->mixed_call_heavy = 1;
+        }
+        return 0;
+    }
+    if (program != NULL && program->function != closure->function) {
+        // Pairing got out of sync; drop the lane instead of running the wrong code.
+        if (slot == 1) {
+            trace->call_ic_closures[pc] = NULL;
+            trace->call_ic_programs[pc] = NULL;
+        } else if (slot == 2) {
+            trace->call_ic2_closures[pc] = NULL;
+            trace->call_ic2_programs[pc] = NULL;
+        } else if (slot == 3) {
+            trace->call_ic3_closures[pc] = NULL;
+            trace->call_ic3_programs[pc] = NULL;
+        } else if (slot == 4) {
+            trace->call_ic4_closures[pc] = NULL;
+            trace->call_ic4_programs[pc] = NULL;
+        } else {
+            trace->call_ic5_closures[pc] = NULL;
+            trace->call_ic5_programs[pc] = NULL;
+        }
         return 0;
     }
     if (program == NULL) {

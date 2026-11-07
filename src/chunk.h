@@ -202,6 +202,7 @@ typedef struct {
     uint8_t* call_ic5_native_argc;
     struct ObjClosure** call2_ic_closures;
     uint8_t* call2_ic_kind;
+    uint32_t* jit_loop_indexes; // keyed by opcode byte offset: 0 = untracked, else JIT loop index + 1
     ValueArray constants;
 } Chunk;
 

@@ -5,6 +5,7 @@ http = import http
 coroutine = import coroutine
 os = import os
 selector = import lib.selector
+time = import time
 
 thread = nil
 try
@@ -21,9 +22,12 @@ fn safe_str(v)
   except e
     return "<unprintable>"
 
-fn set_nonblocking(sock)
+fn set_socket_timeout(sock)
   -- Idle read timeout for speculative/browser keep-alive sockets.
   sock.settimeout(sock, 10)
+
+fn set_nonblocking(sock)
+  sock.settimeout(sock, 0)
 
 fn ensure_tls_on_client(server, client)
   if server == nil or not server.ssl
@@ -137,7 +141,7 @@ fn safe_accept(server_sock)
   except e
     return nil, nil, safe_str(e)
 
-fn accept_pending_connections(server, on_client)
+fn accept_pending_connections(server, on_client, on_client_state)
   accepted = 0
   while true
     client, ip, accept_err = safe_accept(server.socket)
@@ -152,20 +156,17 @@ fn accept_pending_connections(server, on_client)
     accepted = accepted + 1
     if DEBUG_ERRORS
       print("[http_server] accepted connection from " + safe_str(ip))
-    on_client(client)
+    on_client(on_client_state, client)
 
 fn upsert_response_header(raw_response, key, value)
   if not istype(raw_response, "string")
     return raw_response
 
-  head_i = raw_response.find("\r\n\r\n")
-  if head_i == nil
+  head_start, head_end = raw_response.find("\r\n\r\n")
+  if head_start == nil
     return raw_response
 
-  -- string.find returns the start index in this runtime, so compute the
-  -- separator end explicitly instead of relying on a second return value.
-  head_end = head_i + 3
-  head = raw_response.sub(1, head_i - 1)
+  head = raw_response.sub(1, head_start - 1)
   body = raw_response.sub(head_end + 1)
   lines = head.split("\r\n")
   if #lines == 0
@@ -183,7 +184,7 @@ fn upsert_response_header(raw_response, key, value)
         name = line.sub(1, colon_i - 1).trim().lower()
         if name == target
           if not replaced
-            out <+ key + ": " + value
+            out <+ (key + ": " + value)
             replaced = true
         else
           out <+ line
@@ -191,7 +192,7 @@ fn upsert_response_header(raw_response, key, value)
         out <+ line
 
   if not replaced
-    out <+ key + ": " + value
+    out <+ (key + ": " + value)
 
   return table.concat(out, "\r\n") + "\r\n\r\n" + body
 
@@ -248,8 +249,24 @@ fn should_force_close(server)
   return server.force_close
 
 fn keep_alive_request(req)
-  -- Temporary safety switch: disable keep-alive until persistent-connection
-  -- edge cases are fully fixed.
+  version = req.version or ""
+  headers = req.headers or {}
+  connection = headers.connection or ""
+  has_close = false
+  has_keep_alive = false
+  for option in connection.split(",")
+    option = option.trim().lower()
+    if option == "close"
+      has_close = true
+    elif option == "keep-alive"
+      has_keep_alive = true
+
+  if has_close
+    return false
+  if version == "HTTP/1.1"
+    return true
+  if version == "HTTP/1.0"
+    return has_keep_alive
   return false
 
 fn recv_next_chunk(server, client)
@@ -400,7 +417,11 @@ fn handle_connection(server, client)
 fn start_connection(server, client)
   co = coroutine.create(handle_connection)
   conn = {sock = client, coro = co, mode = "read"}
-  ok, mode = coroutine.resume(co, server, client)
+  ok, yielded, mode = coroutine.resume(co, server, client)
+  if mode == nil
+    mode = yielded
+  if not ok and DEBUG_ERRORS
+    print("[http_server] initial connection coroutine error: " + safe_str(mode))
   update_connection_state(server, conn, mode)
   return conn
 
@@ -423,7 +444,283 @@ fn run_maintenance(server, last_gc_req)
 
   return last_gc_req
 
-fn run_coroutine_loop(server)
+fn accept_coroutine_client(state, client)
+  server = state.server
+  connections = state.connections
+  tls_err = ensure_tls_on_client(server, client)
+  if tls_err != true
+    try
+      client.close(client)
+    except e
+      nil
+    return nil
+  set_socket_timeout(client)
+  conn = start_connection(server, client)
+  if conn.mode != "dead"
+    connections <+ conn
+    return nil
+  close_connection(conn)
+  return nil
+
+fn dispatch_worker_client(state, client)
+  server = state.server
+  queues = state.queues
+  worker_state = state.worker_state
+  worker_count = state.worker_count
+  tls_err = ensure_tls_on_client(server, client)
+  if tls_err != true
+    try
+      client.close(client)
+    except e
+      nil
+    return nil
+  set_socket_timeout(client)
+  target = queues[worker_state.next_worker]
+  worker_state.next_worker = worker_state.next_worker + 1
+  if worker_state.next_worker > worker_count
+    worker_state.next_worker = 1
+  ok = target.send(target, client)
+  if not ok
+    client.close(client)
+  return nil
+
+fn poll_close_connection(server, conn)
+  if conn.sock
+    try
+      conn.sock.close(conn.sock)
+    except e
+      nil
+    conn.sock = nil
+  if conn.counted_active
+    if server.active_connections > 0
+      server.active_connections = server.active_connections - 1
+    conn.counted_active = false
+  conn.mode = "dead"
+
+fn accept_poll_client(state, client)
+  server = state.server
+  set_nonblocking(client)
+  server.active_connections = server.active_connections + 1
+  state.connections <+ {
+    sock = client,
+    buffer = "",
+    response = nil,
+    write_offset = 0,
+    keep_alive = false,
+    mode = "read",
+    counted_active = true
+  }
+
+fn poll_error_response(conn, status, body)
+  conn.response = decorate_connection_headers(http.response(status, nil, body), false)
+  conn.write_offset = 0
+  conn.keep_alive = false
+  conn.mode = "write"
+
+fn poll_handler_error(server, conn, err)
+  server.request_count = server.request_count + 1
+  if DEBUG_ERRORS
+    print("[http_server] request handler error: " + safe_str(err))
+  conn.handler = nil
+  conn.response = decorate_connection_headers(http.response(500, nil, "Internal Server Error"), false)
+  conn.write_offset = 0
+  conn.keep_alive = false
+  conn.mode = "write"
+
+fn resume_poll_handler(server, conn, req = nil)
+  ok = nil
+  result = nil
+  delay = nil
+  if req
+    ok, result, delay = coroutine.resume(conn.handler, req)
+  else
+    ok, result, delay = coroutine.resume(conn.handler)
+  if not ok
+    poll_handler_error(server, conn, result)
+    return nil
+
+  if coroutine.status(conn.handler) != "dead"
+    if result == "sleep" and istype(delay, "number")
+      if delay < 0
+        delay = 0
+      conn.wake_at = time.nanos() / 1000000000 + delay
+      conn.mode = "sleep"
+      return nil
+    if (result == "io_read" or result == "io_write") and delay
+      conn.wait_sock = delay
+      conn.mode = result
+      return nil
+    poll_handler_error(server, conn, "handler yielded unsupported command " + safe_str(result))
+    return nil
+
+  conn.handler = nil
+  conn.wake_at = nil
+  conn.wait_sock = nil
+  server.request_count = server.request_count + 1
+  normalized = server.normalize_response(result)
+  if is_stream_response(normalized)
+    -- Stream iteration and its chunk writes remain synchronous.
+    if send_chunked_stream(server, conn.sock, normalized, conn.keep_alive)
+      conn.mode = conn.keep_alive ? "read" : "dead"
+    else
+      conn.mode = "dead"
+  else
+    conn.response = decorate_connection_headers(normalized, conn.keep_alive)
+    conn.write_offset = 0
+    conn.mode = "write"
+
+fn prepare_poll_response(server, conn, req)
+  keep_alive = keep_alive_request(req)
+  if not server.keep_alive or server.stop_requested or should_force_close(server)
+    keep_alive = false
+  conn.keep_alive = keep_alive
+
+  if server.coroutine_handlers
+    conn.handler = coroutine.create(server.handler)
+    resume_poll_handler(server, conn, req)
+    return nil
+
+  phase = "handler"
+  try
+    res = server.handler(req)
+    server.request_count = server.request_count + 1
+    phase = "normalize"
+    normalized = server.normalize_response(res)
+    if is_stream_response(normalized)
+      if send_chunked_stream(server, conn.sock, normalized, keep_alive)
+        conn.mode = keep_alive ? "read" : "dead"
+      else
+        conn.mode = "dead"
+    else
+      conn.response = decorate_connection_headers(normalized, keep_alive)
+      conn.write_offset = 0
+      conn.mode = "write"
+  except e
+    if DEBUG_ERRORS
+      print("[http_server] request error (" + phase + "): " + safe_str(e))
+    poll_handler_error(server, conn, e)
+
+fn advance_poll_connection(server, conn)
+  if conn.mode == "read"
+    data, err = conn.sock.recv(conn.sock, 4096)
+    if data and #data > 0
+      conn.buffer = conn.buffer + data
+      parsed = http.parse(conn.buffer)
+      if parsed == false
+        server.request_count = server.request_count + 1
+        poll_error_response(conn, 400, "Bad Request")
+      elif parsed != nil
+        consumed = parsed.consumed
+        if not istype(consumed, "number") or consumed < 0
+          consumed = #conn.buffer
+        if consumed < #conn.buffer
+          conn.buffer = conn.buffer.sub(consumed + 1)
+        else
+          conn.buffer = ""
+        prepare_poll_response(server, conn, parsed)
+      return nil
+    if err and (is_timeout_error(err) or is_wouldblock_error(err))
+      return nil
+    conn.mode = "dead"
+    return nil
+
+  if conn.mode == "write"
+    if not istype(conn.response, "string")
+      conn.mode = "dead"
+      return nil
+    chunk = conn.response.sub(conn.write_offset + 1)
+    sent, err = conn.sock.send(conn.sock, chunk)
+    if istype(sent, "number") and sent > 0
+      conn.write_offset = conn.write_offset + sent
+      if conn.write_offset >= #conn.response
+        conn.response = nil
+        conn.write_offset = 0
+        conn.mode = conn.keep_alive ? "read" : "dead"
+      return nil
+    if err and (is_timeout_error(err) or is_wouldblock_error(err))
+      return nil
+    conn.mode = "dead"
+
+fn compact_poll_connections(server, connections)
+  active = {}
+  for conn in connections
+    if conn.mode == "dead"
+      poll_close_connection(server, conn)
+    else
+      active <+ conn
+  return active
+
+fn run_poll_loop(server)
+  connections = {}
+  last_gc_req = 0
+  listener_closed = false
+  server.socket.settimeout(server.socket, 0)
+  while true
+    accepting = not server.stop_requested
+    if server.stop_requested and not listener_closed
+      close_server_socket(server)
+      listener_closed = true
+    if should_force_close(server)
+      for conn in connections
+        poll_close_connection(server, conn)
+      connections = {}
+      break
+    if not accepting and #connections == 0
+      break
+
+    now = time.nanos() / 1000000000
+    next_wake = nil
+    for conn in connections
+      if conn.mode == "sleep"
+        if conn.wake_at <= now
+          resume_poll_handler(server, conn)
+        elif next_wake == nil or conn.wake_at < next_wake
+          next_wake = conn.wake_at
+
+    sel = selector.new()
+    if accepting
+      selector.add_read(sel, server.socket)
+    for conn in connections
+      if conn.mode == "read"
+        selector.add_read(sel, conn.sock)
+      elif conn.mode == "write"
+        selector.add_write(sel, conn.sock)
+      elif conn.mode == "io_read"
+        selector.add_read(sel, conn.wait_sock)
+      elif conn.mode == "io_write"
+        selector.add_write(sel, conn.wait_sock)
+    wait_timeout = server.worker_select_timeout or 0.05
+    if next_wake
+      until_wake = next_wake - now
+      if until_wake < wait_timeout
+        wait_timeout = until_wake
+    if wait_timeout < 0
+      wait_timeout = 0
+    ready, wait_err = safe_selector_wait(sel, wait_timeout)
+    if ready == nil
+      if DEBUG_ERRORS
+        print("[http_server] selector wait failed: " + safe_str(wait_err))
+      continue
+    if accepting and ready.read has server.socket
+      accept_pending_connections(server, accept_poll_client, {server = server, connections = connections})
+    for conn in connections
+      if conn.mode == "read" and ready.read has conn.sock
+        advance_poll_connection(server, conn)
+      elif conn.mode == "write" and ready.write has conn.sock
+        advance_poll_connection(server, conn)
+      elif conn.mode == "io_read" and ready.read has conn.wait_sock
+        resume_poll_handler(server, conn)
+      elif conn.mode == "io_write" and ready.write has conn.wait_sock
+        resume_poll_handler(server, conn)
+    connections = compact_poll_connections(server, connections)
+    last_gc_req = run_maintenance(server, last_gc_req)
+    if thread
+      thread.yield()
+  for conn in connections
+    poll_close_connection(server, conn)
+  return "stopped"
+
+fn run_blocking_coroutine_loop(server)
   connections = {}
   last_gc_req = 0
 
@@ -444,26 +741,14 @@ fn run_coroutine_loop(server)
 
     accepted = 0
     if accepting
-      accepted = accept_pending_connections(server, fn(client)
-        tls_err = ensure_tls_on_client(server, client)
-        if tls_err != true
-          try
-            client.close(client)
-          except e
-            nil
-          return nil
-        set_nonblocking(client)
-        conn = start_connection(server, client)
-        if conn.mode != "dead"
-          connections <+ conn
-        else
-          close_connection(conn)
-      )
+      accepted = accept_pending_connections(server, accept_coroutine_client, {server = server, connections = connections})
 
     resumed = 0
     for conn in connections
       if conn.mode == "read"
-        ok, mode = coroutine.resume(conn.coro, conn.sock)
+        ok, yielded, mode = coroutine.resume(conn.coro, conn.sock)
+        if mode == nil
+          mode = yielded
         if not ok and DEBUG_ERRORS
           print("[http_server] connection coroutine error: " + safe_str(mode))
         update_connection_state(server, conn, mode)
@@ -521,7 +806,9 @@ fn run_worker_loop(server, queue, select_timeout)
     resumed = 0
     for conn in connections
       if conn.mode == "read"
-        ok, mode = coroutine.resume(conn.coro, conn.sock)
+        ok, yielded, mode = coroutine.resume(conn.coro, conn.sock)
+        if mode == nil
+          mode = yielded
         if not ok and DEBUG_ERRORS
           print("[http_server] worker connection coroutine error: " + safe_str(mode))
         update_connection_state(server, conn, mode)
@@ -536,10 +823,10 @@ fn run_worker_loop(server, queue, select_timeout)
 fn run_threaded_loop(server)
   worker_count = int(server.worker_threads)
   if worker_count < 1
-    return run_coroutine_loop(server)
+    return run_blocking_coroutine_loop(server)
   if thread == nil
     print "thread module unavailable; using coroutine loop"
-    return run_coroutine_loop(server)
+    return run_blocking_coroutine_loop(server)
 
   queues = {}
   workers = {}
@@ -548,7 +835,7 @@ fn run_threaded_loop(server)
     queues[i] = q
     workers[i] = thread.spawn(run_worker_loop, server, q, server.worker_select_timeout)
 
-  next_worker = 1
+  worker_state = {next_worker = 1}
   last_gc_req = 0
   accepting = true
   while true
@@ -562,23 +849,7 @@ fn run_threaded_loop(server)
       break
 
     if accepting
-      accepted = accept_pending_connections(server, fn(client)
-        tls_err = ensure_tls_on_client(server, client)
-        if tls_err != true
-          try
-            client.close(client)
-          except e
-            nil
-          return nil
-        set_nonblocking(client)
-        target = queues[next_worker]
-        next_worker = next_worker + 1
-        if next_worker > worker_count
-          next_worker = 1
-        ok = target.send(target, client)
-        if not ok
-          client.close(client)
-      )
+      accepted = accept_pending_connections(server, dispatch_worker_client, {server = server, queues = queues, worker_state = worker_state, worker_count = worker_count})
       if accepted == 0
         thread.sleep(0.01)
     else
@@ -607,9 +878,10 @@ Transport.run = fn(self, server_override = nil)
     error("http_server ssl=true but TLS is unavailable in this build")
   server.socket.bind(server.socket, server.host, server.port)
   server.socket.listen(server.socket, 128)
-  -- Listener socket: short timeout accept tends to be more stable than
-  -- strict nonblocking accept across platforms.
-  server.socket.settimeout(server.socket, 0.01)
+  if server.worker_threads and server.worker_threads > 0 or server.ssl
+    server.socket.settimeout(server.socket, 0.01)
+  else
+    server.socket.settimeout(server.socket, 0)
   server.running = true
 
   scheme = "HTTP"
@@ -621,8 +893,10 @@ Transport.run = fn(self, server_override = nil)
   try
     if server.worker_threads and server.worker_threads > 0
       out = run_threaded_loop(server)
+    elif server.ssl
+      out = run_blocking_coroutine_loop(server)
     else
-      out = run_coroutine_loop(server)
+      out = run_poll_loop(server)
   finally
     server.running = false
     close_server_socket(server)

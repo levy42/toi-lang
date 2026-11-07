@@ -54,7 +54,21 @@ typedef struct {
 } X64NativeTraceCtx;
 
 static int jit_value_falsey(Value v) {
-    return IS_NIL(v) || (IS_BOOL(v) && !AS_BOOL(v));
+    // Must match the interpreter (vm/ops_control.c is_falsey_local): nil, false,
+    // 0, "" and empty tables are falsey. Machine-code branches depend on this.
+    if (IS_NIL(v)) return 1;
+    if (IS_BOOL(v)) return AS_BOOL(v) == 0;
+    if (IS_NUMBER(v)) return AS_NUMBER(v) == 0;
+    if (IS_STRING(v)) return AS_STRING(v)->length == 0;
+    if (IS_TABLE(v)) {
+        ObjTable* t = AS_TABLE(v);
+        if (t->table.count > 0) return 0;
+        for (int i = 0; i < t->table.array_capacity; i++) {
+            if (!IS_NIL(t->table.array[i])) return 0;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 static int x64_emit_u8(uint8_t* code, size_t cap, size_t* pos, uint8_t byte) {

@@ -190,6 +190,7 @@ Value get_metamethod(VM* vm, Value val, const char* name);
 void vm_request_interrupt(void);
 ObjThread* vm_current_thread(VM* vm);
 void vm_set_current_thread(VM* vm, ObjThread* thread);
+int vm_native_wait(VM* vm, const char* command, Value resource);
 void vm_enable_thread_tls(VM* vm);
 
 #endif
