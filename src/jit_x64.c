@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +16,7 @@
 #endif
 
 #include "jit_call_runtime.h"
+#include "jit.h"
 #include "jit_native_trace.h"
 #include "jit_x64.h"
 #include "table.h"
@@ -33,6 +35,9 @@ typedef struct {
     void* exec_mem;
     size_t exec_size;
     void* ctx;
+    void (*free_ctx)(void*);
+    void (*mark_ctx)(void*);
+    ToiJitX64Stats* stats;
 } X64CodeBundle;
 
 typedef struct {
@@ -792,6 +797,15 @@ static int x64_value_loop_runner(
                     if (sp <= 0 || (int)in->target < 0 || (int)in->target > instr_count) return 0;
                     pc = jit_value_falsey(stack[sp - 1]) ? (pc + 1) : (int)in->target;
                     break;
+                case TOI_JIT_VAL_LENGTH:
+                    if (sp < 1 || !jit_length_primitive(stack[sp - 1], &stack[sp - 1])) return 0;
+                    pc++; break;
+                case TOI_JIT_VAL_SLICE: {
+                    Value out;
+                    if (sp < 4 || !jit_slice_primitive(stack[sp - 4], stack[sp - 3], stack[sp - 2], stack[sp - 1], &out)) return 0;
+                    stack[sp - 4] = out; sp -= 3;
+                    pc++; break;
+                }
                 case TOI_JIT_VAL_ADJUST_STACK:
                     if ((int)in->a < 0 || (int)in->a > TOI_JIT_TRACE_STACK_CAP) return 0;
                     sp = (int)in->a;
@@ -1086,6 +1100,17 @@ static ToiJitNativeExecResult x64_native_trace_bridge_runner(
                     pc++;
                     break;
                 }
+                case TOI_JIT_NATIVE_OP_LENGTH:
+                    if (sp < 1) X64_NTRACE_DEOPT(TOI_JIT_NATIVE_DEOPT_STACK_BOUNDS);
+                    if (!jit_length_primitive(stack[sp - 1], &stack[sp - 1])) X64_NTRACE_DEOPT(TOI_JIT_NATIVE_DEOPT_TYPE_GUARD);
+                    pc++; break;
+                case TOI_JIT_NATIVE_OP_SLICE: {
+                    Value out;
+                    if (sp < 4) X64_NTRACE_DEOPT(TOI_JIT_NATIVE_DEOPT_STACK_BOUNDS);
+                    if (!jit_slice_primitive(stack[sp - 4], stack[sp - 3], stack[sp - 2], stack[sp - 1], &out)) X64_NTRACE_DEOPT(TOI_JIT_NATIVE_DEOPT_TYPE_GUARD);
+                    stack[sp - 4] = out; sp -= 3;
+                    pc++; break;
+                }
                 case TOI_JIT_NATIVE_OP_ADJUST_STACK:
                     if ((int)in->a < 0 || (int)in->a > TOI_JIT_TRACE_STACK_CAP) {
                         X64_NTRACE_DEOPT(TOI_JIT_NATIVE_DEOPT_STACK_BOUNDS);
@@ -1132,16 +1157,11 @@ static ToiJitNativeExecResult x64_native_trace_bridge_runner(
             }
             if (hit_backedge) break;
         }
-        if (!hit_backedge) {
+        if (!hit_backedge || iter + 1u >= max_iters) {
             if (out_state != NULL) {
-                out_state->resume_offset = first_resume_offset;
-                out_state->stack_count = 0;
-            }
-            return TOI_JIT_NATIVE_EXEC_CONTINUE;
-        }
-        if (iter + 1u >= max_iters) {
-            if (out_state != NULL) {
-                out_state->resume_offset = first_resume_offset;
+                // The body is complete. Resume at the numeric-for backedge,
+                // including when the trace omits an explicit jump instruction.
+                out_state->resume_offset = TOI_JIT_NATIVE_RESUME_BACKEDGE;
                 out_state->stack_count = 0;
             }
             return TOI_JIT_NATIVE_EXEC_CONTINUE;
@@ -1181,6 +1201,8 @@ static ToiJitNativeExecResult x64_native_trace_bridge_entry(
         ctx->max_iters);
 }
 
+#include "jit_x64_codegen.h"
+
 int toi_jit_x64_host_supported(void) {
 #if defined(__x86_64__) && (defined(__APPLE__) || defined(__linux__))
     return 1;
@@ -1197,7 +1219,20 @@ int toi_jit_x64_compile_qfor_num_stub(
         }
         return 0;
     }
-    (void)memchr(code, 0, (size_t)code_count);
+    if (code[loop_offset] != OP_QFOR_LOOP_NUM && code[loop_offset] != OP_FOR_LOOP) {
+        if (err_buf && err_buf_size) snprintf(err_buf, err_buf_size, "x64: unsupported range-loop opcode");
+        return 0;
+    }
+    if (code_count - loop_offset < 5) {
+        if (err_buf && err_buf_size) snprintf(err_buf, err_buf_size, "x64: truncated range loop");
+        return 0;
+    }
+    int jump = ((int)code[loop_offset + 3] << 8) | code[loop_offset + 4];
+    int start = loop_offset + 5 - jump;
+    if (start < 0 || start >= loop_offset) {
+        if (err_buf && err_buf_size) snprintf(err_buf, err_buf_size, "x64: range-loop backedge out of bounds");
+        return 0;
+    }
     return 1;
 }
 
@@ -1211,6 +1246,12 @@ int toi_jit_x64_compile_qfor_empty(
         if (err_buf != NULL && err_buf_size > 0) snprintf(err_buf, err_buf_size, "x64: host unsupported");
         return 0;
     }
+    X64Emitter e = {0};
+    xe_mov(&e, 0, 7);
+    xe_byte(&e, 0x48); xe_byte(&e, 0x39); xe_byte(&e, 0xf7); // cmp rdi,rsi
+    xe_byte(&e, 0x48); xe_byte(&e, 0x0f); xe_byte(&e, 0x42); xe_byte(&e, 0xc6); // cmovb rax,rsi
+    xe_byte(&e, 0xc3);
+    if (xe_publish(&e, NULL, out_fn, out_code_mem, out_code_size)) return 1;
     return x64_emit_tailcall_same_sig(
         (void*)&x64_qfor_empty_runner,
         out_fn,
@@ -1230,6 +1271,16 @@ int toi_jit_x64_compile_math_reduce(
         if (err_buf != NULL && err_buf_size > 0) snprintf(err_buf, err_buf_size, "x64: host unsupported");
         return 0;
     }
+    const ToiJitSlotInstr ops[] = {
+        {TOI_JIT_SLOT_PUSH_SLOT, 0}, {TOI_JIT_SLOT_PUSH_SLOT, 1},
+        {TOI_JIT_SLOT_PUSH_CONST, 0}, {TOI_JIT_SLOT_BIN_MUL, 0},
+        {TOI_JIT_SLOT_PUSH_SLOT, 1}, {TOI_JIT_SLOT_PUSH_CONST, 1},
+        {TOI_JIT_SLOT_BIN_MOD, 0}, {TOI_JIT_SLOT_PUSH_CONST, 2},
+        {TOI_JIT_SLOT_BIN_ADD, 0}, {TOI_JIT_SLOT_BIN_DIV, 0},
+        {TOI_JIT_SLOT_BIN_ADD, 0}, {TOI_JIT_SLOT_STORE_SLOT, 0}, {TOI_JIT_SLOT_POP, 0}
+    };
+    if (xe_compile_slots(ops, (int)(sizeof(ops) / sizeof(ops[0])), 1, 2, 2,
+                         out_fn, out_code_mem, out_code_size)) return 1;
     return x64_emit_tailcall_same_sig(
         (void*)&x64_math_reduce_runner,
         out_fn,
@@ -1263,6 +1314,27 @@ int toi_jit_x64_compile_numeric_loop(
         return 0;
     }
 
+    ToiJitSlotInstr lowered[128];
+    int direct = 1;
+    for (int i = 0; i < instr_count; i++) {
+        lowered[i].arg = instrs[i].arg;
+        switch (instrs[i].op) {
+            case TOI_JIT_NUM_PUSH_ACC: lowered[i] = (ToiJitSlotInstr){TOI_JIT_SLOT_PUSH_SLOT, 0}; break;
+            case TOI_JIT_NUM_PUSH_VAR: lowered[i] = (ToiJitSlotInstr){TOI_JIT_SLOT_PUSH_SLOT, 1}; break;
+            case TOI_JIT_NUM_PUSH_END: lowered[i] = (ToiJitSlotInstr){TOI_JIT_SLOT_PUSH_SLOT, 2}; break;
+            case TOI_JIT_NUM_PUSH_CONST: lowered[i].op = TOI_JIT_SLOT_PUSH_CONST; break;
+            case TOI_JIT_NUM_BIN_ADD: lowered[i].op = TOI_JIT_SLOT_BIN_ADD; break;
+            case TOI_JIT_NUM_BIN_SUB: lowered[i].op = TOI_JIT_SLOT_BIN_SUB; break;
+            case TOI_JIT_NUM_BIN_MUL: lowered[i].op = TOI_JIT_SLOT_BIN_MUL; break;
+            case TOI_JIT_NUM_BIN_DIV: lowered[i].op = TOI_JIT_SLOT_BIN_DIV; break;
+            case TOI_JIT_NUM_BIN_MOD: lowered[i].op = TOI_JIT_SLOT_BIN_MOD; break;
+            case TOI_JIT_NUM_STORE_ACC: lowered[i] = (ToiJitSlotInstr){TOI_JIT_SLOT_STORE_SLOT, 0}; break;
+            case TOI_JIT_NUM_POP: lowered[i].op = TOI_JIT_SLOT_POP; break;
+            default: direct = 0; break;
+        }
+    }
+    if (direct && xe_compile_slots(lowered, instr_count, 1, 2, 1,
+                                   out_fn, out_code_mem, out_code_size)) return 1;
     X64NumericLoopCtx* ctx = (X64NumericLoopCtx*)calloc(1, sizeof(X64NumericLoopCtx));
     if (ctx == NULL) {
         if (err_buf != NULL && err_buf_size > 0) snprintf(err_buf, err_buf_size, "x64: numeric ctx alloc failed");
@@ -1311,6 +1383,8 @@ int toi_jit_x64_compile_slot_loop(
         return 0;
     }
 
+    if (xe_compile_slots(instrs, instr_count, var_slot, end_slot, 0,
+                         out_fn, out_code_mem, out_code_size)) return 1;
     X64SlotLoopCtx* ctx = (X64SlotLoopCtx*)calloc(1, sizeof(X64SlotLoopCtx));
     if (ctx == NULL) {
         if (err_buf != NULL && err_buf_size > 0) snprintf(err_buf, err_buf_size, "x64: slot ctx alloc failed");
@@ -1394,6 +1468,8 @@ int toi_jit_x64_compile_value_loop(
             case TOI_JIT_VAL_BUILD_STRING2:
             case TOI_JIT_VAL_BUILD_STRING3:
             case TOI_JIT_VAL_BUILD_STRING4:
+            case TOI_JIT_VAL_LENGTH:
+            case TOI_JIT_VAL_SLICE:
             case TOI_JIT_VAL_BUILD_STRING5:
                 break;
             default:
@@ -1439,6 +1515,13 @@ int toi_jit_x64_compile_native_trace(
         return 0;
     }
 
+    const char* force_bridge = getenv("TOI_JIT_NATIVE_TRACE_FORCE_BRIDGE");
+    if ((force_bridge == NULL || force_bridge[0] == '\0' || strcmp(force_bridge, "0") == 0) &&
+        xe_compile_trace_guarded(instrs, instr_count, var_slot, end_slot, guards, guard_count,
+                                 out_fn, out_code_mem, out_code_size)) {
+        if (out_is_direct_core != NULL) *out_is_direct_core = 1;
+        return 1;
+    }
     X64NativeTraceCtx* ctx = (X64NativeTraceCtx*)calloc(1, sizeof(X64NativeTraceCtx));
     if (ctx == NULL) {
         if (err_buf != NULL && err_buf_size > 0) snprintf(err_buf, err_buf_size, "x64: native-trace ctx alloc failed");
@@ -1515,6 +1598,26 @@ void toi_jit_x64_free_code(void* code_mem, size_t code_size) {
     if (bundle->exec_mem != NULL && bundle->exec_size != 0) {
         munmap(bundle->exec_mem, bundle->exec_size);
     }
-    free(bundle->ctx);
+    if (bundle->free_ctx) bundle->free_ctx(bundle->ctx);
+    else free(bundle->ctx);
     free(bundle);
+}
+
+void toi_jit_x64_code_stats(void* code_mem, ToiJitX64Stats* stats) {
+    if (!stats) return;
+    memset(stats, 0, sizeof(*stats));
+    X64CodeBundle* b = code_mem;
+    if (!b || b->magic != X64_CODE_BUNDLE_MAGIC || !b->stats) return;
+#define XE_STAT(NAME) stats->NAME = __atomic_load_n(&b->stats->NAME, __ATOMIC_RELAXED)
+    XE_STAT(promoted_values); XE_STAT(promoted_arithmetic); XE_STAT(fused_stores);
+    XE_STAT(inlined_calls); XE_STAT(linked_calls); XE_STAT(random_calls); XE_STAT(fast_call_loops); XE_STAT(fast_string_loops);
+    XE_STAT(call_pic_hits); XE_STAT(call_pic_misses); XE_STAT(callee_compiles);
+    XE_STAT(native_chain_hits); XE_STAT(method_ic_hits);
+    XE_STAT(table_ic_hits); XE_STAT(native_table_ic_hits); XE_STAT(table_ic_misses);
+#undef XE_STAT
+}
+
+void toi_jit_x64_mark_code(void* code_mem) {
+    X64CodeBundle* b = code_mem;
+    if (b && b->magic == X64_CODE_BUNDLE_MAGIC && b->mark_ctx) b->mark_ctx(b->ctx);
 }

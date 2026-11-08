@@ -455,6 +455,15 @@ int toi_jit_native_trace_build_from_value_ir(
                 }
                 break;
             }
+            case TOI_JIT_VAL_LENGTH:
+            case TOI_JIT_VAL_SLICE: {
+                int n = in->op == TOI_JIT_VAL_LENGTH ? 1 : 4;
+                if (sp < n) return 0;
+                out.op = in->op == TOI_JIT_VAL_LENGTH ? TOI_JIT_NATIVE_OP_LENGTH : TOI_JIT_NATIVE_OP_SLICE;
+                for (int j = 0; j < n; j++) (void)trace_pop(stack, &sp);
+                trace_push(stack, &sp, (TraceOrigin){TRACE_ORIGIN_UNKNOWN, 0});
+                break;
+            }
             case TOI_JIT_VAL_ADJUST_STACK:
                 out.op = TOI_JIT_NATIVE_OP_ADJUST_STACK;
                 if ((int)in->a >= 0 && (int)in->a <= 1024) {

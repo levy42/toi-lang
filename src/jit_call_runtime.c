@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,7 @@
 #include "chunk.h"
 #include "jit_call_runtime.h"
 #include "vm/build_string.h"
+#include "lib/string_case.h"
 
 extern ToiJitState* jit_state(VM* vm);
 extern JitTrackedFunction* jit_find_or_add(VM* vm, ObjFunction* function);
@@ -28,21 +30,6 @@ static int to_int64_local_runtime(double x, int64_t* out) {
     *out = i;
     return 1;
 }
-static int jit_ascii_case_transform(ObjString* src, int to_upper, Value* out) {
-    if (src == NULL || out == NULL) return 0;
-    int len = src->length;
-    char* buf = (char*)malloc((size_t)len + 1);
-    if (buf == NULL) return 0;
-    for (int i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)src->chars[i];
-        buf[i] = (char)(to_upper ? toupper(c) : tolower(c));
-    }
-    buf[len] = '\0';
-    ObjString* s = take_string(buf, len);
-    *out = OBJ_VAL(s);
-    return 1;
-}
-
 int jit_build_string_primitive(VM* vm, Value* parts, int count, Value* out) {
     (void)vm;
     if (parts == NULL || out == NULL || count < 2 || count > 5) return 0;
@@ -204,7 +191,8 @@ int jit_slice_primitive(Value obj, Value start, Value end, Value step, Value* ou
     if (IS_NIL(step)) step = NUMBER_VAL(1.0);
     if (!IS_NUMBER(step)) return 0;
     double step_num = AS_NUMBER(step);
-    if (step_num == 0.0) return 0;
+    if (!isfinite(step_num) || step_num < INT_MIN || step_num > INT_MAX ||
+        step_num == 0.0 || trunc(step_num) != step_num) return 0;
 
     if (IS_NIL(start)) start = NUMBER_VAL(step_num < 0.0 ? (double)len : 1.0);
     if (IS_NIL(end)) end = NUMBER_VAL(step_num < 0.0 ? 1.0 : (double)len);
@@ -212,6 +200,8 @@ int jit_slice_primitive(Value obj, Value start, Value end, Value step, Value* ou
 
     double raw_start = AS_NUMBER(start);
     double raw_end = AS_NUMBER(end);
+    if (!isfinite(raw_start) || !isfinite(raw_end) || raw_start < INT_MIN || raw_start > INT_MAX ||
+        raw_end < INT_MIN || raw_end > INT_MAX) return 0;
     int start_int = (int)raw_start;
     int end_int = (int)raw_end;
     if ((double)start_int != raw_start || (double)end_int != raw_end) return 0;
@@ -238,29 +228,30 @@ int jit_slice_primitive(Value obj, Value start, Value end, Value step, Value* ou
             *out = OBJ_VAL(copy_string_unhashed(s->chars + (s0 - 1), out_len));
             return 1;
         }
-        int step_i = (int)step_num;
+        int64_t step_i = (int64_t)step_num;
         int out_len = 0;
-        for (int i = s0; i <= e0; i += step_i) out_len++;
+        for (int64_t i = s0; i <= e0; i += step_i) out_len++;
         char* buf = (char*)malloc((size_t)out_len + 1);
         if (buf == NULL) return 0;
         int w = 0;
-        for (int i = s0; i <= e0; i += step_i) buf[w++] = s->chars[i - 1];
+        for (int64_t i = s0; i <= e0; i += step_i) buf[w++] = s->chars[i - 1];
         buf[w] = '\0';
         *out = OBJ_VAL(take_string_unhashed(buf, w));
         return 1;
     }
 
+    if (s0 > len || e0 < 1) return 0;
     if (s0 < e0) {
         *out = OBJ_VAL(copy_string("", 0));
         return 1;
     }
-    int step_i = (int)step_num;
+    int64_t step_i = (int64_t)step_num;
     int out_len = 0;
-    for (int i = s0; i >= e0; i += step_i) out_len++;
+    for (int64_t i = s0; i >= e0; i += step_i) out_len++;
     char* buf = (char*)malloc((size_t)out_len + 1);
     if (buf == NULL) return 0;
     int w = 0;
-    for (int i = s0; i >= e0; i += step_i) buf[w++] = s->chars[i - 1];
+    for (int64_t i = s0; i >= e0; i += step_i) buf[w++] = s->chars[i - 1];
     buf[w] = '\0';
     *out = OBJ_VAL(take_string_unhashed(buf, w));
     return 1;
@@ -799,10 +790,10 @@ int jit_invoke_primitive(VM* vm, Value receiver, Value method_name, Value* args,
 
     if (IS_STRING(receiver) && argc == 0) {
         if (jit_objstring_eq_name(method, vm->str_lower_name, "lower")) {
-            return jit_ascii_case_transform(AS_STRING(receiver), 0, out);
+            return string_case_transform(AS_STRING(receiver), 0, out);
         }
         if (jit_objstring_eq_name(method, vm->str_upper_name, "upper")) {
-            return jit_ascii_case_transform(AS_STRING(receiver), 1, out);
+            return string_case_transform(AS_STRING(receiver), 1, out);
         }
     }
 

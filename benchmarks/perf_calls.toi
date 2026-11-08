@@ -1,0 +1,24 @@
+time = import time
+string = import string
+fn evaluate(a: int, b: int)
+  return (a + b) * (a - b)
+fn choose(a: int, b: int, c: int)
+  if a < b
+    return a * 2 + c
+  return a + b - c
+fn arithmetic_calls()
+  total = 0
+  for i in 1..1000000
+    total += evaluate(i, 2)
+  return total
+fn branching_calls()
+  total = 0
+  for i in 1..1000000
+    total += choose(i, 500000, 3)
+  return total
+fn bench(name, func)
+  start = time.clock()
+  result = func()
+  print string.format("%s %f sec result=%.17g", name, time.clock() - start, result)
+bench("arithmetic_calls", arithmetic_calls)
+bench("branching_calls", branching_calls)

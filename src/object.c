@@ -111,6 +111,7 @@ void object_mark_interned_strings(void) {
 
 static struct Obj* allocate_object(size_t size, ObjType type) {
     struct Obj* object = (struct Obj*)malloc(size);
+    if (object == NULL) return NULL;
     object->type = type;
     object->is_marked = 0;
     object->next = objects;
@@ -129,6 +130,7 @@ static ObjString* allocate_string(char* chars, int length, uint32_t hash) {
     string->chars = chars;
     string->hash = hash;
     string->hash_ready = 1;
+    string->chars_inline = 0;
     return string;
 }
 
@@ -140,6 +142,23 @@ static ObjString* allocate_string_unhashed(char* chars, int length) {
     string->chars = chars;
     string->hash = 0;
     string->hash_ready = 0;
+    string->chars_inline = 0;
+    return string;
+}
+
+// Stack-built strings copy directly into one allocation rather than allocating
+// a character buffer and an object header separately. Other ownership paths
+// (notably take_string) keep their existing buffer ownership.
+ObjString* copy_string_with_hash(const char* chars, int length, uint32_t hash) {
+    ObjString* string = (ObjString*)allocate_object(sizeof(ObjString) + (size_t)length + 1, OBJ_STRING);
+    if (string == NULL) return NULL;
+    string->length = length;
+    string->chars = (char*)(string + 1);
+    memcpy(string->chars, chars, (size_t)length);
+    string->chars[length] = '\0';
+    string->hash = hash;
+    string->hash_ready = 1;
+    string->chars_inline = 1;
     return string;
 }
 
@@ -689,7 +708,7 @@ void free_object(struct Obj* object) {
             ObjString* string = (ObjString*)object;
             bytes_allocated -= string->length + 1;
             bytes_allocated -= sizeof(ObjString);
-            free(string->chars);
+            if (!string->chars_inline) free(string->chars);
             free(string);
             break;
         }

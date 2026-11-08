@@ -3066,11 +3066,7 @@ static void mark_roots(VM* vm) {
     }
     object_mark_interned_strings();
     toi_jit_mark_roots(vm);
-    for (size_t i = 0; i < sizeof(vm->build_string_cache) / sizeof(vm->build_string_cache[0]); i++) {
-        if (vm->build_string_cache[i] != NULL) {
-            mark_object((struct Obj*)vm->build_string_cache[i]);
-        }
-    }
+    // The content cache is weak; only program roots retain its strings.
     for (size_t i = 0; i < sizeof(vm->build_string3_cache) / sizeof(vm->build_string3_cache[0]); i++) {
         BuildString3CacheEntry* e = &vm->build_string3_cache[i];
         if (e->a != NULL) mark_object((struct Obj*)e->a);
@@ -3348,6 +3344,12 @@ static void collect_garbage_reason(VM* vm, int reason) {
         mark_start_ns = vm_prof_now_ns();
     }
     mark_roots(vm);
+    // Clear weak entries before sweep can free their objects. Live strings
+    // remain cached, including strings rooted by other builder caches.
+    for (size_t i = 0; i < sizeof(vm->build_string_cache) / sizeof(vm->build_string_cache[0]); i++) {
+        ObjString* cached = vm->build_string_cache[i];
+        if (cached != NULL && !cached->obj.is_marked) vm->build_string_cache[i] = NULL;
+    }
     if (vm->gc_prof_enabled) {
         vm->gc_prof_mark_ns += vm_prof_now_ns() - mark_start_ns;
         sweep_start_ns = vm_prof_now_ns();

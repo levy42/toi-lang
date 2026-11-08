@@ -6,6 +6,28 @@
 
 #include "jit_backend.h"
 
+typedef struct {
+    uint64_t promoted_values;
+    uint64_t promoted_arithmetic;
+    uint64_t fused_stores;
+    uint64_t inlined_calls;
+    uint64_t linked_calls;
+    uint64_t random_calls;
+    uint64_t fast_call_loops;
+    uint64_t fast_string_loops;
+    uint64_t call_pic_hits;
+    uint64_t call_pic_misses;
+    uint64_t callee_compiles;
+    uint64_t native_chain_hits;
+    uint64_t method_ic_hits;
+    uint64_t table_ic_hits;
+    uint64_t native_table_ic_hits;
+    uint64_t table_ic_misses;
+} ToiJitX64Stats;
+
+void toi_jit_x64_code_stats(void* code_mem, ToiJitX64Stats* stats);
+void toi_jit_x64_mark_code(void* code_mem);
+
 int toi_jit_x64_host_supported(void);
 int toi_jit_x64_compile_qfor_num_stub(
     const uint8_t* code, int code_count, int loop_offset, char* err_buf, size_t err_buf_size);

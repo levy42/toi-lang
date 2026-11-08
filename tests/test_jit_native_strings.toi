@@ -1,0 +1,75 @@
+string = import string
+
+fn formatted_lengths(n)
+  total = 0
+  for i in 1..n
+    s = f"user:{i}-x{i % 10}"
+    total += #s
+  return total
+assert formatted_lengths(100000) == 1288895
+
+fn sliced_lengths(n)
+  total = 0
+  for i in 1..n
+    s = f"prefix:{i}"
+    part = s[2..7]
+    total += #part
+  return total
+assert sliced_lengths(20000) == 120000
+
+fn final_string(n)
+  result = ""
+  for i in 1..n
+    result = f"value:{i}"
+  return result
+assert final_string(100000) == "value:100000" "GC must retain the native result"
+
+fn length_of(value)
+  total = 0
+  for i in 1..20000
+    total += #value
+  return total
+assert length_of("abcdef") == 120000
+assert length_of({1, 2, 3}) == 60000
+assert length_of({1, 2, named = 3}) == 60000
+
+fn slice_of(value, start, stop, step)
+  result = nil
+  for i in 1..2000
+    result = value[start..stop:step]
+  return result
+assert slice_of("abcdefgh", 2, 5, 1) == "bcde"
+assert slice_of("abcdefgh", 1, -1, 1) == "abcdefg"
+assert slice_of("abcdefgh", nil, nil, -1) == "hgfedcba"
+assert slice_of("abcdefgh", 1, 8, 2) == "aceg"
+assert slice_of("abcdefgh", 6, 2, -2) == "fdb"
+assert slice_of("abcdefgh", 9, 2, 1) == ""
+assert slice_of({1, 2, 3, 4}, 2, 3, 1)[1] == 2
+caught = false
+try
+  slice_of("abcdefgh", 1, 4, 0)
+except e
+  caught = true
+assert caught
+
+-- Exercise both library and JIT method dispatch, including the long SIMD path.
+fn transform(text, expected_upper, expected_lower)
+  for i in 1..2000
+    assert text.upper() == expected_upper
+    assert text.lower() == expected_lower
+transform("AbC123", "ABC123", "abc123")
+transform(string.rep("AbCd", 32), string.rep("ABCD", 32), string.rep("abcd", 32))
+transform("éAbC", "éABC", "éabc")
+transform("", "", "")
+assert string.upper("AbC123") == "ABC123"
+assert string.lower("AbC123") == "abc123"
+
+-- Repeated collections must invalidate dead weak-cache entries without losing
+-- strings retained by program values or leaving dangling cache pointers.
+saved = f"retained:{12345}"
+for pass in 1..5
+  assert formatted_lengths(20000) == 248894
+  gc
+  assert saved == "retained:12345"
+assert formatted_lengths(100000) == 1288895
+print "native strings ok"

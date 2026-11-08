@@ -69,6 +69,7 @@ typedef struct ObjString {
     char* chars;
     uint32_t hash;
     uint8_t hash_ready;
+    uint8_t chars_inline;
 } ObjString;
 
 typedef struct ObjThread {
@@ -276,6 +277,7 @@ static inline int is_obj_type(Value value, ObjType type) {
 }
 
 ObjString* copy_string(const char* chars, int length);
+ObjString* copy_string_with_hash(const char* chars, int length, uint32_t hash);
 ObjString* take_string(char* chars, int length);
 ObjString* take_string_with_hash(char* chars, int length, uint32_t hash);
 ObjString* copy_string_unhashed(const char* chars, int length);

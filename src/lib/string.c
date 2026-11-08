@@ -12,6 +12,7 @@
 #include <arm_neon.h>
 #endif
 #include "libs.h"
+#include "string_case.h"
 #include "../object.h"
 #include "../value.h"
 #include "../vm.h"
@@ -320,123 +321,62 @@ static void replace_char_all_simd_copy(const char* src, char* dst, int len, char
     }
 }
 
-static int string_lower(VM* vm, int arg_count, Value* args) {
-    ASSERT_ARGC_EQ(1);
-    ASSERT_STRING(0);
-
-    ObjString* str = GET_STRING(0);
+int string_case_transform(ObjString* str, int to_upper, Value* result) {
+    if (str == NULL || result == NULL) return 0;
     const char* chars = str->chars;
     int len = str->length;
     if (len >= 64) {
         int all_ascii = 1;
         for (int i = 0; i < len; i++) {
-            if (((unsigned char)chars[i]) & 0x80u) {
-                all_ascii = 0;
-                break;
-            }
+            if (((unsigned char)chars[i]) & 0x80u) { all_ascii = 0; break; }
         }
-
         if (all_ascii) {
             char* out = (char*)malloc((size_t)len + 1);
-            if (out == NULL) {
-                vm_runtime_error(vm, "string.lower(): out of memory.");
-                return 0;
-            }
-            int changed = ascii_lower_simd_copy(chars, out, len);
+            if (out == NULL) return 0;
+            int changed = to_upper ? ascii_upper_simd_copy(chars, out, len) : ascii_lower_simd_copy(chars, out, len);
             if (!changed) {
-                free(out);
-                RETURN_OBJ(str);
+                free(out); *result = OBJ_VAL(str); return 1;
             }
             out[len] = '\0';
-            RETURN_OBJ(take_string_unhashed(out, len));
+            *result = OBJ_VAL(take_string_unhashed(out, len)); return 1;
         }
     }
-
     char* buf = NULL;
     for (int i = 0; i < len; i++) {
         unsigned char c = (unsigned char)chars[i];
-        char lowered = c < 128 ? ascii_lower_char(c) : (char)tolower((int)c);
-        if (buf != NULL) {
-            buf[i] = lowered;
-            continue;
-        }
-        if (lowered != chars[i]) {
+        char converted = c < 128 ? (to_upper ? ascii_upper_char(c) : ascii_lower_char(c)) :
+                                  (char)(to_upper ? toupper((int)c) : tolower((int)c));
+        if (buf != NULL) { buf[i] = converted; continue; }
+        if (converted != chars[i]) {
             buf = (char*)malloc((size_t)len + 1);
-            if (buf == NULL) {
-                vm_runtime_error(vm, "string.lower(): out of memory.");
-                return 0;
-            }
+            if (buf == NULL) return 0;
             if (i > 0) memcpy(buf, chars, (size_t)i);
-            buf[i] = lowered;
+            buf[i] = converted;
         }
     }
-
-    if (buf == NULL) {
-        RETURN_OBJ(str);
-    }
-
+    if (buf == NULL) { *result = OBJ_VAL(str); return 1; }
     buf[len] = '\0';
-    RETURN_OBJ(take_string_unhashed(buf, len));
+    *result = OBJ_VAL(take_string_unhashed(buf, len)); return 1;
+}
+
+static int string_lower(VM* vm, int arg_count, Value* args) {
+    ASSERT_ARGC_EQ(1);
+    ASSERT_STRING(0);
+    Value out;
+    if (!string_case_transform(GET_STRING(0), 0, &out)) {
+        vm_runtime_error(vm, "string.lower(): out of memory."); return 0;
+    }
+    RETURN_VAL(out);
 }
 
 static int string_upper(VM* vm, int arg_count, Value* args) {
     ASSERT_ARGC_EQ(1);
     ASSERT_STRING(0);
-
-    ObjString* str = GET_STRING(0);
-    const char* chars = str->chars;
-    int len = str->length;
-    if (len >= 64) {
-        int all_ascii = 1;
-        for (int i = 0; i < len; i++) {
-            if (((unsigned char)chars[i]) & 0x80u) {
-                all_ascii = 0;
-                break;
-            }
-        }
-
-        if (all_ascii) {
-            char* out = (char*)malloc((size_t)len + 1);
-            if (out == NULL) {
-                vm_runtime_error(vm, "string.upper(): out of memory.");
-                return 0;
-            }
-            int changed = ascii_upper_simd_copy(chars, out, len);
-            if (!changed) {
-                free(out);
-                RETURN_OBJ(str);
-            }
-            out[len] = '\0';
-            RETURN_OBJ(take_string_unhashed(out, len));
-        }
+    Value out;
+    if (!string_case_transform(GET_STRING(0), 1, &out)) {
+        vm_runtime_error(vm, "string.upper(): out of memory."); return 0;
     }
-
-    char* buf = NULL;
-
-    for (int i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)chars[i];
-        char uppered = c < 128 ? ascii_upper_char(c) : (char)toupper((int)c);
-        if (buf != NULL) {
-            buf[i] = uppered;
-            continue;
-        }
-        if (uppered != chars[i]) {
-            buf = (char*)malloc((size_t)len + 1);
-            if (buf == NULL) {
-                vm_runtime_error(vm, "string.upper(): out of memory.");
-                return 0;
-            }
-            if (i > 0) memcpy(buf, chars, (size_t)i);
-            buf[i] = uppered;
-        }
-    }
-
-    if (buf == NULL) {
-        RETURN_OBJ(str);
-    }
-
-    buf[len] = '\0';
-    RETURN_OBJ(take_string_unhashed(buf, len));
+    RETURN_VAL(out);
 }
 
 static int string_char(VM* vm, int arg_count, Value* args) {

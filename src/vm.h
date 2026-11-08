@@ -17,7 +17,7 @@ typedef struct VM {
    ObjThread* gc_parked_threads;
    Table globals;
    Table modules;  // Cache of loaded modules (native and .toi)
-   ObjString* build_string_cache[65536];
+   ObjString* build_string_cache[65536]; // Weak; cleared before sweeping dead strings.
    BuildString3CacheEntry build_string3_cache[4096];
     int use_thread_tls;
    int cli_argc;

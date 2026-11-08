@@ -8,6 +8,7 @@
 
 #include "chunk.h"
 #include "jit_arm64.h"
+#include "jit_x64.h"
 #include "jit_backend.h"
 #include "memory.h"
 #include "jit_native_trace.h"
@@ -928,6 +929,10 @@ static int is_falsey_jit(Value v) {
 static Value jit_seed_call_hint_from_chunk(const Chunk* chunk, int off, int argc) {
     if (chunk == NULL || off < 0 || argc < 0 || off >= chunk->capacity) return NIL_VAL;
     ObjClosure* c = NULL;
+    // Quickened two-argument calls use a dedicated cache, not the generic
+    // CALL cache. Preserve its identity hint when building a loop trace.
+    if (argc == 2 && chunk->call2_ic_closures != NULL &&
+        chunk->call2_ic_closures[off] != NULL) return OBJ_VAL(chunk->call2_ic_closures[off]);
     if (chunk->call_ic_closures != NULL && chunk->call_ic_argc != NULL) {
         c = chunk->call_ic_closures[off];
         if (c != NULL && (int)chunk->call_ic_argc[off] == argc) return OBJ_VAL(c);
@@ -1294,6 +1299,7 @@ static int compile_qfor_loop_trace(ObjFunction* function, JitLoopTrace* trace, i
                 out->constant = jit_seed_call_hint_from_chunk(chunk, off, 1);
                 break;
             case OP_CALL2:
+            case OP_QCALL2:
                 out->a = 2;
                 out->constant = jit_seed_call_hint_from_chunk(chunk, off, 2);
                 break;
@@ -2164,8 +2170,9 @@ static int build_value_loop_ir(
             case JOP_SET_TABLE: insn.op = TOI_JIT_VAL_SET_TABLE; break;
             case JOP_SET_TABLE_NUM: insn.op = TOI_JIT_VAL_SET_TABLE_NUM; break;
             case JOP_CALL:
+            case JOP_QCALL2:
                 insn.op = TOI_JIT_VAL_CALL;
-                insn.a = op->a;
+                insn.a = op->op == JOP_QCALL2 ? 2 : op->a;
                 insn.constant = op->constant;
                 break;
             case JOP_INVOKE:
@@ -2173,6 +2180,8 @@ static int build_value_loop_ir(
                 insn.a = op->a;
                 insn.constant = op->constant;
                 break;
+            case JOP_LENGTH: insn.op = TOI_JIT_VAL_LENGTH; break;
+            case JOP_SLICE: insn.op = TOI_JIT_VAL_SLICE; break;
             case JOP_BUILD_STRING2: insn.op = TOI_JIT_VAL_BUILD_STRING2; break;
             case JOP_BUILD_STRING3: insn.op = TOI_JIT_VAL_BUILD_STRING3; break;
             case JOP_BUILD_STRING4: insn.op = TOI_JIT_VAL_BUILD_STRING4; break;
@@ -2738,6 +2747,8 @@ static int native_trace_is_exec_safe(const JitLoopTrace* trace, uint8_t* out_rej
             case TOI_JIT_NATIVE_OP_BUILD_STRING3:
             case TOI_JIT_NATIVE_OP_BUILD_STRING4:
             case TOI_JIT_NATIVE_OP_BUILD_STRING5:
+            case TOI_JIT_NATIVE_OP_LENGTH:
+            case TOI_JIT_NATIVE_OP_SLICE:
             case TOI_JIT_NATIVE_OP_ADJUST_STACK:
                 break;
             default:
@@ -2884,6 +2895,7 @@ static void native_trace_analyze_shape(JitLoopTrace* trace) {
     trace->native_trace_has_call = 0;
     trace->native_trace_has_invoke = 0;
     trace->native_trace_has_build_string = 0;
+    trace->native_trace_has_slice = 0;
     trace->native_trace_has_mutating_table = 0;
     trace->native_trace_has_get_table_generic = 0;
     trace->native_trace_prefix_work = trace->native_trace_instr_count;
@@ -2899,6 +2911,9 @@ static void native_trace_analyze_shape(JitLoopTrace* trace) {
             case TOI_JIT_NATIVE_OP_INVOKE:
                 trace->native_trace_has_invoke = 1;
                 if ((uint16_t)i < first_call_index) first_call_index = (uint16_t)i;
+                break;
+            case TOI_JIT_NATIVE_OP_SLICE:
+                trace->native_trace_has_slice = 1;
                 break;
             case TOI_JIT_NATIVE_OP_BUILD_STRING2:
             case TOI_JIT_NATIVE_OP_BUILD_STRING3:
@@ -3054,6 +3069,7 @@ static int native_trace_is_profitable(const JitLoopTrace* trace) {
         if (trace->native_trace_direct_core) {
             int app_like =
                 trace->native_trace_has_build_string ||
+                trace->native_trace_has_slice ||
                 trace->native_trace_has_get_table_generic;
             if ((soft_bails * 100u) > (attempts * 98u) &&
                 (trace->native_trace_prefix_work < 4u || !app_like)) {
@@ -3856,11 +3872,13 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
     trace->native_trace_ready = 0;
     trace->native_trace_exec_safe = 0;
     trace->native_trace_direct_core = 0;
+    trace->native_trace_fast_calls = 0;
     trace->native_trace_instr_count = 0;
     trace->native_trace_guard_count = 0;
     trace->native_trace_has_call = 0;
     trace->native_trace_has_invoke = 0;
     trace->native_trace_has_build_string = 0;
+    trace->native_trace_has_slice = 0;
     trace->native_trace_has_mutating_table = 0;
     trace->native_trace_has_get_table_generic = 0;
     trace->native_trace_prefix_work = 0;
@@ -4010,6 +4028,7 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
                     trace->native_trace_has_call = 0;
                     trace->native_trace_has_invoke = 0;
                     trace->native_trace_has_build_string = 0;
+                    trace->native_trace_has_slice = 0;
                     trace->native_trace_has_mutating_table = 0;
                     trace->native_trace_has_get_table_generic = 0;
                     trace->native_trace_prefix_work = 0;
@@ -4100,6 +4119,11 @@ static int compile_loop_trace(VM* vm, ObjFunction* function, JitLoopTrace* trace
                             err_buf,
                             sizeof(err_buf))) {
                         trace->native_trace_direct_core = native_trace_direct_core;
+                        if (native_trace_direct_core && st->backend_kind == TOI_JIT_BACKEND_X64) {
+                            ToiJitX64Stats stats;
+                            toi_jit_x64_code_stats(trace->native_trace_code_mem, &stats);
+                            trace->native_trace_fast_calls = stats.fast_call_loops != 0 || stats.fast_string_loops != 0;
+                        }
                         if (native_trace_direct_core) st->native_trace_compile_direct_core++;
                         uint8_t native_trace_reject_op = 255;
                         trace->native_trace_exec_safe = (uint8_t)native_trace_is_exec_safe(trace, &native_trace_reject_op);
@@ -4287,7 +4311,7 @@ skip_value_loop_compile:;
 }
 
 static Value numeric_binop(JitOpCode op, double a, double b) {
-    if (op == JOP_ADD || op == JOP_IADD || op == JOP_FADD || op == JOP_QFADD) return NUMBER_VAL(a + b);
+    if (op == JOP_ADD || op == JOP_ADD_INPLACE || op == JOP_IADD || op == JOP_FADD || op == JOP_QFADD) return NUMBER_VAL(a + b);
     if (op == JOP_SUBTRACT || op == JOP_ISUB || op == JOP_FSUB || op == JOP_QFSUB) return NUMBER_VAL(a - b);
     if (op == JOP_MULTIPLY || op == JOP_IMUL || op == JOP_FMUL || op == JOP_QFMUL) return NUMBER_VAL(a * b);
     if (op == JOP_DIVIDE || op == JOP_IDIV || op == JOP_FDIV || op == JOP_QFDIV) return NUMBER_VAL(a / b);
@@ -4303,6 +4327,10 @@ static Value numeric_binop(JitOpCode op, double a, double b) {
 
 int jit_eval_tiny_inline2_local(ObjFunction* function, Value arg0, Value arg1, Value* out) {
     if (function == NULL || out == NULL) return 0;
+    Value args[2] = {arg0, arg1};
+    for (int i = 0; function->param_types && i < function->param_types_count && i < 2; i++) {
+        if (!jit_value_matches_type(args[i], function->param_types[i])) return 0;
+    }
     switch ((TinyInlineKind)function->tiny_inline_kind) {
         case TINY_INLINE_IADD2:
         case TINY_INLINE_FADD2:
@@ -5404,6 +5432,10 @@ void toi_jit_mark_roots(VM* vm) {
         }
     }
     for (int i = 0; i < st->loop_count; i++) {
+        if (st->backend_kind == TOI_JIT_BACKEND_X64) {
+            toi_jit_x64_mark_code(st->loops[i].native_code_mem);
+            toi_jit_x64_mark_code(st->loops[i].native_trace_code_mem);
+        }
         if (st->loops[i].function != NULL) {
             mark_object((struct Obj*)st->loops[i].function);
         }
@@ -6104,7 +6136,10 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
         trace->native_trace_fn != NULL &&
         trace->native_trace_ready &&
         trace->native_trace_exec_safe;
-    uint32_t native_stride = native_trace_exec_stride(trace);
+    // Eligible guarded calls and primitive string operations stay in native
+    // execution between bounded batches.
+    uint32_t native_stride = trace->native_trace_fast_calls && st->native_trace_compiled_exec_enabled
+        ? 1u : native_trace_exec_stride(trace);
     int native_trace_sampled =
         native_trace_candidate &&
         native_stride != 0u &&
@@ -6129,6 +6164,7 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                 trace->native_trace_has_call ||
                 trace->native_trace_has_invoke ||
                 trace->native_trace_has_build_string ||
+                trace->native_trace_has_slice ||
                 trace->native_trace_has_get_table_generic ||
                 trace->native_trace_has_mutating_table;
             Value work[frame_window];
@@ -6184,11 +6220,14 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                 st->backend_loop_exec_hits++;
                 st->loop_exec_hits++;
                 trace->exec_hits++;
+                if (!vm->disable_gc && (trace->native_trace_has_build_string || trace->native_trace_has_slice))
+                    maybe_collect_garbage_slow(vm);
                 return 1;
             } else if (r == TOI_JIT_NATIVE_EXEC_CONTINUE) {
                 uint32_t off = (exec_state.resume_offset == 0xffffffffu)
                     ? trace->loop_start_offset
                     : exec_state.resume_offset;
+                if (off == TOI_JIT_NATIVE_RESUME_BACKEDGE) off = trace->opcode_offset;
                 if ((exec_state.reason == TOI_JIT_NATIVE_DEOPT_CALL_TARGET ||
                      exec_state.reason == TOI_JIT_NATIVE_DEOPT_INVOKE_TARGET) &&
                     jit_try_stitch_soft_continue_calls(vm, frame, &exec_state, &off)) {
@@ -6226,6 +6265,12 @@ int toi_jit_try_execute_loop(VM* vm, CallFrame* frame, uint8_t** ip, int opcode_
                     st->backend_loop_exec_hits++;
                     st->loop_exec_hits++;
                     trace->exec_hits++;
+                    // A completed native batch has no pending operands. Frame
+                    // slots are committed, so allocating traces can collect here
+                    // without postponing GC until interpreter constants run.
+                    if (exec_state.reason == TOI_JIT_NATIVE_DEOPT_NONE && !vm->disable_gc &&
+                        (trace->native_trace_has_build_string || trace->native_trace_has_slice))
+                        maybe_collect_garbage_slow(vm);
                     return 1;
                 }
                 st->native_trace_guard_failures++;
@@ -7497,6 +7542,30 @@ void toi_jit_print_stats(VM* vm) {
             (unsigned long long)st->native_trace_sandbox_attempts,
             (unsigned long long)st->native_trace_sandbox_success,
             (unsigned long long)st->native_trace_sandbox_fail);
+    if (st->backend_kind == TOI_JIT_BACKEND_X64) {
+        ToiJitX64Stats sum = {0};
+        for (int i = 0; i < st->loop_count; i++) {
+            ToiJitX64Stats one;
+            toi_jit_x64_code_stats(st->loops[i].native_trace_code_mem, &one);
+#define ADD_X64_STAT(NAME) sum.NAME += one.NAME
+            ADD_X64_STAT(promoted_values); ADD_X64_STAT(promoted_arithmetic); ADD_X64_STAT(fused_stores);
+            ADD_X64_STAT(inlined_calls); ADD_X64_STAT(linked_calls); ADD_X64_STAT(random_calls); ADD_X64_STAT(fast_string_loops); ADD_X64_STAT(fast_call_loops);
+            ADD_X64_STAT(call_pic_hits); ADD_X64_STAT(call_pic_misses); ADD_X64_STAT(callee_compiles);
+            ADD_X64_STAT(native_chain_hits); ADD_X64_STAT(method_ic_hits);
+            ADD_X64_STAT(table_ic_hits); ADD_X64_STAT(native_table_ic_hits); ADD_X64_STAT(table_ic_misses);
+#undef ADD_X64_STAT
+        }
+        fprintf(stderr, "[vm-native-jit-x64] compile_promoted_values=%llu compile_promoted_arithmetic=%llu "
+                "fused_stores=%llu inlined_calls=%llu linked_calls=%llu random_calls=%llu fast_string_loops=%llu fast_call_loops=%llu call_pic_hits=%llu call_pic_misses=%llu callee_compiles=%llu "
+                "native_chain_hits=%llu method_ic_hits=%llu table_ic_hits=%llu native_table_ic_hits=%llu table_ic_misses=%llu\n",
+                (unsigned long long)sum.promoted_values, (unsigned long long)sum.promoted_arithmetic,
+                (unsigned long long)sum.fused_stores, (unsigned long long)sum.inlined_calls, (unsigned long long)sum.linked_calls, (unsigned long long)sum.random_calls, (unsigned long long)sum.fast_string_loops,
+                (unsigned long long)sum.fast_call_loops, (unsigned long long)sum.call_pic_hits,
+                (unsigned long long)sum.call_pic_misses, (unsigned long long)sum.callee_compiles,
+                (unsigned long long)sum.native_chain_hits, (unsigned long long)sum.method_ic_hits,
+                (unsigned long long)sum.table_ic_hits, (unsigned long long)sum.native_table_ic_hits,
+                (unsigned long long)sum.table_ic_misses);
+    }
     if (st->backend_kind == TOI_JIT_BACKEND_ARM64) {
         uint64_t chain_attempts = 0;
         uint64_t chain_hits = 0;

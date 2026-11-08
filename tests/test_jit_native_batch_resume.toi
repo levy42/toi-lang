@@ -1,0 +1,26 @@
+-- Native trace batches must resume at the backedge, without replaying a body.
+import table
+
+fn sum_table()
+  values = {0}
+  table.reserve(values, 200000)
+  for i in 1..200000
+    values <+ i * 2
+  total = 0
+  for pass in 1..50
+    for i in 1..200000
+      total += values[i]
+  return total
+
+fn sum_comprehension()
+  values = {i * 3 for i in 1..200000}
+  total = 0
+  for pass in 1..55
+    for i in 1..200000
+      total += values[i]
+  return total
+
+assert sum_table() == 1999990000000 "native batch replayed a table element"
+assert sum_comprehension() == 3300016500000 "native batch replayed a comprehension element"
+
+print "native batch resume ok"

@@ -106,11 +106,13 @@ typedef struct {
     uint8_t native_trace_ready;
     uint8_t native_trace_exec_safe;
     uint8_t native_trace_direct_core;
+    uint8_t native_trace_fast_calls;
     uint16_t native_trace_instr_count;
     uint16_t native_trace_guard_count;
     uint8_t native_trace_has_call;
     uint8_t native_trace_has_invoke;
     uint8_t native_trace_has_build_string;
+    uint8_t native_trace_has_slice;
     uint8_t native_trace_has_mutating_table;
     uint8_t native_trace_has_get_table_generic;
     uint16_t native_trace_prefix_work;

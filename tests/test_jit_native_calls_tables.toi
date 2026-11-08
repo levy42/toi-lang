@@ -1,0 +1,99 @@
+-- End-to-end coverage for emitted calls, table operations and loop boundaries.
+fn evaluate(a, b)
+  return (a + b) * (a - b)
+
+fn choose(a, b)
+  if a < b
+    return a * 2
+  return a + b
+
+fn sum_calls()
+  total = 0
+  for i in 1..10000
+    total += evaluate(i, 2)
+  return total
+
+fn sum_branches()
+  total = 0
+  for i in 1..10000
+    total += choose(i, 5000)
+  return total
+
+fn sum_tables()
+  values = {}
+  for i in 1..10000
+    values <+ i * 2
+  total = 0
+  for i in 1..10000
+    total += values[i]
+  assert values[-1] == 20000 "negative indices must retain runtime semantics"
+  assert values[10001] == nil "missing indices must return nil"
+  return total
+
+fn sum_with_continue()
+  total = 0
+  for i in 1..10000
+    if i < 5000
+      continue
+    total += i
+  return total
+
+fn count_effects()
+  state = {count = 0}
+  fn with_effect(a, b)
+    state.count = state.count + 1
+    return a + b
+  total = 0
+  for i in 1..2000
+    total += with_effect(i, 2)
+  assert state.count == 2000 "callee fallback must execute each side effect once"
+  return total
+
+fn call_while_loop()
+  fn inner(n)
+    total = 0
+    i = 0
+    while i < n
+      i += 1
+      total += i
+    return total
+  total = 0
+  for i in 1..2000
+    total += inner(10)
+  return total
+
+-- Reuse a compiled call site with another closure and preserve its arguments.
+fn sum_selected(target)
+  total = 0
+  for i in 1..10000
+    total += target(i, 2)
+  return total
+
+-- The third argument needs the same declared-type check as the first two.
+fn sum_typed(third)
+  fn typed_choose(a: int, b: int, c: int)
+    if a < b
+      return a * 2 + c
+    return a + b - c
+  total = 0
+  for i in 1..10000
+    total += typed_choose(i, 5000, third)
+  return total
+
+assert sum_selected(evaluate) == 333383295000
+assert sum_selected(choose) == 50024999
+assert sum_typed(3) == 87507494
+caught_type = false
+try
+  sum_typed(0.5)
+except e
+  caught_type = true
+assert caught_type "linked callees must validate every declared argument type"
+
+assert sum_calls() == 333383295000 "compiled callees must preserve both arguments"
+assert sum_branches() == 87507500 "callee branch joins must preserve return values"
+assert sum_tables() == 100010000 "dense table reads must preserve all elements"
+assert sum_with_continue() == 37507500 "continue must advance the numeric loop"
+assert count_effects() == 2005000 "callee fallback must preserve its return value"
+assert call_while_loop() == 110000 "callee loops must retain their own backedges"
+print "native calls and tables ok"

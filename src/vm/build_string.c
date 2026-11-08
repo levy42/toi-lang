@@ -141,14 +141,11 @@ static int push_built_string_interned_view(VM* vm, const char* chars, int length
         }
     }
 
-    char* heap = (char*)malloc((size_t)length + 1);
-    if (heap == NULL) {
+    ObjString* built = copy_string_with_hash(chars, length, hash);
+    if (built == NULL) {
         vm_runtime_error(vm, "Out of memory while building string.");
         return 0;
     }
-    memcpy(heap, chars, (size_t)length);
-    heap[length] = '\0';
-    ObjString* built = take_string_with_hash(heap, length, hash);
     vm->build_string_cache[slot] = built;
     push(vm, OBJ_VAL(built));
     return 1;

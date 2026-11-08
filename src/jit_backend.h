@@ -3,7 +3,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include "value.h"
+
+// A completed numeric-for body must advance at its bytecode backedge.
+#define TOI_JIT_NATIVE_RESUME_BACKEDGE (UINT32_MAX - 1u)
+
 struct VM;
 struct ObjClosure;
 struct ToiJitValueInstr;
@@ -151,7 +156,9 @@ typedef enum {
     TOI_JIT_VAL_BUILD_STRING3 = 29,
     TOI_JIT_VAL_BUILD_STRING4 = 30,
     TOI_JIT_VAL_BUILD_STRING5 = 31,
-    TOI_JIT_VAL_ADJUST_STACK = 32
+    TOI_JIT_VAL_ADJUST_STACK = 32,
+    TOI_JIT_VAL_LENGTH = 33,
+    TOI_JIT_VAL_SLICE = 34
 } ToiJitValueOpCode;
 
 typedef struct ToiJitValueInstr {

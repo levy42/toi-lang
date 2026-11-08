@@ -204,3 +204,16 @@ peft: perf
 
 docs: $(TARGET)
 	./$(TARGET) tools/build_docs.toi
+
+# Direct backend checks distinguish emitted code from successful VM fallback.
+test-jit-x64: $(OBJ)
+	@runner=$$(mktemp /tmp/toi-jit-x64.XXXXXX); \
+	trap 'rm -f "$$runner"' EXIT INT TERM; \
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -Isrc $(LDFLAGS) -o "$$runner" tests/jit_x64_backend.c $(filter-out src/main.o,$(OBJ)) -lpthread -lm $(LDLIBS) $(EXTRA_LDLIBS) && "$$runner"
+
+.PHONY: test-jit-x64
+
+src/jit_x64.o: src/jit_x64.h src/jit_backend.h src/jit_native_trace.h src/jit_x64_codegen.h src/jit_native_lower.h src/jit_x64_runtime.h src/jit_x64_callees.h
+src/jit_arm64.o: src/jit_native_lower.h
+
+src/jit_call_runtime.o src/lib/string.o: src/lib/string_case.h
